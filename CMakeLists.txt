@@ -127,13 +127,56 @@ else()
     set(USER_USYS_PL       ${USER_LIB_DIR}/usys.pl)
 endif()
 
+# Userland hard-includes kernel headers as `#include "kernel/inc/..."`,
+# so the kernel sub-repo's source root must be on the include path.
+# KERNEL_DIR is set by the umbrella's BuildUser.cmake; for standalone
+# builds, point it at a sibling kernel/ checkout via -DKERNEL_DIR=...
+if(NOT DEFINED KERNEL_DIR)
+    if(DEFINED ENV{KERNEL_DIR} AND NOT "$ENV{KERNEL_DIR}" STREQUAL "")
+        set(KERNEL_DIR "$ENV{KERNEL_DIR}" CACHE PATH "Path to xv6 kernel sub-repo")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../kernel/kernel/inc/types.h")
+        get_filename_component(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../kernel" ABSOLUTE
+                               CACHE PATH "Path to xv6 kernel sub-repo")
+    else()
+        message(FATAL_ERROR
+            "KERNEL_DIR not set and ../kernel/kernel/inc/types.h not found. "
+            "Pass -DKERNEL_DIR=/path/to/xv6-os/kernel.")
+    endif()
+endif()
+message(STATUS "  KERNEL_DIR:   ${KERNEL_DIR}")
+
+# Programs use `#include "user/user.h"` (the upstream xv6-tmp path).
+# We provide it via a symlink at user/user.h → lib/user.h, picked up
+# by adding -I${parent of user sub-repo} to the include search path.
+get_filename_component(_user_parent "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+
+# We use -nostdinc, so gcc's own freestanding headers (stdarg.h, stddef.h,
+# stdint.h) are not picked up automatically. Ask gcc where they live.
+execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -print-file-name=include
+    OUTPUT_VARIABLE _gcc_include_dir
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+message(STATUS "  GCC freestanding include: ${_gcc_include_dir}")
+
+# Arch define mirrored from the kernel sub-repo so shared headers
+# (e.g. kernel/inc/vfs/stat.h) pick the right struct layout.
+if(ARCH STREQUAL "x86_64")
+    add_compile_definitions(CONFIG_ARCH_X86_64=1)
+else()
+    add_compile_definitions(CONFIG_ARCH_RISCV=1)
+endif()
+
 add_compile_options(-Wall -O${OPT_LEVEL} -fno-omit-frame-pointer
     -ggdb -gdwarf-2 -fno-common -nostdlib
     -fno-builtin-strncpy -fno-builtin-strncmp -fno-builtin-strlen
     -fno-builtin-memset -fno-builtin-memmove -fno-builtin-memcmp
     -fno-builtin-memcpy -fno-pie -no-pie -nostdinc -ffreestanding
     -DSOL_${LABUPPER} -DLAB_${LABUPPER}
-    -I${USER_LIB_DIR})
+    -isystem ${_gcc_include_dir}
+    -I${USER_LIB_DIR}
+    -I${_user_parent}
+    -I${KERNEL_DIR}
+    -I${KERNEL_DIR}/kernel/inc)
 if(NOT ARCH STREQUAL "x86_64")
     add_compile_options(-march=rv64gc -mabi=lp64d -mcmodel=medany)
 endif()
@@ -162,12 +205,20 @@ target_include_directories(userlib PUBLIC ${USER_LIB_DIR})
 
 # ==============================================================================
 # Programs — one subdir per program; auto-discovered.
+#
+# XV6_SKIP_PROGRAMS lists programs that need ports (libpng, ncurses, ...)
+# not available in this minimal sub-repo. They are skipped silently.
 # ==============================================================================
+set(XV6_SKIP_PROGRAMS pngtest timerdemo CACHE STRING
+    "Programs to skip (require ports not available standalone)")
 file(GLOB _prog_dirs RELATIVE ${CMAKE_SOURCE_DIR}/programs
      ${CMAKE_SOURCE_DIR}/programs/*)
 set(XV6_USER_PROGRAMS "")
 foreach(_p ${_prog_dirs})
     if(IS_DIRECTORY ${CMAKE_SOURCE_DIR}/programs/${_p})
+        if(${_p} IN_LIST XV6_SKIP_PROGRAMS)
+            continue()
+        endif()
         if(EXISTS ${CMAKE_SOURCE_DIR}/programs/${_p}/${_p}.c)
             xv6_user_program(${_p})
             list(APPEND XV6_USER_PROGRAMS _${_p})
