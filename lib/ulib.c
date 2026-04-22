@@ -7,14 +7,38 @@
 // wrapper so that it's OK if main() does not call exit().
 // On RISC-V a0 serves as both the exec return (argc) and the first function
 // argument, so main() automatically receives argc.  On x86_64 the exec return
-// is in RAX while the first function argument is in RDI — exec now sets both
+// is in RAX while the first function argument is in RDI — exec sets both
 // RDI=argc and RSI=argv in the trap frame, so start() must forward them.
 //
+// On x86_64 start() is the ELF entry point, so the kernel hands us a
+// 16-byte-aligned RSP. The SysV AMD64 ABI then requires that RSP at
+// `call main` be (16N+8) mod 16 (i.e. 8 mod 16) so that the callee's
+// `push %rbp` re-aligns RSP to 16. Without that, GCC's `movaps` against
+// stack slots in main() / fork() / etc. faults #GP. A C `start()` would
+// emit its own `push %rbp` prologue and break this invariant, so on
+// x86_64 we use a naked asm trampoline instead.
+//
+#if defined(CONFIG_ARCH_X86_64)
+extern int main(int, char **);
+__attribute__((naked, noreturn)) void start(int argc, char *argv[]) {
+    __asm__ volatile(
+        "xorl  %%ebp, %%ebp\n\t"     /* ABI: clear frame pointer */
+        "andq  $-16, %%rsp\n\t"      /* RSP 16-aligned; the CALL  */
+                                     /* below pushes 8 bytes so   */
+                                     /* main() enters at 8 mod 16 */
+        "callq main\n\t"
+        "movl  %%eax, %%edi\n\t"
+        "callq exit\n\t"
+        "ud2\n\t"
+        ::: "memory");
+}
+#else
 void start(int argc, char *argv[]) {
     extern int main(int, char **);
     main(argc, argv);
     exit(0);
 }
+#endif
 
 // fork() wrapper - calls clone with default fork args
 int fork(void) {
