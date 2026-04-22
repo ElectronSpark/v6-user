@@ -275,8 +275,8 @@ static void env_init(void) {
     env_set("LC_ALL", "C.UTF-8");
     env_set("PYTHONUTF8", "1");
     env_set("PYTHONIOENCODING", "utf-8");
-    env_set("PYTHONHOME", "/usr/local");
-    env_set("PYTHONPATH", "/usr/local/lib/python3.12");
+    env_set("PYTHONHOME", "/");
+    env_set("PYTHONPATH", "/lib/python3.12:/lib/python3.12/site-packages");
     env_set("PYTHONDONTWRITEBYTECODE", "1");
 }
 
