@@ -90,6 +90,13 @@ endif()
 
 project(xv6-${ARCH}-user LANGUAGES C ASM)
 
+# xv6-native programs are linked with -nostdlib + a custom linker script;
+# they have no shared-lib RPATH, so disable CMake's install-time RPATH
+# rewrite (which otherwise routes every executable through CMakeRelink.dir
+# and silently fails to produce the relinked binary on cross builds).
+set(CMAKE_SKIP_BUILD_RPATH TRUE)
+set(CMAKE_SKIP_INSTALL_RPATH TRUE)
+
 find_package(Perl REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
