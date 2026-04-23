@@ -231,6 +231,59 @@ int main(void) {
     // Configure network (reads /etc/network.conf, calls netconf syscall)
     configure_network();
 
+    // Launch background services listed in /etc/startup. Each non-empty,
+    // non-comment line is forked as a separate process. Tokens are split
+    // on spaces/tabs (no quoting). The launched program inherits init's
+    // controlling tty so its output appears on the console.
+    {
+        int sfd = open("/etc/startup", O_RDONLY);
+        if (sfd >= 0) {
+            char buf[1024];
+            int n = read(sfd, buf, sizeof(buf) - 1);
+            close(sfd);
+            if (n > 0) {
+                buf[n] = '\0';
+                char *line = buf;
+                while (*line) {
+                    char *eol = line;
+                    while (*eol && *eol != '\n') eol++;
+                    char saved = *eol;
+                    *eol = '\0';
+
+                    // skip leading whitespace
+                    char *p = line;
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (*p && *p != '#') {
+                        // tokenise into argv
+                        static char *sargv[16];
+                        int sargc = 0;
+                        char *q = p;
+                        while (*q && sargc < 15) {
+                            sargv[sargc++] = q;
+                            while (*q && *q != ' ' && *q != '\t') q++;
+                            if (!*q) break;
+                            *q++ = '\0';
+                            while (*q == ' ' || *q == '\t') q++;
+                        }
+                        sargv[sargc] = 0;
+                        int dpid = fork();
+                        if (dpid == 0) {
+                            exec(sargv[0], sargv);
+                            printf("init: exec %s failed\n", sargv[0]);
+                            exit(1);
+                        } else if (dpid > 0) {
+                            printf("init: started %s (pid %d)\n",
+                                   sargv[0], dpid);
+                        }
+                    }
+
+                    *eol = saved;
+                    line = (saved == '\0') ? eol : eol + 1;
+                }
+            }
+        }
+    }
+
     // Userspace telnet daemon disabled — using kernel telnetd instead.
     // sleep(10);
     // pid = fork();
