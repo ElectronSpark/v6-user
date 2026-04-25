@@ -54,7 +54,7 @@ char *argv[] = {"sh", 0};
 
 #define NET_CONF_PATH "/etc/network.conf"
 
-/* Local strncmp — xv6 userlib only provides strcmp */
+/* Local strncmp - xv6 userlib only provides strcmp */
 static int my_strncmp(const char *a, const char *b, int n)
 {
     for (int i = 0; i < n; i++) {
@@ -220,7 +220,7 @@ int main(void) {
 
     // Ensure device nodes exist (devtmpfs creates them automatically
     // when drivers register with devname/devmode; these mknod calls are
-    // kept only as a safety net — errors are silently ignored)
+    // kept only as a safety net - errors are silently ignored)
     mknod("/dev/null", S_IFCHR | 0666, NULL_MAJOR, NULL_MINOR);
     mknod("/dev/random", S_IFCHR | 0666, RANDOM_MAJOR, RANDOM_MINOR);
     mknod("/dev/tty", S_IFCHR | 0666, TTY_DEV_MAJOR, TTY_DEV_MINOR);
@@ -284,7 +284,7 @@ int main(void) {
         }
     }
 
-    // Userspace telnet daemon disabled — using kernel telnetd instead.
+    // Userspace telnet daemon disabled - using kernel telnetd instead.
     // sleep(10);
     // pid = fork();
     // if (pid == 0) {
