@@ -224,6 +224,9 @@ int main(void) {
     mknod("/dev/null", S_IFCHR | 0666, NULL_MAJOR, NULL_MINOR);
     mknod("/dev/random", S_IFCHR | 0666, RANDOM_MAJOR, RANDOM_MINOR);
     mknod("/dev/tty", S_IFCHR | 0666, TTY_DEV_MAJOR, TTY_DEV_MINOR);
+    mkdir("/proc");
+    if (mount("none", "/proc", "procfs", 0, 0) < 0)
+        printf("init: warning: mount /proc failed\n");
 
     // The ext4 rootfs already contains /usr with Python stdlib.
     // No separate disk mount needed.
