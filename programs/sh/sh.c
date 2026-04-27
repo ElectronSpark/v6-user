@@ -333,6 +333,61 @@ static int env_unset(const char *name) {
     return -1;
 }
 
+static void env_enable_gui_session(void) {
+    env_set("HOME", "/root");
+    env_set("PATH", "/bin:/usr/bin");
+    env_set("TERM", "dumb");
+    env_set("PS1", "\\w# ");
+    env_set("XDG_RUNTIME_DIR", "/tmp");
+    env_set("XDG_CACHE_HOME", "/tmp/.cache");
+    env_set("WAYLAND_DISPLAY", "wayland-0");
+    env_set("GDK_BACKEND", "wayland");
+    env_set("XCURSOR_PATH", "/share/icons");
+    env_set("XCURSOR_THEME", "Adwaita");
+    env_set("SSL_CERT_FILE", "/share/netsurf/ca-bundle");
+    env_set("XV6_GUI_SESSION", "wayland");
+}
+
+static const char *path_basename(const char *path) {
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/')
+            base = p + 1;
+    }
+    return base;
+}
+
+static int is_gui_only_command(const char *cmd) {
+    if (!cmd || !cmd[0])
+        return 0;
+
+    const char *base = path_basename(cmd);
+
+    return strcmp(base, "netsurf") == 0 ||
+           strcmp(base, "MiniBrowser") == 0 ||
+           strcmp(base, "wlcomp") == 0 ||
+           strcmp(base, "desktop") == 0;
+}
+
+static int has_gui_session(void) {
+    const char *session = env_get("XV6_GUI_SESSION");
+    const char *runtime = env_get("XDG_RUNTIME_DIR");
+    const char *display = env_get("WAYLAND_DISPLAY");
+
+    return session && strcmp(session, "wayland") == 0 &&
+           runtime && runtime[0] &&
+           display && display[0];
+}
+
+static int refuse_gui_only_without_session(const char *cmd) {
+    if (!is_gui_only_command(cmd) || has_gui_session())
+        return 0;
+
+    errprintf("%s: GUI session required; refusing to launch from serial/ssh/telnet\n",
+              path_basename(cmd));
+    return 1;
+}
+
 static void env_list(void) {
     for (int i = 0; i < MAX_ENV_VARS; i++) {
         if (env_vars[i].used)
@@ -1560,6 +1615,8 @@ void runcmd(struct cmd *cmd) {
                 errprintf("usage: waitgdb [-e] <command> [args...]\n");
                 exit(1);
             }
+            if (refuse_gui_only_without_session(ecmd->argv[cmd_idx]))
+                exit(126);
             if (stop_entry)
                 waitgdb_stopentry();
             else
@@ -1568,6 +1625,8 @@ void runcmd(struct cmd *cmd) {
             errprintf("waitgdb: exec %s failed\n", ecmd->argv[cmd_idx]);
             exit(127);
         }
+        if (refuse_gui_only_without_session(ecmd->argv[0]))
+            exit(126);
         exec_with_path(ecmd->argv[0], ecmd->argv);
         errprintf("exec %s failed\n", ecmd->argv[0]);
         exit(127);
@@ -1918,6 +1977,13 @@ int main(int argc, char *argv[]) {
     }
 
     env_init();
+
+    int argi = 1;
+    if (argc >= 2 && strcmp(argv[1], "--gui-session") == 0) {
+        env_enable_gui_session();
+        argi = 2;
+    }
+
     update_cwd();
     update_user_info();
 
@@ -1928,12 +1994,12 @@ int main(int argc, char *argv[]) {
 #endif
 
     // ---- sh -c "command" ----
-    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+    if (argc >= argi + 2 && strcmp(argv[argi], "-c") == 0) {
         // Concatenate all remaining args with spaces (sh -c "cmd" arg0 arg1)
         char cmdbuf[512];
         int pos = 0;
-        for (int i = 2; i < argc && pos < (int)sizeof(cmdbuf) - 2; i++) {
-            if (i > 2 && pos < (int)sizeof(cmdbuf) - 1)
+        for (int i = argi + 1; i < argc && pos < (int)sizeof(cmdbuf) - 2; i++) {
+            if (i > argi + 1 && pos < (int)sizeof(cmdbuf) - 1)
                 cmdbuf[pos++] = ' ';
             int alen = strlen(argv[i]);
             if (alen > (int)sizeof(cmdbuf) - pos - 1)
@@ -1947,8 +2013,8 @@ int main(int argc, char *argv[]) {
     }
 
     // ---- sh script.sh [args...] ----
-    if (argc >= 2 && argv[1][0] != '-') {
-        int ret = run_script(argv[1]);
+    if (argc >= argi + 1 && argv[argi][0] != '-') {
+        int ret = run_script(argv[argi]);
         exit(ret);
     }
 
