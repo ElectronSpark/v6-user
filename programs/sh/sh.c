@@ -162,6 +162,17 @@ static int strncmp_local(const char *a, const char *b, int n) {
     return 0;
 }
 
+static int contains_local(const char *haystack, const char *needle) {
+    int needle_len = strlen(needle);
+    if (needle_len == 0)
+        return 1;
+    for (const char *p = haystack; *p; p++) {
+        if (strncmp_local(p, needle, needle_len) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static char *strcat_local(char *dest, const char *src) {
     char *d = dest;
     while (*d)
@@ -347,6 +358,36 @@ static void env_enable_gui_session(void) {
     env_set("XCURSOR_THEME", "Adwaita");
     env_set("SSL_CERT_FILE", "/share/netsurf/ca-bundle");
     env_set("XV6_GUI_SESSION", "wayland");
+}
+
+static int parent_is_wlcomp(void) {
+    char path[64];
+    char pidbuf[16];
+    char buf[256];
+    int n = itoa_local(getppid(), pidbuf, sizeof(pidbuf));
+    int off = 0;
+
+    memcpy(path + off, "/proc/", 6);
+    off += 6;
+    memcpy(path + off, pidbuf, n);
+    off += n;
+    memcpy(path + off, "/status", 8);
+    off += 8;
+    path[off] = 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    int total = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (total <= 0)
+        return 0;
+    buf[total] = 0;
+    return contains_local(buf, "Name:\twlcomp\n");
+}
+
+static int can_enable_gui_session(void) {
+    return parent_is_wlcomp();
 }
 
 static const char *path_basename(const char *path) {
@@ -1982,8 +2023,12 @@ int main(int argc, char *argv[]) {
 
     int argi = 1;
     if (argc >= 2 && strcmp(argv[1], "--gui-session") == 0) {
-        gui_session_shell = 1;
-        env_enable_gui_session();
+        if (can_enable_gui_session()) {
+            gui_session_shell = 1;
+            env_enable_gui_session();
+        } else {
+            errprintf("sh: refusing --gui-session outside wlcomp\n");
+        }
         argi = 2;
     }
 
