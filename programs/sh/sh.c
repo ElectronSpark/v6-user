@@ -232,6 +232,7 @@ static char cwd_path[512] = "/";
 // Current user info (for prompt)
 static char user_name[64] = "?";
 static int  user_uid = -1;
+static int  gui_session_shell = 0;
 
 #ifdef USE_NCURSES_SHELL
 #define errprintf(...) fprintf(stderr, __VA_ARGS__)
@@ -374,7 +375,8 @@ static int has_gui_session(void) {
     const char *runtime = env_get("XDG_RUNTIME_DIR");
     const char *display = env_get("WAYLAND_DISPLAY");
 
-    return session && strcmp(session, "wayland") == 0 &&
+    return gui_session_shell &&
+           session && strcmp(session, "wayland") == 0 &&
            runtime && runtime[0] &&
            display && display[0];
 }
@@ -1980,6 +1982,7 @@ int main(int argc, char *argv[]) {
 
     int argi = 1;
     if (argc >= 2 && strcmp(argv[1], "--gui-session") == 0) {
+        gui_session_shell = 1;
         env_enable_gui_session();
         argi = 2;
     }
