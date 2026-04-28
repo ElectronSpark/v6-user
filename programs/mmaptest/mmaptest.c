@@ -608,6 +608,100 @@ void test_mprotect_none(void) {
     printf("OK\n");
 }
 
+/*
+ * test_unaligned_range_rounding - xv6 accepts unaligned mprotect/munmap
+ * addresses.  The rounded kernel range must cover the original byte range,
+ * including the tail page.
+ */
+void test_unaligned_range_rounding(void) {
+    printf("test_unaligned_range_rounding: ");
+
+    char *p = mmap(0, 8192, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - mmap\n");
+        exit(1);
+    }
+    p[0] = 'A';
+    p[4096] = 'B';
+
+    if (mprotect(p + 1, 4096, PROT_READ) != 0) {
+        printf("FAIL - unaligned mprotect\n");
+        exit(1);
+    }
+
+    int pid = fork();
+    if (pid == 0) {
+        p[4096] = 'C';
+        printf("FAIL - child wrote tail page after mprotect\n");
+        exit(1);
+    }
+    int status;
+    wait(&status);
+    if (status == 0) {
+        printf("FAIL - tail page stayed writable\n");
+        exit(1);
+    }
+
+    if (mprotect(p, 8192, PROT_READ | PROT_WRITE) != 0) {
+        printf("FAIL - restore mprotect\n");
+        exit(1);
+    }
+    if (munmap(p + 1, 4096) != 0) {
+        printf("FAIL - unaligned munmap\n");
+        exit(1);
+    }
+
+    pid = fork();
+    if (pid == 0) {
+        volatile char c = p[4096];
+        (void)c;
+        printf("FAIL - child read tail page after munmap\n");
+        exit(1);
+    }
+    wait(&status);
+    if (status == 0) {
+        printf("FAIL - tail page stayed mapped\n");
+        exit(1);
+    }
+
+    printf("OK\n");
+}
+
+void test_mmap_after_unaligned_brk(void) {
+    printf("test_mmap_after_unaligned_brk: ");
+
+    char *old_brk = sbrk(0);
+    if (old_brk == (char *)-1) {
+        printf("FAIL - sbrk(0)\n");
+        exit(1);
+    }
+    if (sbrk(1) == (char *)-1) {
+        printf("FAIL - sbrk(1)\n");
+        exit(1);
+    }
+
+    char *p = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - mmap after unaligned brk\n");
+        exit(1);
+    }
+    if (((uint64)p & 4095) != 0) {
+        printf("FAIL - mmap returned unaligned address %p\n", p);
+        exit(1);
+    }
+
+    p[0] = 'B';
+    munmap(p, 4096);
+
+    char *now = sbrk(0);
+    if (now != (char *)-1 && now > old_brk)
+        sbrk(-(now - old_brk));
+
+    printf("OK\n");
+}
+
 /******************************************************************************
  * mremap tests
  ******************************************************************************/
@@ -1243,6 +1337,8 @@ int main(int argc, char *argv[]) {
 
     test_mprotect_read_write();
     test_mprotect_none();
+    test_unaligned_range_rounding();
+    test_mmap_after_unaligned_brk();
     test_mremap_grow();
     test_mremap_shrink();
     test_mincore();
