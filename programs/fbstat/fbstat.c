@@ -34,6 +34,8 @@ int main(int argc, char *argv[])
     printf("bo_presents %lu\n", stats.bo_presents);
     printf("bo_handles %lu\n", stats.bo_handles);
     printf("bo_imports %lu\n", stats.bo_imports);
+    printf("bo_fences %lu\n", stats.bo_fences);
+    printf("bo_fence_waits %lu\n", stats.bo_fence_waits);
     printf("virtio_commands %lu\n", stats.virtio_commands);
     printf("virtio_failures %lu\n", stats.virtio_failures);
     printf("virtio_timeouts %lu\n", stats.virtio_timeouts);

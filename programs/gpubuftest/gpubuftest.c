@@ -89,6 +89,29 @@ int main(int argc, char **argv)
             close(fd);
             return 1;
         }
+        if (present.fence == 0) {
+            printf("gpubuftest: missing present fence at loop %d\n", i);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_bo_fence fence = {
+            .handle = create.handle,
+            .flags = FB_GPU_BO_FENCE_WAIT,
+            .wait_for = present.fence,
+        };
+        if (ioctl(fd, FB_GPU_BO_FENCE, &fence) < 0 ||
+            fence.signaled < present.fence ||
+            fence.last_present != present.fence) {
+            printf("gpubuftest: FB_GPU_BO_FENCE failed at loop %d fence=%lu signaled=%lu last=%lu\n",
+                   i, present.fence, fence.signaled, fence.last_present);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
 
         struct fb_gpu_bo_destroy destroy = {
             .handle = create.handle,
