@@ -72,15 +72,19 @@ int main(int argc, char **argv)
         };
         if (ioctl(fd, FB_GPU_BO_IMPORT, &import) < 0 ||
             import.width != create.width || import.height != create.height ||
-            import.pitch != create.pitch || import.size != create.size) {
+            import.pitch != create.pitch || import.size != create.size ||
+            import.addr == 0 || import.addr == create.addr) {
             printf("gpubuftest: FB_GPU_BO_IMPORT failed at loop %d\n", i);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
             return 1;
         }
+        fill_pattern((uint32 *)import.addr, import.width, import.height,
+                     import.pitch, i + 17);
 
         if (ioctl(fd, FB_GPU_BO_PRESENT, &present) < 0) {
             printf("gpubuftest: FB_GPU_BO_PRESENT failed at loop %d\n", i);
+            munmap((void *)import.addr, (int)import.size);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
             return 1;
@@ -91,6 +95,14 @@ int main(int argc, char **argv)
         };
         if (ioctl(fd, FB_GPU_BO_DESTROY, &destroy) < 0) {
             printf("gpubuftest: FB_GPU_BO_DESTROY failed at loop %d\n", i);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        if (munmap((void *)import.addr, (int)import.size) < 0) {
+            printf("gpubuftest: import munmap failed at loop %d\n", i);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
             return 1;
