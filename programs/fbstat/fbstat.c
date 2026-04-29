@@ -32,6 +32,13 @@ int main(int argc, char *argv[])
     printf("bo_allocs %lu\n", stats.bo_allocs);
     printf("bo_bytes %lu\n", stats.bo_bytes);
     printf("bo_presents %lu\n", stats.bo_presents);
+    printf("virtio_commands %lu\n", stats.virtio_commands);
+    printf("virtio_failures %lu\n", stats.virtio_failures);
+    printf("virtio_timeouts %lu\n", stats.virtio_timeouts);
+    printf("virtio_resources %lu\n", stats.virtio_resources);
+    printf("virtio_resource_bytes %lu\n", stats.virtio_resource_bytes);
+    printf("virtio_transfers %lu\n", stats.virtio_transfers);
+    printf("virtio_flushes %lu\n", stats.virtio_flushes);
     close(fd);
     return 0;
 }
