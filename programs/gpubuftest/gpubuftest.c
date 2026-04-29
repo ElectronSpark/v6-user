@@ -39,7 +39,7 @@ int main(int argc, char **argv)
         struct fb_gpu_bo_create create = {
             .width = 160,
             .height = 96,
-            .flags = 0,
+            .flags = FB_GPU_BO_F_EXPORTABLE,
         };
 
         if (ioctl(fd, FB_GPU_BO_CREATE, &create) < 0) {
@@ -47,9 +47,11 @@ int main(int argc, char **argv)
             close(fd);
             return 1;
         }
-        if (create.addr == 0 || create.size == 0 || create.pitch < create.width * 4) {
-            printf("gpubuftest: invalid buffer addr=%p size=%lu pitch=%u\n",
-                   (void *)create.addr, create.size, create.pitch);
+        if (create.addr == 0 || create.size == 0 ||
+            create.pitch < create.width * 4 || create.handle == 0) {
+            printf("gpubuftest: invalid buffer addr=%p size=%lu pitch=%u handle=%u\n",
+                   (void *)create.addr, create.size, create.pitch,
+                   create.handle);
             close(fd);
             return 1;
         }
@@ -62,12 +64,33 @@ int main(int argc, char **argv)
             .y = (uint32)(48 + i * 16),
             .w = create.width,
             .h = create.height,
-            .src_pitch = create.pitch,
-            .pixels = create.addr,
+            .handle = create.handle,
         };
+
+        struct fb_gpu_bo_import import = {
+            .handle = create.handle,
+        };
+        if (ioctl(fd, FB_GPU_BO_IMPORT, &import) < 0 ||
+            import.width != create.width || import.height != create.height ||
+            import.pitch != create.pitch || import.size != create.size) {
+            printf("gpubuftest: FB_GPU_BO_IMPORT failed at loop %d\n", i);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
 
         if (ioctl(fd, FB_GPU_BO_PRESENT, &present) < 0) {
             printf("gpubuftest: FB_GPU_BO_PRESENT failed at loop %d\n", i);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_bo_destroy destroy = {
+            .handle = create.handle,
+        };
+        if (ioctl(fd, FB_GPU_BO_DESTROY, &destroy) < 0) {
+            printf("gpubuftest: FB_GPU_BO_DESTROY failed at loop %d\n", i);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
             return 1;
