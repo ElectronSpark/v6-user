@@ -52,6 +52,8 @@ int main(int argc, char *argv[])
     printf("virtio_submits %lu\n", stats.virtio_submits);
     printf("virtio_fences %lu\n", stats.virtio_fences);
     printf("virtio_last_fence %lu\n", stats.virtio_last_fence);
+    printf("virtio_irq_completions %lu\n", stats.virtio_irq_completions);
+    printf("virtio_poll_fallbacks %lu\n", stats.virtio_poll_fallbacks);
     close(fd);
     return 0;
 }
