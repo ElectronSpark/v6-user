@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
     printf("virtio_resource_bytes %lu\n", stats.virtio_resource_bytes);
     printf("virtio_transfers %lu\n", stats.virtio_transfers);
     printf("virtio_flushes %lu\n", stats.virtio_flushes);
+    printf("virtio_scanouts %lu\n", stats.virtio_scanouts);
     close(fd);
     return 0;
 }
