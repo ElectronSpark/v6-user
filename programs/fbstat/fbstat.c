@@ -44,6 +44,14 @@ int main(int argc, char *argv[])
     printf("virtio_transfers %lu\n", stats.virtio_transfers);
     printf("virtio_flushes %lu\n", stats.virtio_flushes);
     printf("virtio_scanouts %lu\n", stats.virtio_scanouts);
+    printf("virtio_capsets %lu\n", stats.virtio_capsets);
+    printf("virtio_virgl %lu\n", stats.virtio_virgl);
+    printf("virtio_virgl_version %lu\n", stats.virtio_virgl_version);
+    printf("virtio_virgl_size %lu\n", stats.virtio_virgl_size);
+    printf("virtio_contexts %lu\n", stats.virtio_contexts);
+    printf("virtio_submits %lu\n", stats.virtio_submits);
+    printf("virtio_fences %lu\n", stats.virtio_fences);
+    printf("virtio_last_fence %lu\n", stats.virtio_last_fence);
     close(fd);
     return 0;
 }
