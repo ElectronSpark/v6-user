@@ -29,6 +29,9 @@ int main(int argc, char *argv[])
     printf("fill_rects %lu\n", stats.fill_rects);
     printf("copy_rects %lu\n", stats.copy_rects);
     printf("blit_bytes %lu\n", stats.blit_bytes);
+    printf("bo_allocs %lu\n", stats.bo_allocs);
+    printf("bo_bytes %lu\n", stats.bo_bytes);
+    printf("bo_presents %lu\n", stats.bo_presents);
     close(fd);
     return 0;
 }
