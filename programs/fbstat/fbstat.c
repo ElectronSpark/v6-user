@@ -11,10 +11,13 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    fd = open("/dev/fb0", O_RDONLY);
+    fd = open("/dev/gpu0", O_RDONLY);
     if (fd < 0) {
-        fprintf(2, "fbstat: open /dev/fb0 failed\n");
-        return 1;
+        fd = open("/dev/fb0", O_RDONLY);
+        if (fd < 0) {
+            fprintf(2, "fbstat: open /dev/gpu0 and /dev/fb0 failed\n");
+            return 1;
+        }
     }
     if (ioctl(fd, FB_GPU_GET_STATS, &stats) < 0) {
         fprintf(2, "fbstat: FB_GPU_GET_STATS failed\n");
@@ -33,9 +36,25 @@ int main(int argc, char *argv[])
     printf("bo_bytes %lu\n", stats.bo_bytes);
     printf("bo_presents %lu\n", stats.bo_presents);
     printf("bo_handles %lu\n", stats.bo_handles);
+    printf("bo_live_bytes %lu\n", stats.bo_live_bytes);
+    printf("bo_peak_handles %lu\n", stats.bo_peak_handles);
+    printf("bo_peak_bytes %lu\n", stats.bo_peak_bytes);
     printf("bo_imports %lu\n", stats.bo_imports);
+    printf("bo_fd_exports %lu\n", stats.bo_fd_exports);
+    printf("bo_fd_imports %lu\n", stats.bo_fd_imports);
+    printf("bo_fd_live %lu\n", stats.bo_fd_live);
+    printf("bo_fd_peak %lu\n", stats.bo_fd_peak);
     printf("bo_fences %lu\n", stats.bo_fences);
     printf("bo_fence_waits %lu\n", stats.bo_fence_waits);
+    printf("fence_fd_exports %lu\n", stats.fence_fd_exports);
+    printf("fence_fd_queries %lu\n", stats.fence_fd_queries);
+    printf("fence_fd_live %lu\n", stats.fence_fd_live);
+    printf("fence_fd_peak %lu\n", stats.fence_fd_peak);
+    printf("fence_fd_polls %lu\n", stats.fence_fd_polls);
+    printf("fence_fd_poll_ready %lu\n", stats.fence_fd_poll_ready);
+    printf("gpu_opens %lu\n", stats.gpu_opens);
+    printf("gpu_live_opens %lu\n", stats.gpu_live_opens);
+    printf("gpu_ioctls %lu\n", stats.gpu_ioctls);
     printf("virtio_commands %lu\n", stats.virtio_commands);
     printf("virtio_failures %lu\n", stats.virtio_failures);
     printf("virtio_timeouts %lu\n", stats.virtio_timeouts);
@@ -49,6 +68,8 @@ int main(int argc, char *argv[])
     printf("virtio_virgl_version %lu\n", stats.virtio_virgl_version);
     printf("virtio_virgl_size %lu\n", stats.virtio_virgl_size);
     printf("virtio_contexts %lu\n", stats.virtio_contexts);
+    printf("virtio_context_failed %lu\n", stats.virtio_context_failed);
+    printf("virtio_context_failures %lu\n", stats.virtio_context_failures);
     printf("virtio_submits %lu\n", stats.virtio_submits);
     printf("virtio_fences %lu\n", stats.virtio_fences);
     printf("virtio_last_fence %lu\n", stats.virtio_last_fence);

@@ -1,7 +1,43 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/dev/fb.h"
+#include "kernel/inc/syscall.h"
+#include "kernel/inc/uabi/poll.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+#if defined(__riscv)
+static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    register int64 a1 asm("a1") = b;
+    register int64 a2 asm("a2") = c;
+    asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "memory");
+    return a0;
+}
+#elif defined(__x86_64__)
+static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
+{
+    int64 ret;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a), "S"(b), "d"(c)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+#else
+#error "raw_syscall3 is not defined for this architecture"
+#endif
+
+static int poll_raw(struct pollfd *fds, int nfds, int timeout)
+{
+    return (int)raw_syscall3(SYS_poll, (int64)fds, nfds, timeout);
+}
 
 static void fill_pattern(uint32 *pixels, uint32 width, uint32 height,
                          uint32 pitch, int loop)
@@ -117,6 +153,90 @@ out:
     return ret;
 }
 
+static int verify_render_fd_ownership(void)
+{
+    int fd1 = open("/dev/gpu0", O_RDWR);
+    int fd2 = open("/dev/gpu0", O_RDWR);
+    struct fb_gpu_bo_create create = {
+        .width = 64,
+        .height = 64,
+        .flags = FB_GPU_BO_F_EXPORTABLE,
+    };
+    struct fb_gpu_bo_export_fd export_fd;
+    struct fb_gpu_bo_destroy destroy;
+    struct fb_gpu_bo_import_fd import_fd;
+    int ret = 1;
+
+    if (fd1 < 0 || fd2 < 0) {
+        printf("gpubuftest: open /dev/gpu0 failed\n");
+        goto out;
+    }
+    if (ioctl(fd1, FB_GPU_BO_CREATE, &create) < 0 ||
+        create.handle == 0 || create.addr == 0) {
+        printf("gpubuftest: gpu0 BO_CREATE failed\n");
+        goto out;
+    }
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = create.handle;
+    if (ioctl(fd2, FB_GPU_BO_DESTROY, &destroy) >= 0) {
+        printf("gpubuftest: second gpu0 fd destroyed first fd BO\n");
+        goto out_unmap;
+    }
+
+    memset(&export_fd, 0, sizeof(export_fd));
+    export_fd.handle = create.handle;
+    if (ioctl(fd1, FB_GPU_BO_EXPORT_FD, &export_fd) < 0 ||
+        export_fd.fd < 0) {
+        printf("gpubuftest: gpu0 BO_EXPORT_FD failed\n");
+        goto out_unmap;
+    }
+
+    close(fd1);
+    fd1 = -1;
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = create.handle;
+    if (ioctl(fd2, FB_GPU_BO_DESTROY, &destroy) >= 0) {
+        printf("gpubuftest: stale gpu0 handle survived render fd close\n");
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+
+    memset(&import_fd, 0, sizeof(import_fd));
+    import_fd.fd = export_fd.fd;
+    if (ioctl(fd2, FB_GPU_BO_IMPORT_FD, &import_fd) < 0 ||
+        import_fd.handle == 0 || import_fd.addr == 0 ||
+        import_fd.width != create.width || import_fd.height != create.height) {
+        printf("gpubuftest: exported BO fd did not survive render fd close\n");
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    close(export_fd.fd);
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = import_fd.handle;
+    if (ioctl(fd2, FB_GPU_BO_DESTROY, &destroy) < 0) {
+        printf("gpubuftest: imported gpu0 BO_DESTROY failed\n");
+        munmap((void *)import_fd.addr, (int)import_fd.size);
+        goto out_unmap;
+    }
+    munmap((void *)import_fd.addr, (int)import_fd.size);
+    ret = 0;
+    printf("gpubuftest: render fd ownership verified handle=%u imported=%u\n",
+           create.handle, import_fd.handle);
+
+out_unmap:
+    if (create.addr != 0 && create.size != 0)
+        (void)munmap((void *)create.addr, (int)create.size);
+out:
+    if (fd1 >= 0)
+        close(fd1);
+    if (fd2 >= 0)
+        close(fd2);
+    return ret;
+}
+
 int main(int argc, char **argv)
 {
     int loops = 4;
@@ -126,6 +246,9 @@ int main(int argc, char **argv)
         if (strcmp(argv[1], "--fullscreen") == 0 ||
             strcmp(argv[1], "fullscreen") == 0)
             loops = 0;
+        else if (strcmp(argv[1], "--render-owner") == 0 ||
+                 strcmp(argv[1], "render-owner") == 0)
+            return verify_render_fd_ownership();
         else
             loops = atoi(argv[1]);
         if (loops <= 0)
@@ -190,8 +313,50 @@ int main(int argc, char **argv)
         fill_pattern((uint32 *)import.addr, import.width, import.height,
                      import.pitch, i + 17);
 
+        struct fb_gpu_bo_export_fd export_fd = {
+            .handle = create.handle,
+        };
+        if (ioctl(fd, FB_GPU_BO_EXPORT_FD, &export_fd) < 0 ||
+            export_fd.fd < 0) {
+            printf("gpubuftest: FB_GPU_BO_EXPORT_FD failed at loop %d\n", i);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_bo_import_fd import_fd = {
+            .fd = export_fd.fd,
+        };
+        if (ioctl(fd, FB_GPU_BO_IMPORT_FD, &import_fd) < 0 ||
+            import_fd.width != create.width ||
+            import_fd.height != create.height ||
+            import_fd.pitch != create.pitch ||
+            import_fd.size != create.size ||
+            import_fd.handle == 0 ||
+            import_fd.addr == 0 || import_fd.addr == create.addr ||
+            import_fd.addr == import.addr) {
+            printf("gpubuftest: FB_GPU_BO_IMPORT_FD failed at loop %d\n", i);
+            close(export_fd.fd);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        fill_pattern((uint32 *)import_fd.addr, import_fd.width,
+                     import_fd.height, import_fd.pitch, i + 31);
+        if (close(export_fd.fd) < 0) {
+            printf("gpubuftest: BO fd close failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
         if (ioctl(fd, FB_GPU_BO_PRESENT, &present) < 0) {
             printf("gpubuftest: FB_GPU_BO_PRESENT failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
             munmap((void *)import.addr, (int)import.size);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
@@ -199,6 +364,116 @@ int main(int argc, char **argv)
         }
         if (present.fence == 0) {
             printf("gpubuftest: missing present fence at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_fence_export_fd fence_export = {
+            .handle = create.handle,
+            .fence = present.fence,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_EXPORT_FD, &fence_export) < 0 ||
+            fence_export.fd < 0 ||
+            fence_export.fence != present.fence ||
+            fence_export.signaled < present.fence) {
+            printf("gpubuftest: FB_GPU_FENCE_EXPORT_FD failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_fence_query fence_query = {
+            .fd = fence_export.fd,
+            .flags = FB_GPU_FENCE_WAIT,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_QUERY, &fence_query) < 0 ||
+            fence_query.fence != present.fence ||
+            fence_query.signaled < present.fence) {
+            printf("gpubuftest: FB_GPU_FENCE_QUERY failed at loop %d\n", i);
+            close(fence_export.fd);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        struct pollfd pfd = {
+            .fd = fence_export.fd,
+            .events = POLLIN | POLLRDNORM,
+        };
+        if (poll_raw(&pfd, 1, 0) != 1 ||
+            (pfd.revents & (POLLIN | POLLRDNORM)) == 0) {
+            printf("gpubuftest: fence fd poll failed at loop %d revents=%x\n",
+                   i, pfd.revents);
+            close(fence_export.fd);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        if (close(fence_export.fd) < 0) {
+            printf("gpubuftest: fence fd close failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        struct fb_gpu_fence_export_fd future_fence_export = {
+            .handle = create.handle,
+            .fence = present.fence + 1000000,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_EXPORT_FD, &future_fence_export) < 0 ||
+            future_fence_export.fd < 0 ||
+            future_fence_export.fence != present.fence + 1000000) {
+            printf("gpubuftest: future FB_GPU_FENCE_EXPORT_FD failed at loop %d\n",
+                   i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        struct pollfd future_pfd = {
+            .fd = future_fence_export.fd,
+            .events = POLLIN | POLLRDNORM,
+        };
+        if (poll_raw(&future_pfd, 1, 0) != 0 || future_pfd.revents != 0) {
+            printf("gpubuftest: future fence fd became ready at loop %d revents=%x\n",
+                   i, future_pfd.revents);
+            close(future_fence_export.fd);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        struct fb_gpu_fence_query future_fence_query = {
+            .fd = future_fence_export.fd,
+            .flags = FB_GPU_FENCE_WAIT,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_QUERY, &future_fence_query) >= 0 ||
+            future_fence_query.fence != present.fence + 1000000 ||
+            future_fence_query.signaled < present.fence) {
+            printf("gpubuftest: future fence wait did not fail cleanly at loop %d fence=%lu signaled=%lu\n",
+                   i, future_fence_query.fence, future_fence_query.signaled);
+            close(future_fence_export.fd);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        if (close(future_fence_export.fd) < 0) {
+            printf("gpubuftest: future fence fd close failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
             munmap((void *)import.addr, (int)import.size);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
@@ -215,6 +490,7 @@ int main(int argc, char **argv)
             fence.last_present != present.fence) {
             printf("gpubuftest: FB_GPU_BO_FENCE failed at loop %d fence=%lu signaled=%lu last=%lu\n",
                    i, present.fence, fence.signaled, fence.last_present);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
             munmap((void *)import.addr, (int)import.size);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
@@ -224,8 +500,28 @@ int main(int argc, char **argv)
         struct fb_gpu_bo_destroy destroy = {
             .handle = create.handle,
         };
+        struct fb_gpu_bo_destroy import_fd_destroy = {
+            .handle = import_fd.handle,
+        };
+        if (ioctl(fd, FB_GPU_BO_DESTROY, &import_fd_destroy) < 0) {
+            printf("gpubuftest: FB_GPU_BO_DESTROY import-fd failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
         if (ioctl(fd, FB_GPU_BO_DESTROY, &destroy) < 0) {
             printf("gpubuftest: FB_GPU_BO_DESTROY failed at loop %d\n", i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+
+        if (munmap((void *)import_fd.addr, (int)import_fd.size) < 0) {
+            printf("gpubuftest: import-fd munmap failed at loop %d\n", i);
             munmap((void *)import.addr, (int)import.size);
             munmap((void *)create.addr, (int)create.size);
             close(fd);
