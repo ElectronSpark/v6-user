@@ -37,6 +37,11 @@
 #define IPC_STRESS_MAX_PAYLOAD 8192
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
+#if defined(__x86_64__)
+#define SYS_memfd_create_native 319
+#else
+#define SYS_memfd_create_native 279
+#endif
 #define EAGAIN 11
 #define EINVAL 22
 
@@ -226,6 +231,11 @@ static int fdatasync_raw(int fd)
 static int memfd_create_raw(const char *name, uint flags)
 {
     return (int)raw_syscall2(SYS_memfd_create, (int64)name, flags);
+}
+
+static int memfd_create_native_raw(const char *name, uint flags)
+{
+    return (int)raw_syscall2(SYS_memfd_create_native, (int64)name, flags);
 }
 
 static int mlock2_raw(const void *addr, uint64 len, int flags)
@@ -1202,6 +1212,39 @@ static void test_memfd_shared_mapping(void)
     pass(name);
 }
 
+static void test_native_memfd_syscall_alias(void)
+{
+    const char *name = "native memfd_create syscall alias";
+    int fd = memfd_create_native_raw("webkit-native-shm", MFD_CLOEXEC);
+    char *p;
+
+    if (fd < 0) {
+        fail(name, "native-number memfd_create failed");
+        return;
+    }
+    if (ftruncate(fd, 4096) < 0) {
+        close(fd);
+        fail(name, "ftruncate failed");
+        return;
+    }
+    p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        fail(name, "mmap failed");
+        return;
+    }
+    p[0] = 'N';
+    if (p[0] != 'N') {
+        munmap(p, 4096);
+        close(fd);
+        fail(name, "mapping content mismatch");
+        return;
+    }
+    munmap(p, 4096);
+    close(fd);
+    pass(name);
+}
+
 static void test_large_memfd_shared_mapping(void)
 {
     const char *name = "large memfd shared-memory object";
@@ -1554,6 +1597,7 @@ int main(int argc, char **argv)
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
     test_memfd_shared_mapping();
+    test_native_memfd_syscall_alias();
     test_large_memfd_shared_mapping();
     test_vfs_cache_shape();
     test_advisory_locks();
