@@ -26,6 +26,10 @@
 #define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
 #define MFD_CLOEXEC 0x0001
+#define MLOCK_ONFAULT 0x01
+#define MCL_CURRENT 0x01
+#define MCL_FUTURE 0x02
+#define MCL_ONFAULT 0x04
 #define CLOCK_MONOTONIC 1
 #define TFD_NONBLOCK O_NONBLOCK
 #define TFD_CLOEXEC O_CLOEXEC
@@ -34,6 +38,7 @@
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
 #define EAGAIN 11
+#define EINVAL 22
 
 struct pollfd {
     int fd;
@@ -221,6 +226,26 @@ static int fdatasync_raw(int fd)
 static int memfd_create_raw(const char *name, uint flags)
 {
     return (int)raw_syscall2(SYS_memfd_create, (int64)name, flags);
+}
+
+static int mlock2_raw(const void *addr, uint64 len, int flags)
+{
+    return (int)raw_syscall3(SYS_mlock2, (int64)addr, len, flags);
+}
+
+static int mlockall_raw(int flags)
+{
+    return (int)raw_syscall2(SYS_mlockall, flags, 0);
+}
+
+static int munlock_raw(const void *addr, uint64 len)
+{
+    return (int)raw_syscall2(SYS_munlock, (int64)addr, len);
+}
+
+static int munlockall_raw(void)
+{
+    return (int)raw_syscall2(SYS_munlockall, 0, 0);
 }
 
 static int timerfd_create_raw(int clockid, int flags)
@@ -1477,6 +1502,38 @@ static void test_executable_memory_policy(void)
     pass(name);
 }
 
+static void test_memory_locking_abi(void)
+{
+    const char *name = "memory locking ABI";
+    char *p = mmap(0, 8192, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    if (p == MAP_FAILED) {
+        fail(name, "anonymous mmap failed");
+        return;
+    }
+    p[0] = 'L';
+
+    if (mlock2_raw(p + 17, 4096, 0) < 0 ||
+        mlock2_raw(p, 4096, MLOCK_ONFAULT) < 0 ||
+        mlockall_raw(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT) < 0 ||
+        munlock_raw(p + 33, 1024) < 0 ||
+        munlockall_raw() < 0) {
+        munmap(p, 8192);
+        fail(name, "expected lock/unlock call failed");
+        return;
+    }
+    if (mlock2_raw(p, 4096, 0x80) != -EINVAL ||
+        mlockall_raw(0x80) != -EINVAL) {
+        munmap(p, 8192);
+        fail(name, "invalid flags were accepted");
+        return;
+    }
+
+    munmap(p, 8192);
+    pass(name);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "checkclosed") == 0) {
@@ -1505,6 +1562,7 @@ int main(int argc, char **argv)
     test_timerfd_poll();
     test_random_devices();
     test_executable_memory_policy();
+    test_memory_locking_abi();
 
     printf("webkitabitest: %d passed, %d skipped, %d failed\n",
            passed, skipped, failed);
