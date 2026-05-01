@@ -2,7 +2,7 @@
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
 
-#define TEST_OPEN_COUNT 80
+#define TEST_OPEN_COUNT 600
 
 static void
 fail(const char *msg, int expected, int actual)

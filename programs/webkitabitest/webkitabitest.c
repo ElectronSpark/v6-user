@@ -12,14 +12,28 @@
 #define SOCK_NONBLOCK 0x800
 #define SOCK_CLOEXEC 0x80000
 #define SOL_SOCKET 1
+#define SO_REUSEADDR 2
+#define SO_TYPE 3
+#define SO_ERROR 4
+#define SO_SNDBUF 7
+#define SO_RCVBUF 8
+#define SO_PASSCRED 16
+#define SO_PEERCRED 17
+#define SO_PROTOCOL 38
+#define SO_DOMAIN 39
 #define SCM_RIGHTS 1
 #define MSG_DONTWAIT 0x40
+#define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
 #define MFD_CLOEXEC 0x0001
 #define CLOCK_MONOTONIC 1
 #define TFD_NONBLOCK O_NONBLOCK
 #define TFD_CLOEXEC O_CLOEXEC
 #define LARGE_SHM_SIZE (1024 * 1024)
+#define IPC_STRESS_MAX_PAYLOAD 8192
+#define IPC_STRESS_MESSAGES 2500
+#define IPC_STRESS_MAGIC 0x574b4950u
+#define EAGAIN 11
 
 struct pollfd {
     int fd;
@@ -47,6 +61,12 @@ struct msghdr {
 struct itimerspec {
     struct timespec it_interval;
     struct timespec it_value;
+};
+
+struct ucred {
+    int pid;
+    uint32 uid;
+    uint32 gid;
 };
 
 #define CMSG_ALIGN(n) (((n) + sizeof(uint64) - 1) & ~(sizeof(uint64) - 1))
@@ -230,6 +250,18 @@ static int fcntl_addr_raw(int fd, int cmd, void *arg)
     return (int)raw_syscall3(SYS_fcntl, fd, cmd, (int64)arg);
 }
 
+static int setsockopt_raw(int fd, int level, int optname, const void *optval, int optlen)
+{
+    return (int)raw_syscall6(SYS_setsockopt, fd, level, optname,
+                             (int64)optval, optlen, 0);
+}
+
+static int getsockopt_raw(int fd, int level, int optname, void *optval, int *optlen)
+{
+    return (int)raw_syscall6(SYS_getsockopt, fd, level, optname,
+                             (int64)optval, (int64)optlen, 0);
+}
+
 static int check_fd_closed_after_exec(int fd)
 {
     char ch;
@@ -279,18 +311,98 @@ static void test_socketpair_stream(void)
 
 static void test_socketpair_seqpacket_policy(void)
 {
-    const char *name = "AF_UNIX SOCK_SEQPACKET policy";
+    const char *name = "AF_UNIX SOCK_SEQPACKET socketpair";
     int sv[2];
-    int rc = socketpair_raw(SOCK_SEQPACKET, sv);
+    int type;
+    int optlen = sizeof(type);
+    char a[] = "abc";
+    char b[] = "de";
+    char c[] = "truncate";
+    char buf[8];
+    struct iovec iov;
+    struct msghdr msg;
 
-    if (rc == 0) {
-        close(sv[0]);
-        close(sv[1]);
-        pass(name);
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
         return;
     }
 
-    skip(name, "not implemented; WebKit must keep SOCK_STREAM IPC override");
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_TYPE, &type, &optlen) < 0 ||
+        optlen != sizeof(type) || type != SOCK_SEQPACKET) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_TYPE did not report SOCK_SEQPACKET");
+        return;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = a;
+    iov.iov_len = sizeof(a) - 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)iov.iov_len) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "first sendmsg failed");
+        return;
+    }
+    iov.iov_base = b;
+    iov.iov_len = sizeof(b) - 1;
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)iov.iov_len) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "second sendmsg failed");
+        return;
+    }
+
+    memset(buf, 0, sizeof(buf));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (recvmsg_raw(sv[1], &msg, 0) != 3 ||
+        memcmp(buf, "abc", 3) != 0 || (msg.msg_flags & MSG_TRUNC)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "first packet boundary was not preserved");
+        return;
+    }
+    memset(buf, 0, sizeof(buf));
+    if (recvmsg_raw(sv[1], &msg, 0) != 2 ||
+        memcmp(buf, "de", 2) != 0 || (msg.msg_flags & MSG_TRUNC)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "second packet boundary was not preserved");
+        return;
+    }
+
+    iov.iov_base = c;
+    iov.iov_len = sizeof(c) - 1;
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)iov.iov_len) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "truncate sendmsg failed");
+        return;
+    }
+
+    memset(buf, 0, sizeof(buf));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = buf;
+    iov.iov_len = 4;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (recvmsg_raw(sv[1], &msg, 0) != 4 ||
+        memcmp(buf, "trun", 4) != 0 || !(msg.msg_flags & MSG_TRUNC)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "short receive did not truncate one packet");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
 }
 
 static void test_socket_nonblock_poll(void)
@@ -350,6 +462,96 @@ static void test_socket_nonblock_poll(void)
         return;
     }
 
+    close(sv[1]);
+    pass(name);
+}
+
+static void test_socket_sol_options(void)
+{
+    const char *name = "AF_UNIX SOL_SOCKET compatibility";
+    int sv[2];
+    int val;
+    int len;
+    struct ucred cred;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    val = 1;
+    if (setsockopt_raw(sv[0], SOL_SOCKET, SO_PASSCRED, &val, sizeof(val)) < 0 ||
+        setsockopt_raw(sv[0], SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "setsockopt compatibility option failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_DOMAIN, &val, &len) < 0 ||
+        len != sizeof(val) || val != AF_UNIX) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_DOMAIN failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_PROTOCOL, &val, &len) < 0 ||
+        len != sizeof(val) || val != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_PROTOCOL failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_TYPE, &val, &len) < 0 ||
+        len != sizeof(val) || val != SOCK_STREAM) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_TYPE failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_PASSCRED, &val, &len) < 0 ||
+        len != sizeof(val)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_PASSCRED failed");
+        return;
+    }
+
+    len = sizeof(cred);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0 ||
+        len != sizeof(cred)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_PEERCRED failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_SNDBUF, &val, &len) < 0 ||
+        len != sizeof(val) || val <= 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_SNDBUF failed");
+        return;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(sv[0], SOL_SOCKET, SO_RCVBUF, &val, &len) < 0 ||
+        len != sizeof(val) || val <= 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SO_RCVBUF failed");
+        return;
+    }
+
+    close(sv[0]);
     close(sv[1]);
     pass(name);
 }
@@ -584,6 +786,262 @@ static void test_scm_rights_process_lifetime(void)
     close(gotfd);
     close(sv[1]);
     unlink("__webkit_life");
+    pass(name);
+}
+
+struct ipc_stress_header {
+    uint magic;
+    uint seq;
+    uint len;
+    uint checksum;
+};
+
+static uint ipc_stress_byte(uint seq, uint index)
+{
+    uint x = seq * 1103515245u + index * 2654435761u + 0x9e3779b9u;
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    return x & 0xff;
+}
+
+static uint ipc_stress_checksum(const uchar *buf, uint len)
+{
+    uint h = 2166136261u;
+    for (uint i = 0; i < len; i++) {
+        h ^= buf[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static uint ipc_stress_len(uint seq)
+{
+    uint len = 1 + ((seq * 7919u) % IPC_STRESS_MAX_PAYLOAD);
+    if ((seq % 31) == 0)
+        len = 2048 + (seq % 7);
+    if ((seq % 127) == 0)
+        len = IPC_STRESS_MAX_PAYLOAD - (seq % 113);
+    return len;
+}
+
+static void ipc_stress_fill(uchar *buf, uint len, uint seq)
+{
+    for (uint i = 0; i < len; i++)
+        buf[i] = (uchar)ipc_stress_byte(seq, i);
+}
+
+static int ipc_stress_send_message(int fd, uint seq, int pass_fd)
+{
+    static uchar payload[IPC_STRESS_MAX_PAYLOAD];
+    struct ipc_stress_header hdr;
+    struct iovec iov[3];
+    struct msghdr msg;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    uint len = ipc_stress_len(seq);
+    int ret;
+
+    ipc_stress_fill(payload, len, seq);
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.len = len;
+    hdr.checksum = ipc_stress_checksum(payload, len);
+
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = 7;
+    iov[1].iov_base = ((char *)&hdr) + 7;
+    iov[1].iov_len = sizeof(hdr) - 7;
+    iov[2].iov_base = payload;
+    iov[2].iov_len = len;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 3;
+
+    if (pass_fd >= 0) {
+        memset(control, 0, sizeof(control));
+        cmsg = (struct cmsghdr *)control;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(cmsg), &pass_fd, sizeof(pass_fd));
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+    }
+
+    ret = sendmsg_raw(fd, &msg, 0);
+    return ret == (int)(sizeof(hdr) + len) ? 0 : ret;
+}
+
+static int ipc_stress_send_message_retry(int fd, uint seq, int pass_fd)
+{
+    for (int tries = 0; tries < 1000; tries++) {
+        int ret = ipc_stress_send_message(fd, seq, pass_fd);
+        if (ret == 0)
+            return 0;
+        if (ret != -EAGAIN)
+            return ret;
+        sleep(1);
+    }
+    return -EAGAIN;
+}
+
+static int ipc_stress_recv_some(int fd, uchar *buf, uint want, int *received_fd)
+{
+    struct iovec iov[3];
+    struct msghdr msg;
+    char control[CMSG_SPACE(sizeof(int))];
+    uint a = want > 5 ? 5 : want;
+    uint b = want > a ? ((want - a) > 251 ? 251 : (want - a)) : 0;
+    uint c = want - a - b;
+    int ret;
+
+    iov[0].iov_base = buf;
+    iov[0].iov_len = a;
+    iov[1].iov_base = buf + a;
+    iov[1].iov_len = b;
+    iov[2].iov_base = buf + a + b;
+    iov[2].iov_len = c;
+
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 3;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    ret = recvmsg_raw(fd, &msg, MSG_CMSG_CLOEXEC);
+    if (ret > 0 && msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+        struct cmsghdr *cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            int fdtmp = -1;
+            memcpy(&fdtmp, CMSG_DATA(cmsg), sizeof(fdtmp));
+            if (fdtmp >= 0) {
+                if (*received_fd >= 0)
+                    close(*received_fd);
+                *received_fd = fdtmp;
+            }
+        }
+    }
+    return ret;
+}
+
+static int ipc_stress_read_exact(int fd, uchar *buf, uint len, int *received_fd)
+{
+    uint got = 0;
+    while (got < len) {
+        int n = ipc_stress_recv_some(fd, buf + got, len - got, received_fd);
+        if (n <= 0)
+            return -1;
+        got += (uint)n;
+    }
+    return 0;
+}
+
+static int ipc_stress_recv_message(int fd, uint seq, int *received_fd)
+{
+    static uchar payload[IPC_STRESS_MAX_PAYLOAD];
+    struct ipc_stress_header hdr;
+    char why[128];
+
+    if (ipc_stress_read_exact(fd, (uchar *)&hdr, sizeof(hdr), received_fd) < 0)
+        return -1;
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.seq != seq ||
+        hdr.len != ipc_stress_len(seq) || hdr.len > IPC_STRESS_MAX_PAYLOAD)
+        return -2;
+    if (ipc_stress_read_exact(fd, payload, hdr.len, received_fd) < 0)
+        return -3;
+    if (ipc_stress_checksum(payload, hdr.len) != hdr.checksum)
+        return -4;
+    for (uint i = 0; i < hdr.len; i++) {
+        if (payload[i] != (uchar)ipc_stress_byte(seq, i)) {
+            snprintf(why, sizeof(why), "seq=%u byte=%u got=%u", seq, i, payload[i]);
+            fprintf(2, "webkitabitest: IPC stream byte mismatch %s\n", why);
+            return -5;
+        }
+    }
+    return 0;
+}
+
+static void test_ipc_stream_stress(void)
+{
+    const char *name = "AF_UNIX WebKit IPC stream stress";
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    unlink("__webkit_ipc_fd");
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        int fd = open("__webkit_ipc_fd", O_CREAT | O_RDWR);
+        close(sv[0]);
+        if (fd < 0)
+            exit(2);
+        write(fd, "S", 1);
+        lseek(fd, 0, SEEK_SET);
+        for (uint seq = 0; seq < IPC_STRESS_MESSAGES; seq++) {
+            int pass_fd = (seq % 101) == 17 ? fd : -1;
+            int send_rc = ipc_stress_send_message_retry(sv[1], seq, pass_fd);
+            if (send_rc != 0) {
+                fprintf(2, "webkitabitest: IPC stress send failed seq=%u rc=%d\n",
+                        seq, send_rc);
+                exit(3);
+            }
+        }
+        close(fd);
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    int received_fd = -1;
+    for (uint seq = 0; seq < IPC_STRESS_MESSAGES; seq++) {
+        int rc = ipc_stress_recv_message(sv[0], seq, &received_fd);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "message %u failed rc=%d", seq, rc);
+            close(sv[0]);
+            if (received_fd >= 0)
+                close(received_fd);
+            waitpid(pid, &status, 0);
+            fail(name, why);
+            return;
+        }
+    }
+
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (received_fd < 0) {
+        fail(name, "SCM_RIGHTS fd was not delivered");
+        return;
+    }
+    char c = 0;
+    lseek(received_fd, 0, SEEK_SET);
+    if (read(received_fd, &c, 1) != 1 || c != 'S') {
+        close(received_fd);
+        fail(name, "delivered fd content mismatch");
+        return;
+    }
+    close(received_fd);
+    unlink("__webkit_ipc_fd");
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "sender failed");
+        return;
+    }
     pass(name);
 }
 
@@ -1031,9 +1489,11 @@ int main(int argc, char **argv)
     test_socketpair_stream();
     test_socketpair_seqpacket_policy();
     test_socket_nonblock_poll();
+    test_socket_sol_options();
     test_socket_cloexec_exec();
     test_scm_rights_batch();
     test_scm_rights_process_lifetime();
+    test_ipc_stream_stress();
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
     test_memfd_shared_mapping();
