@@ -68,6 +68,12 @@ struct msghdr {
     int msg_flags;
 };
 
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    uint32 msg_len;
+    uint32 __pad;
+};
+
 struct itimerspec {
     struct timespec it_interval;
     struct timespec it_value;
@@ -211,6 +217,12 @@ static int sendmsg_raw(int fd, struct msghdr *msg, int flags)
 static int recvmsg_raw(int fd, struct msghdr *msg, int flags)
 {
     return (int)raw_syscall3(SYS_recvmsg, fd, (int64)msg, flags);
+}
+
+static int recvmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
+{
+    return (int)raw_syscall6(SYS_recvmmsg_time64, fd, (int64)msgvec, vlen,
+                             flags, 0, 0);
 }
 
 static int poll_raw(struct pollfd *fds, int nfds, int timeout)
@@ -719,6 +731,194 @@ static void test_scm_rights_batch(void)
     close(sv[1]);
     unlink("__webkit_fd1");
     unlink("__webkit_fd2");
+    pass(name);
+}
+
+static void test_scm_rights_stream_first_byte_barrier(void)
+{
+    const char *name = "SCM_RIGHTS stream first-byte barrier";
+    int sv[2];
+    int fd = -1;
+    int sent_fd;
+    int got_fd = -1;
+    char control[CMSG_SPACE(sizeof(sent_fd))];
+    char recv_control[CMSG_SPACE(sizeof(got_fd))];
+    char bytes[8] = "ABCDEFG";
+    char got = 0;
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+
+    unlink("__webkit_barrier_fd");
+    fd = open("__webkit_barrier_fd", O_CREAT | O_RDWR);
+    if (fd < 0 || socketpair_raw(SOCK_STREAM, sv) < 0) {
+        if (fd >= 0)
+            close(fd);
+        fail(name, "setup failed");
+        return;
+    }
+
+    write(fd, "Z", 1);
+    lseek(fd, 0, SEEK_SET);
+
+    memset(control, 0, sizeof(control));
+    sent_fd = fd;
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(sent_fd));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &sent_fd, sizeof(sent_fd));
+
+    iov.iov_base = bytes;
+    iov.iov_len = sizeof(bytes);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    if (sendmsg_raw(sv[0], &msg, MSG_DONTWAIT) != (int)sizeof(bytes)) {
+        close(fd); close(sv[0]); close(sv[1]);
+        fail(name, "sendmsg failed");
+        return;
+    }
+    close(fd);
+
+    memset(recv_control, 0, sizeof(recv_control));
+    got = 0;
+    iov.iov_base = &got;
+    iov.iov_len = 1;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = recv_control;
+    msg.msg_controllen = sizeof(recv_control);
+
+    if (recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC) != 1 || got != 'A') {
+        close(sv[0]); close(sv[1]);
+        fail(name, "first-byte recv failed");
+        return;
+    }
+
+    cmsg = (struct cmsghdr *)recv_control;
+    if (msg.msg_controllen < CMSG_LEN(sizeof(got_fd)) ||
+        cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "fd was not delivered with first byte");
+        return;
+    }
+
+    memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+    if (read(got_fd, &got, 1) != 1 || got != 'Z') {
+        close(got_fd); close(sv[0]); close(sv[1]);
+        fail(name, "received fd content wrong");
+        return;
+    }
+
+    close(got_fd);
+    close(sv[0]);
+    close(sv[1]);
+    unlink("__webkit_barrier_fd");
+    pass(name);
+}
+
+static void test_scm_rights_recvmmsg_batch(void)
+{
+    const char *name = "SCM_RIGHTS recvmmsg multiple fd batch";
+    int sv[2];
+    int fd1 = -1;
+    int fd2 = -1;
+    int sent_fds[2];
+    int got_fds[2];
+    char control[CMSG_SPACE(sizeof(sent_fds))];
+    char recv_control[CMSG_SPACE(sizeof(got_fds))];
+    char byte = 'R';
+    char got = 0;
+    struct iovec send_iov;
+    struct iovec recv_iov;
+    struct msghdr send_msg;
+    struct mmsghdr recv_msg;
+    struct cmsghdr *cmsg;
+
+    unlink("__webkit_rfd1");
+    unlink("__webkit_rfd2");
+    fd1 = open("__webkit_rfd1", O_CREAT | O_RDWR);
+    fd2 = open("__webkit_rfd2", O_CREAT | O_RDWR);
+    if (fd1 < 0 || fd2 < 0 || socketpair_raw(SOCK_STREAM, sv) < 0) {
+        if (fd1 >= 0) close(fd1);
+        if (fd2 >= 0) close(fd2);
+        fail(name, "setup failed");
+        return;
+    }
+
+    write(fd1, "X", 1);
+    write(fd2, "Y", 1);
+    lseek(fd1, 0, SEEK_SET);
+    lseek(fd2, 0, SEEK_SET);
+
+    memset(control, 0, sizeof(control));
+    sent_fds[0] = fd1;
+    sent_fds[1] = fd2;
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(sent_fds));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), sent_fds, sizeof(sent_fds));
+
+    send_iov.iov_base = &byte;
+    send_iov.iov_len = 1;
+    memset(&send_msg, 0, sizeof(send_msg));
+    send_msg.msg_iov = &send_iov;
+    send_msg.msg_iovlen = 1;
+    send_msg.msg_control = control;
+    send_msg.msg_controllen = sizeof(control);
+
+    if (sendmsg_raw(sv[0], &send_msg, MSG_DONTWAIT) != 1) {
+        close(fd1); close(fd2); close(sv[0]); close(sv[1]);
+        fail(name, "sendmsg failed");
+        return;
+    }
+    close(fd1);
+    close(fd2);
+
+    memset(recv_control, 0, sizeof(recv_control));
+    recv_iov.iov_base = &got;
+    recv_iov.iov_len = 1;
+    memset(&recv_msg, 0, sizeof(recv_msg));
+    recv_msg.msg_hdr.msg_iov = &recv_iov;
+    recv_msg.msg_hdr.msg_iovlen = 1;
+    recv_msg.msg_hdr.msg_control = recv_control;
+    recv_msg.msg_hdr.msg_controllen = sizeof(recv_control);
+
+    if (recvmmsg_raw(sv[1], &recv_msg, 1, MSG_CMSG_CLOEXEC) != 1 ||
+        recv_msg.msg_len != 1 || got != 'R') {
+        close(sv[0]); close(sv[1]);
+        fail(name, "recvmmsg payload failed");
+        return;
+    }
+
+    cmsg = (struct cmsghdr *)recv_control;
+    if (recv_msg.msg_hdr.msg_controllen < CMSG_LEN(sizeof(got_fds)) ||
+        cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "control message missing");
+        return;
+    }
+
+    memcpy(got_fds, CMSG_DATA(cmsg), sizeof(got_fds));
+    if (read(got_fds[0], &got, 1) != 1 || got != 'X' ||
+        read(got_fds[1], &got, 1) != 1 || got != 'Y') {
+        close(got_fds[0]); close(got_fds[1]); close(sv[0]); close(sv[1]);
+        fail(name, "received fd contents wrong");
+        return;
+    }
+
+    close(got_fds[0]);
+    close(got_fds[1]);
+    close(sv[0]);
+    close(sv[1]);
+    unlink("__webkit_rfd1");
+    unlink("__webkit_rfd2");
     pass(name);
 }
 
@@ -1289,30 +1489,69 @@ static void test_vfs_cache_shape(void)
     struct statfs sfs;
     char buf[4];
 
+    printf("TRACE: vfs-cache cleanup\n");
     unlink("__webkit_cache/a");
     unlink("__webkit_cache/b");
     unlink("__webkit_cache/renamed");
     unlink("__webkit_cache");
+    printf("TRACE: vfs-cache mkdir\n");
     mkdir("__webkit_cache");
 
+    printf("TRACE: vfs-cache open a\n");
     fd = open("__webkit_cache/a", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open nested file failed");
         return;
     }
-    if (write(fd, "cache", 5) != 5 || fsync_raw(fd) < 0 ||
-        fdatasync_raw(fd) < 0 || ftruncate(fd, 8192) < 0 ||
-        fstat(fd, &st) < 0 || st.st_size < 8192 ||
-        fstatfs_raw(fd, &sfs) < 0 || statfs_raw("__webkit_cache", &sfs) < 0) {
+    printf("TRACE: vfs-cache write\n");
+    if (write(fd, "cache", 5) != 5) {
         close(fd);
-        fail(name, "write/sync/truncate/stat failed");
+        fail(name, "write failed");
         return;
     }
+    printf("TRACE: vfs-cache fsync\n");
+    if (fsync_raw(fd) < 0) {
+        close(fd);
+        fail(name, "fsync failed");
+        return;
+    }
+    printf("TRACE: vfs-cache fdatasync\n");
+    if (fdatasync_raw(fd) < 0) {
+        close(fd);
+        fail(name, "fdatasync failed");
+        return;
+    }
+    printf("TRACE: vfs-cache ftruncate\n");
+    if (ftruncate(fd, 8192) < 0) {
+        close(fd);
+        fail(name, "ftruncate failed");
+        return;
+    }
+    printf("TRACE: vfs-cache fstat\n");
+    if (fstat(fd, &st) < 0 || st.st_size < 8192) {
+        close(fd);
+        fail(name, "fstat failed");
+        return;
+    }
+    printf("TRACE: vfs-cache fstatfs\n");
+    if (fstatfs_raw(fd, &sfs) < 0) {
+        close(fd);
+        fail(name, "fstatfs failed");
+        return;
+    }
+    printf("TRACE: vfs-cache statfs\n");
+    if (statfs_raw("__webkit_cache", &sfs) < 0) {
+        close(fd);
+        fail(name, "statfs failed");
+        return;
+    }
+    printf("TRACE: vfs-cache unlink-open\n");
     if (unlink("__webkit_cache/a") < 0) {
         close(fd);
         fail(name, "unlink while open failed");
         return;
     }
+    printf("TRACE: vfs-cache read-unlinked\n");
     lseek(fd, 0, SEEK_SET);
     memset(buf, 0, sizeof(buf));
     if (read(fd, buf, 4) != 4 || memcmp(buf, "cach", 4) != 0) {
@@ -1320,25 +1559,30 @@ static void test_vfs_cache_shape(void)
         fail(name, "open unlinked file lost contents");
         return;
     }
+    printf("TRACE: vfs-cache close-unlinked\n");
     close(fd);
 
+    printf("TRACE: vfs-cache open b\n");
     fd = open("__webkit_cache/b", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open rename source failed");
         return;
     }
     close(fd);
+    printf("TRACE: vfs-cache open renamed\n");
     fd = open("__webkit_cache/renamed", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open rename destination failed");
         return;
     }
     close(fd);
+    printf("TRACE: vfs-cache rename-over\n");
     if (rename("__webkit_cache/b", "__webkit_cache/renamed") < 0) {
         fail(name, "rename over existing failed");
         return;
     }
 
+    printf("TRACE: vfs-cache final cleanup\n");
     unlink("__webkit_cache/renamed");
     unlink("__webkit_cache");
     pass(name);
@@ -1592,6 +1836,8 @@ int main(int argc, char **argv)
     test_socket_sol_options();
     test_socket_cloexec_exec();
     test_scm_rights_batch();
+    test_scm_rights_stream_first_byte_barrier();
+    test_scm_rights_recvmmsg_batch();
     test_scm_rights_process_lifetime();
     test_ipc_stream_stress();
     test_parent_child_socket_handoff();
