@@ -2147,6 +2147,89 @@ static void test_webkit_seqpacket_chunk_burst_queue(void)
     pass(name);
 }
 
+static void test_webkit_seqpacket_full_buffer_backpressure(void)
+{
+    const char *name = "AF_UNIX seqpacket full buffer returns EAGAIN";
+    int sv[2];
+    uint seq = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    for (;;) {
+        int ret = webkit_chunk_send_nowait(sv[0], seq, seq * WEBKIT_IPC_DATA_CHUNK,
+                                           WEBKIT_IPC_DATA_CHUNK);
+        if (ret == (int)(sizeof(struct webkit_chunk_header) + WEBKIT_IPC_DATA_CHUNK)) {
+            seq++;
+            if (seq > 20000) {
+                close(sv[0]);
+                close(sv[1]);
+                fail(name, "send never hit backpressure");
+                return;
+            }
+            continue;
+        }
+        if (ret != -EAGAIN) {
+            char why[96];
+            snprintf(why, sizeof(why), "full send ret=%d after %u packets", ret, seq);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+        break;
+    }
+
+    if (seq < 5000) {
+        char why[96];
+        snprintf(why, sizeof(why), "buffer filled too early at %u packets", seq);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, why);
+        return;
+    }
+
+    for (uint i = 0; i < seq; i++) {
+        int rc = webkit_chunk_recv(sv[1], i, i * WEBKIT_IPC_DATA_CHUNK,
+                                   WEBKIT_IPC_DATA_CHUNK);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "drain seq=%u rc=%d", i, rc);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+    }
+
+    int ret = webkit_chunk_send_nowait(sv[0], seq, seq * WEBKIT_IPC_DATA_CHUNK,
+                                       WEBKIT_IPC_DATA_CHUNK);
+    if (ret != (int)(sizeof(struct webkit_chunk_header) + WEBKIT_IPC_DATA_CHUNK)) {
+        char why[96];
+        snprintf(why, sizeof(why), "retry ret=%d after drain", ret);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, why);
+        return;
+    }
+    int rc = webkit_chunk_recv(sv[1], seq, seq * WEBKIT_IPC_DATA_CHUNK,
+                               WEBKIT_IPC_DATA_CHUNK);
+    if (rc < 0) {
+        char why[96];
+        snprintf(why, sizeof(why), "retry recv rc=%d", rc);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, why);
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
 static void test_webkit_stream_page_chunk_transfer(void)
 {
     const char *name = "AF_UNIX stream WebKit page chunk transfer";
@@ -3254,6 +3337,7 @@ int main(int argc, char **argv)
     test_webkit_large_inline_ipc(SOCK_STREAM);
     test_webkit_seqpacket_chunk_transfer();
     test_webkit_seqpacket_chunk_burst_queue();
+    test_webkit_seqpacket_full_buffer_backpressure();
     test_webkit_stream_page_chunk_transfer();
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
