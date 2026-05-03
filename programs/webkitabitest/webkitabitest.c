@@ -61,6 +61,8 @@
 #endif
 #define EAGAIN 11
 #define ENOMEM 12
+#define EFAULT 14
+#define ENOENT 2
 #define EINVAL 22
 #define ETIMEDOUT 110
 #define EINPROGRESS 115
@@ -424,6 +426,11 @@ static int timerfd_settime_raw(int fd, int flags, const struct itimerspec *new_v
 static int statfs_raw(const char *path, struct statfs *st)
 {
     return (int)raw_syscall2(SYS_statfs, (int64)path, (int64)st);
+}
+
+static int lstat_raw(const char *path, struct stat *st)
+{
+    return (int)raw_syscall2(SYS_lstat, (int64)path, (int64)st);
 }
 
 static int fstatfs_raw(int fd, struct statfs *st)
@@ -3236,6 +3243,34 @@ static void test_vfs_cache_shape(void)
     pass(name);
 }
 
+static void test_long_webkit_path_lstat(void)
+{
+    const char *name = "long WebKit path lstat";
+    const char *path =
+        "/.local/share/webkitgtk-4.1/MiniBrowser/databases/indexeddb/v1/"
+        "https_www.youtube.com_0/"
+        "393640625DD26AE85875E2BD3E4B023F12F4202FBB07F0E527625D644200D965";
+    struct stat st;
+    int ret;
+
+    if (strlen(path) <= 128) {
+        fail(name, "test path is not longer than legacy MAXPATH");
+        return;
+    }
+
+    ret = lstat_raw(path, &st);
+    if (ret == -EFAULT) {
+        fail(name, "long pathname was rejected as EFAULT");
+        return;
+    }
+    if (ret != -ENOENT) {
+        fail(name, "missing long pathname did not report ENOENT");
+        return;
+    }
+
+    pass(name);
+}
+
 static void test_advisory_locks(void)
 {
     const char *name = "advisory file locks";
@@ -3787,6 +3822,7 @@ int main(int argc, char **argv)
     test_large_memfd_scm_resource_mapping();
     test_webkit_ool_seqpacket_resource_mapping();
     test_vfs_cache_shape();
+    test_long_webkit_path_lstat();
     test_advisory_locks();
     test_mmap_file_truncate();
     test_mremap_failure_errno();
