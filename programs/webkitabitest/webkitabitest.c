@@ -22,6 +22,7 @@
 #define SO_PROTOCOL 38
 #define SO_DOMAIN 39
 #define SCM_RIGHTS 1
+#define MSG_PEEK 0x02
 #define MSG_DONTWAIT 0x40
 #define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
@@ -1433,6 +1434,138 @@ static void test_scm_rights_recvmmsg_payload_barrier(void)
     close(sv[0]);
     close(sv[1]);
     unlink("__webkit_rbarrier");
+    pass(name);
+}
+
+static void test_unix_recvmmsg_peek_stream(void)
+{
+    const char *name = "AF_UNIX recvmmsg MSG_PEEK stream";
+    int sv[2];
+    char peeked[2] = {0, 0};
+    char readback[3] = {0, 0, 0};
+    struct iovec iov;
+    struct mmsghdr msg;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    if (write(sv[0], "ABC", 3) != 3) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "write failed");
+        return;
+    }
+
+    iov.iov_base = peeked;
+    iov.iov_len = sizeof(peeked);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_hdr.msg_iov = &iov;
+    msg.msg_hdr.msg_iovlen = 1;
+    if (recvmmsg_raw(sv[1], &msg, 1, MSG_PEEK) != 1 ||
+        msg.msg_len != 2 || peeked[0] != 'A' || peeked[1] != 'B') {
+        close(sv[0]); close(sv[1]);
+        fail(name, "peek failed");
+        return;
+    }
+
+    if (read(sv[1], readback, sizeof(readback)) != 3 ||
+        memcmp(readback, "ABC", 3) != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "peek consumed stream data");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
+static void test_unix_recvmmsg_seqpacket_boundary(void)
+{
+    const char *name = "AF_UNIX recvmmsg seqpacket boundary";
+    int sv[2];
+    char first[8];
+    char second[2];
+    struct iovec iov;
+    struct mmsghdr msg;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    if (write(sv[0], "abcd", 4) != 4 || write(sv[0], "EF", 2) != 2) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "write failed");
+        return;
+    }
+
+    memset(first, 0, sizeof(first));
+    iov.iov_base = first;
+    iov.iov_len = sizeof(first);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_hdr.msg_iov = &iov;
+    msg.msg_hdr.msg_iovlen = 1;
+    if (recvmmsg_raw(sv[1], &msg, 1, 0) != 1 ||
+        msg.msg_len != 4 || memcmp(first, "abcd", 4) != 0 ||
+        first[4] != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "recvmmsg crossed packet boundary");
+        return;
+    }
+
+    if (read(sv[1], second, sizeof(second)) != 2 ||
+        memcmp(second, "EF", 2) != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "second packet missing");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
+static void test_unix_recvmmsg_seqpacket_trunc(void)
+{
+    const char *name = "AF_UNIX recvmmsg seqpacket truncation";
+    int sv[2];
+    char first[2] = {0, 0};
+    char second[2] = {0, 0};
+    struct iovec iov;
+    struct mmsghdr msg;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    if (write(sv[0], "abcd", 4) != 4 || write(sv[0], "EF", 2) != 2) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "write failed");
+        return;
+    }
+
+    iov.iov_base = first;
+    iov.iov_len = sizeof(first);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_hdr.msg_iov = &iov;
+    msg.msg_hdr.msg_iovlen = 1;
+    if (recvmmsg_raw(sv[1], &msg, 1, 0) != 1 ||
+        msg.msg_len != 2 || memcmp(first, "ab", 2) != 0 ||
+        !(msg.msg_hdr.msg_flags & MSG_TRUNC)) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "truncation flag missing");
+        return;
+    }
+
+    if (read(sv[1], second, sizeof(second)) != 2 ||
+        memcmp(second, "EF", 2) != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "truncated packet tail leaked");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
     pass(name);
 }
 
@@ -3993,6 +4126,9 @@ int main(int argc, char **argv)
     test_scm_rights_stream_payload_barrier();
     test_scm_rights_recvmmsg_batch();
     test_scm_rights_recvmmsg_payload_barrier();
+    test_unix_recvmmsg_peek_stream();
+    test_unix_recvmmsg_seqpacket_boundary();
+    test_unix_recvmmsg_seqpacket_trunc();
     test_unix_sendmmsg_large_stream();
     test_scm_rights_process_lifetime();
     test_scm_rights_stream_barriers();
