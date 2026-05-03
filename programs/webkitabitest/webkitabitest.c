@@ -53,12 +53,14 @@
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
 #define WEBKIT_IPC_DATA_CHUNK 2048u
+#define SCM_BARRIER_FDS 24
 #if defined(__x86_64__)
 #define SYS_memfd_create_native 319
 #else
 #define SYS_memfd_create_native 279
 #endif
 #define EAGAIN 11
+#define ENOMEM 12
 #define EINVAL 22
 #define ETIMEDOUT 110
 #define EINPROGRESS 115
@@ -189,6 +191,21 @@ static inline int64 raw_syscall4(int num, int64 a, int64 b, int64 c, int64 d)
     return a0;
 }
 
+static inline int64 raw_syscall5(int num, int64 a, int64 b, int64 c,
+                                 int64 d, int64 e)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    register int64 a1 asm("a1") = b;
+    register int64 a2 asm("a2") = c;
+    register int64 a3 asm("a3") = d;
+    register int64 a4 asm("a4") = e;
+    asm volatile("ecall" : "+r"(a0)
+                 : "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a7)
+                 : "memory");
+    return a0;
+}
+
 static inline int64 raw_syscall6(int num, int64 a, int64 b, int64 c,
                                  int64 d, int64 e, int64 f)
 {
@@ -238,6 +255,19 @@ static inline int64 raw_syscall4(int num, int64 a, int64 b, int64 c, int64 d)
     register int64 r10 asm("r10") = d;
     asm volatile("syscall" : "=a"(ret)
                  : "a"((int64)num), "D"(a), "S"(b), "d"(c), "r"(r10)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline int64 raw_syscall5(int num, int64 a, int64 b, int64 c,
+                                 int64 d, int64 e)
+{
+    int64 ret;
+    register int64 r10 asm("r10") = d;
+    register int64 r8 asm("r8") = e;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a), "S"(b), "d"(c),
+                   "r"(r10), "r"(r8)
                  : "rcx", "r11", "memory");
     return ret;
 }
@@ -1285,6 +1315,138 @@ static void test_scm_rights_process_lifetime(void)
     close(gotfd);
     close(sv[1]);
     unlink("__webkit_life");
+    pass(name);
+}
+
+static void test_scm_rights_stream_barriers(void)
+{
+    const char *name = "SCM_RIGHTS stream control barriers";
+    int sv[2];
+    int fds[SCM_BARRIER_FDS];
+    int pid;
+    int status = 0;
+
+    memset(fds, -1, sizeof(fds));
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    for (int i = 0; i < SCM_BARRIER_FDS; i++) {
+        char *p;
+        fds[i] = memfd_create_raw("webkit-scm-barrier", MFD_CLOEXEC);
+        if (fds[i] < 0 || ftruncate(fds[i], 4096) < 0) {
+            for (int j = 0; j <= i; j++)
+                if (fds[j] >= 0)
+                    close(fds[j]);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "memfd setup failed");
+            return;
+        }
+        p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fds[i], 0);
+        if (p == MAP_FAILED) {
+            for (int j = 0; j <= i; j++)
+                close(fds[j]);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "memfd mmap failed");
+            return;
+        }
+        p[0] = (char)(0x41 + i);
+        munmap(p, 4096);
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        for (int i = 0; i < SCM_BARRIER_FDS; i++)
+            close(fds[i]);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        close(sv[0]);
+        for (int i = 0; i < SCM_BARRIER_FDS; i++) {
+            char data[16];
+            char control[CMSG_SPACE(sizeof(int))];
+            struct iovec iov;
+            struct msghdr msg;
+            struct cmsghdr *cmsg;
+            int got_fd = -1;
+            char *p;
+            int n;
+
+            memset(data, 0, sizeof(data));
+            memset(control, 0, sizeof(control));
+            memset(&msg, 0, sizeof(msg));
+            iov.iov_base = data;
+            iov.iov_len = sizeof(data);
+            msg.msg_iov = &iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = control;
+            msg.msg_controllen = sizeof(control);
+            n = recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC);
+            if (n != 1 || data[0] != (char)('a' + i))
+                exit(31);
+            if (msg.msg_controllen < CMSG_LEN(sizeof(int)))
+                exit(32);
+            cmsg = (struct cmsghdr *)control;
+            if (cmsg->cmsg_level != SOL_SOCKET ||
+                cmsg->cmsg_type != SCM_RIGHTS)
+                exit(33);
+            memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+            p = mmap(0, 4096, PROT_READ, MAP_SHARED, got_fd, 0);
+            if (p == MAP_FAILED)
+                exit(34);
+            if (p[0] != (char)(0x41 + i))
+                exit(35);
+            munmap(p, 4096);
+            close(got_fd);
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    for (int i = 0; i < SCM_BARRIER_FDS; i++) {
+        char byte = (char)('a' + i);
+        char control[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr *cmsg = (struct cmsghdr *)control;
+        struct iovec iov;
+        struct msghdr msg;
+
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = &byte;
+        iov.iov_len = sizeof(byte);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(cmsg), &fds[i], sizeof(fds[i]));
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+        if (sendmsg_raw(sv[0], &msg, 0) != 1) {
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            for (int j = 0; j < SCM_BARRIER_FDS; j++)
+                close(fds[j]);
+            fail(name, "sendmsg failed");
+            return;
+        }
+    }
+    close(sv[0]);
+    for (int i = 0; i < SCM_BARRIER_FDS; i++)
+        close(fds[i]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "receiver lost descriptor barrier ordering");
+        return;
+    }
     pass(name);
 }
 
@@ -2983,6 +3145,41 @@ static void test_mmap_file_truncate(void)
     pass(name);
 }
 
+static void test_mremap_failure_errno(void)
+{
+    const char *name = "mremap failure reports errno";
+    char *p;
+    int64 ret;
+
+    p = mmap(0, 4096, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        fail(name, "mmap failed");
+        return;
+    }
+
+    ret = raw_syscall5(SYS_mremap, (int64)p, 4096, 8192, 0, 0);
+    if (ret == -1) {
+        munmap(p, 4096);
+        fail(name, "mremap returned raw -1 instead of -errno");
+        return;
+    }
+    if (ret < 0 && ret != -ENOMEM && ret != -EINVAL) {
+        char why[96];
+        snprintf(why, sizeof(why), "unexpected ret=%ld", ret);
+        munmap(p, 4096);
+        fail(name, why);
+        return;
+    }
+    if (ret >= 0) {
+        p = (char *)ret;
+        munmap(p, 8192);
+    } else {
+        munmap(p, 4096);
+    }
+    pass(name);
+}
+
 static void test_waitpid_reap(void)
 {
     const char *name = "waitpid WNOHANG child cleanup";
@@ -3401,6 +3598,7 @@ int main(int argc, char **argv)
     test_scm_rights_stream_first_byte_barrier();
     test_scm_rights_recvmmsg_batch();
     test_scm_rights_process_lifetime();
+    test_scm_rights_stream_barriers();
     test_ipc_stream_stress();
     test_ipc_seqpacket_stress();
     test_webkit_large_inline_ipc(SOCK_SEQPACKET);
@@ -3419,6 +3617,7 @@ int main(int argc, char **argv)
     test_vfs_cache_shape();
     test_advisory_locks();
     test_mmap_file_truncate();
+    test_mremap_failure_errno();
     test_waitpid_reap();
     test_waitpid_signal_status();
     test_timerfd_poll();
