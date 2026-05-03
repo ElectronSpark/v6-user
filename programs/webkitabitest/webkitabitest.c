@@ -1116,6 +1116,105 @@ static void test_scm_rights_stream_first_byte_barrier(void)
     pass(name);
 }
 
+static void test_scm_rights_stream_payload_barrier(void)
+{
+    const char *name = "SCM_RIGHTS stream payload barrier";
+    int sv[2];
+    int fd = -1;
+    int sent_fd;
+    int got_fd = -1;
+    char control[CMSG_SPACE(sizeof(sent_fd))];
+    char recv_control[CMSG_SPACE(sizeof(got_fd))];
+    char payload[] = "abcdef";
+    char tail[] = "tail";
+    char buf[32];
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+
+    unlink("__webkit_payload_barrier_fd");
+    fd = open("__webkit_payload_barrier_fd", O_CREAT | O_RDWR);
+    if (fd < 0 || socketpair_raw(SOCK_STREAM, sv) < 0) {
+        if (fd >= 0)
+            close(fd);
+        fail(name, "setup failed");
+        return;
+    }
+
+    write(fd, "P", 1);
+    lseek(fd, 0, SEEK_SET);
+
+    memset(control, 0, sizeof(control));
+    sent_fd = fd;
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(sent_fd));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &sent_fd, sizeof(sent_fd));
+
+    iov.iov_base = payload;
+    iov.iov_len = sizeof(payload) - 1;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)(sizeof(payload) - 1) ||
+        write(sv[0], tail, sizeof(tail) - 1) != (int)(sizeof(tail) - 1)) {
+        close(fd); close(sv[0]); close(sv[1]);
+        fail(name, "send failed");
+        return;
+    }
+    close(fd);
+
+    memset(buf, 0, sizeof(buf));
+    memset(recv_control, 0, sizeof(recv_control));
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = recv_control;
+    msg.msg_controllen = sizeof(recv_control);
+
+    if (recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC) != (int)(sizeof(payload) - 1) ||
+        memcmp(buf, payload, sizeof(payload) - 1) != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "payload recv crossed descriptor barrier");
+        return;
+    }
+
+    cmsg = (struct cmsghdr *)recv_control;
+    if (msg.msg_controllen < CMSG_LEN(sizeof(got_fd)) ||
+        cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "fd was not delivered with payload");
+        return;
+    }
+
+    memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+    if (read(got_fd, buf, 1) != 1 || buf[0] != 'P') {
+        close(got_fd); close(sv[0]); close(sv[1]);
+        fail(name, "received fd content wrong");
+        return;
+    }
+    close(got_fd);
+
+    memset(buf, 0, sizeof(buf));
+    if (read(sv[1], buf, sizeof(buf)) != (int)(sizeof(tail) - 1) ||
+        memcmp(buf, tail, sizeof(tail) - 1) != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "tail payload mismatch");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    unlink("__webkit_payload_barrier_fd");
+    pass(name);
+}
+
 static void test_scm_rights_recvmmsg_batch(void)
 {
     const char *name = "SCM_RIGHTS recvmmsg multiple fd batch";
@@ -3596,6 +3695,7 @@ int main(int argc, char **argv)
     test_socket_cloexec_exec();
     test_scm_rights_batch();
     test_scm_rights_stream_first_byte_barrier();
+    test_scm_rights_stream_payload_barrier();
     test_scm_rights_recvmmsg_batch();
     test_scm_rights_process_lifetime();
     test_scm_rights_stream_barriers();
