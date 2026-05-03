@@ -31,9 +31,24 @@
 #define MCL_FUTURE 0x02
 #define MCL_ONFAULT 0x04
 #define CLOCK_MONOTONIC 1
+#define FUTEX_WAIT 0
+#define FUTEX_WAKE 1
+#define FUTEX_WAIT_BITSET 9
+#define FUTEX_PRIVATE_FLAG 128
+#define FUTEX_BITSET_MATCH_ANY 0xffffffffu
 #define TFD_NONBLOCK O_NONBLOCK
 #define TFD_CLOEXEC O_CLOEXEC
+#define EPOLLIN 0x001
+#define EPOLLOUT 0x004
+#define EPOLL_CTL_ADD 1
+#define EPOLL_CLOEXEC O_CLOEXEC
 #define LARGE_SHM_SIZE (1024 * 1024)
+#define SHAREABLE_RESOURCE_SIZE (10 * 1024 * 1024)
+#define WEBKIT_YT_RESOURCE_SIZE 9701939u
+#define WEBKIT_YT_APP_JS_SIZE 9701895u
+#define WEBKIT_YT_BASE_JS_SIZE 2461301u
+#define WEBKIT_YT_BASE_JS_CORRUPT_OFFSET 114688u
+#define WEBKIT_PAGE_CHUNK 4096u
 #define IPC_STRESS_MAX_PAYLOAD 8192
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
@@ -44,6 +59,8 @@
 #endif
 #define EAGAIN 11
 #define EINVAL 22
+#define ETIMEDOUT 110
+#define EINPROGRESS 115
 
 struct pollfd {
     int fd;
@@ -51,8 +68,26 @@ struct pollfd {
     short revents;
 };
 
+struct epoll_event_abi {
+    uint32 events;
+#if !defined(__x86_64__)
+    uint32 __pad;
+#endif
+    uint64 data;
+}
+#if defined(__x86_64__)
+__attribute__((packed))
+#endif
+;
+
+struct sockaddr_un {
+    uint16 sun_family;
+    char sun_path[108];
+};
+
 struct cmsghdr {
-    uint64 cmsg_len;
+    uint32 cmsg_len;
+    uint32 __pad1;
     int cmsg_level;
     int cmsg_type;
 };
@@ -62,9 +97,11 @@ struct msghdr {
     uint32 msg_namelen;
     uint32 __pad0;
     struct iovec *msg_iov;
-    uint64 msg_iovlen;
+    int msg_iovlen;
+    int __pad1;
     void *msg_control;
-    uint64 msg_controllen;
+    uint32 msg_controllen;
+    uint32 __pad2;
     int msg_flags;
 };
 
@@ -113,6 +150,14 @@ static void skip(const char *name, const char *why)
 }
 
 #if defined(__riscv)
+static inline int64 raw_syscall1(int num, int64 a)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    asm volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+    return a0;
+}
+
 static inline int64 raw_syscall2(int num, int64 a, int64 b)
 {
     register int64 a7 asm("a7") = num;
@@ -159,6 +204,15 @@ static inline int64 raw_syscall6(int num, int64 a, int64 b, int64 c,
     return a0;
 }
 #elif defined(__x86_64__)
+static inline int64 raw_syscall1(int num, int64 a)
+{
+    int64 ret;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
 static inline int64 raw_syscall2(int num, int64 a, int64 b)
 {
     int64 ret;
@@ -209,6 +263,31 @@ static int socketpair_raw(int type, int sv[2])
     return (int)raw_syscall4(SYS_socketpair, AF_UNIX, type, 0, (int64)sv);
 }
 
+static int socket_raw(int domain, int type, int protocol)
+{
+    return (int)raw_syscall3(SYS_socket, domain, type, protocol);
+}
+
+static int bind_unix_raw(int fd, const struct sockaddr_un *sa)
+{
+    return (int)raw_syscall3(SYS_bind, fd, (int64)sa, sizeof(*sa));
+}
+
+static int listen_raw(int fd, int backlog)
+{
+    return (int)raw_syscall2(SYS_listen, fd, backlog);
+}
+
+static int accept4_raw(int fd, int flags)
+{
+    return (int)raw_syscall4(SYS_accept4, fd, 0, 0, flags);
+}
+
+static int connect_unix_raw(int fd, const struct sockaddr_un *sa)
+{
+    return (int)raw_syscall3(SYS_sconnect, fd, (int64)sa, sizeof(*sa));
+}
+
 static int sendmsg_raw(int fd, struct msghdr *msg, int flags)
 {
     return (int)raw_syscall3(SYS_sendmsg, fd, (int64)msg, flags);
@@ -228,6 +307,23 @@ static int recvmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
 static int poll_raw(struct pollfd *fds, int nfds, int timeout)
 {
     return (int)raw_syscall3(SYS_poll, (int64)fds, nfds, timeout);
+}
+
+static int epoll_create1_raw(int flags)
+{
+    return (int)raw_syscall1(SYS_epoll_create1, flags);
+}
+
+static int epoll_ctl_raw(int epfd, int op, int fd, struct epoll_event_abi *ev)
+{
+    return (int)raw_syscall4(SYS_epoll_ctl, epfd, op, fd, (int64)ev);
+}
+
+static int epoll_pwait_raw(int epfd, struct epoll_event_abi *events,
+                           int maxevents, int timeout)
+{
+    return (int)raw_syscall6(SYS_epoll_pwait, epfd, (int64)events,
+                             maxevents, timeout, 0, 0);
 }
 
 static int fsync_raw(int fd)
@@ -273,6 +369,18 @@ static int munlockall_raw(void)
 static int timerfd_create_raw(int clockid, int flags)
 {
     return (int)raw_syscall2(SYS_timerfd_create, clockid, flags);
+}
+
+static int clock_gettime_raw(int clockid, struct timespec *ts)
+{
+    return (int)raw_syscall2(SYS_clock_gettime, clockid, (int64)ts);
+}
+
+static int futex_raw(uint32 *addr, int op, uint32 val, const struct timespec *timeout,
+                     uint32 *addr2, uint32 val3)
+{
+    return (int)raw_syscall6(SYS_futex, (int64)addr, op, val, (int64)timeout,
+                             (int64)addr2, val3);
 }
 
 static int timerfd_settime_raw(int fd, int flags, const struct itimerspec *new_value,
@@ -511,6 +619,161 @@ static void test_socket_nonblock_poll(void)
 
     close(sv[1]);
     pass(name);
+}
+
+static void test_socket_nonblock_connect(void)
+{
+    const char *name = "AF_UNIX nonblock connect readiness";
+    struct sockaddr_un sa;
+    struct pollfd pfd;
+    int listener = -1;
+    int client = -1;
+    int server = -1;
+    int val = -1;
+    int len = sizeof(val);
+    int rc;
+
+    listener = socket_raw(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    client = socket_raw(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (listener < 0 || client < 0) {
+        fail(name, "socket creation failed");
+        goto out;
+    }
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, "webkitabitest-nb-connect");
+
+    if (bind_unix_raw(listener, &sa) < 0 || listen_raw(listener, 1) < 0) {
+        fail(name, "bind/listen failed");
+        goto out;
+    }
+
+    rc = connect_unix_raw(client, &sa);
+    if (rc != -EINPROGRESS) {
+        fail(name, "nonblocking connect did not return EINPROGRESS");
+        goto out;
+    }
+
+    pfd.fd = client;
+    pfd.events = POLLIN | POLLOUT;
+    pfd.revents = 0;
+    if (poll_raw(&pfd, 1, 0) < 0 || (pfd.revents & (POLLIN | POLLOUT))) {
+        fail(name, "pending connect reported data or write readiness");
+        goto out;
+    }
+
+    len = sizeof(val);
+    if (getsockopt_raw(client, SOL_SOCKET, SO_ERROR, &val, &len) < 0 ||
+        len != sizeof(val) || val != EINPROGRESS) {
+        fail(name, "pending SO_ERROR was not EINPROGRESS");
+        goto out;
+    }
+
+    server = accept4_raw(listener, SOCK_CLOEXEC);
+    if (server < 0) {
+        fail(name, "accept4 failed");
+        goto out;
+    }
+
+    pfd.revents = 0;
+    if (poll_raw(&pfd, 1, 1000) <= 0 || !(pfd.revents & POLLOUT)) {
+        fail(name, "accepted connect did not become writable");
+        goto out;
+    }
+
+    len = sizeof(val);
+    val = -1;
+    if (getsockopt_raw(client, SOL_SOCKET, SO_ERROR, &val, &len) < 0 ||
+        len != sizeof(val) || val != 0) {
+        fail(name, "accepted SO_ERROR was not zero");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (server >= 0)
+        close(server);
+    if (client >= 0)
+        close(client);
+    if (listener >= 0)
+        close(listener);
+}
+
+static void test_socket_nonblock_connect_epoll(void)
+{
+    const char *name = "AF_UNIX nonblock connect epoll readiness";
+    struct sockaddr_un sa;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    int listener = -1;
+    int client = -1;
+    int server = -1;
+    int epfd = -1;
+    int rc;
+
+    listener = socket_raw(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    client = socket_raw(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (listener < 0 || client < 0 || epfd < 0) {
+        fail(name, "socket or epoll creation failed");
+        goto out;
+    }
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, "webkitabitest-nb-epoll");
+
+    if (bind_unix_raw(listener, &sa) < 0 || listen_raw(listener, 1) < 0) {
+        fail(name, "bind/listen failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLOUT;
+    ev.data = 0x45504f4c4cULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, client, &ev) < 0) {
+        fail(name, "epoll_ctl add failed");
+        goto out;
+    }
+
+    rc = connect_unix_raw(client, &sa);
+    if (rc != -EINPROGRESS) {
+        fail(name, "nonblocking connect did not return EINPROGRESS");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 0) {
+        fail(name, "pending connect reported epoll readiness");
+        goto out;
+    }
+
+    server = accept4_raw(listener, SOCK_CLOEXEC);
+    if (server < 0) {
+        fail(name, "accept4 failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    rc = epoll_pwait_raw(epfd, &out, 1, 1000);
+    if (rc <= 0 || !(out.events & EPOLLOUT) || out.data != ev.data) {
+        fail(name, "accepted connect did not wake epoll writable");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (server >= 0)
+        close(server);
+    if (epfd >= 0)
+        close(epfd);
+    if (client >= 0)
+        close(client);
+    if (listener >= 0)
+        close(listener);
 }
 
 static void test_socket_sol_options(void)
@@ -1280,6 +1543,448 @@ static void test_ipc_stream_stress(void)
     pass(name);
 }
 
+static int seqpacket_send_chunk(int fd, uint seq, int pass_fd)
+{
+    struct ipc_stress_header hdr;
+    static uchar payload[2048];
+    struct iovec iov[2];
+    struct msghdr msg;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+
+    for (uint i = 0; i < sizeof(payload); i++)
+        payload[i] = (uchar)ipc_stress_byte(seq, i);
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.len = sizeof(payload);
+    hdr.checksum = ipc_stress_checksum(payload, sizeof(payload));
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = sizeof(payload);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (pass_fd >= 0) {
+        memset(control, 0, sizeof(control));
+        cmsg = (struct cmsghdr *)control;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(cmsg), &pass_fd, sizeof(pass_fd));
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+    }
+
+    return sendmsg_raw(fd, &msg, 0);
+}
+
+static int seqpacket_recv_chunk(int fd, uint seq, int *received_fd)
+{
+    struct ipc_stress_header hdr;
+    static uchar payload[2048];
+    struct iovec iov[2];
+    struct msghdr msg;
+    char control[CMSG_SPACE(sizeof(int))];
+    int ret;
+
+    memset(&hdr, 0, sizeof(hdr));
+    memset(payload, 0, sizeof(payload));
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = sizeof(payload);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    ret = recvmsg_raw(fd, &msg, MSG_CMSG_CLOEXEC);
+    if (ret != (int)(sizeof(hdr) + sizeof(payload))) {
+        fprintf(2, "webkitabitest: seqpacket recv seq=%u ret=%d flags=0x%x controllen=%u\n",
+                seq, ret, msg.msg_flags, msg.msg_controllen);
+        return -1;
+    }
+    if (msg.msg_flags & MSG_TRUNC)
+        return -2;
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.seq != seq ||
+        hdr.len != sizeof(payload) ||
+        hdr.checksum != ipc_stress_checksum(payload, sizeof(payload)))
+        return -3;
+    for (uint i = 0; i < sizeof(payload); i++) {
+        if (payload[i] != (uchar)ipc_stress_byte(seq, i))
+            return -4;
+    }
+
+    if (msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+        struct cmsghdr *cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            int fdtmp = -1;
+            memcpy(&fdtmp, CMSG_DATA(cmsg), sizeof(fdtmp));
+            if (fdtmp >= 0) {
+                if (*received_fd >= 0)
+                    close(*received_fd);
+                *received_fd = fdtmp;
+            }
+        }
+    }
+    return 0;
+}
+
+static void test_ipc_seqpacket_stress(void)
+{
+    const char *name = "AF_UNIX WebKit IPC seqpacket stress";
+    enum { messages = 1400 };
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    unlink("__webkit_seqpacket_fd");
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        int fd = open("__webkit_seqpacket_fd", O_CREAT | O_RDWR);
+        close(sv[0]);
+        if (fd < 0)
+            exit(2);
+        write(fd, "Q", 1);
+        lseek(fd, 0, SEEK_SET);
+        for (uint seq = 0; seq < messages; seq++) {
+            int pass_fd = (seq % 173) == 41 ? fd : -1;
+            int ret = seqpacket_send_chunk(sv[1], seq, pass_fd);
+            if (ret != (int)(sizeof(struct ipc_stress_header) + 2048)) {
+                fprintf(2, "webkitabitest: seqpacket send failed seq=%u ret=%d\n",
+                        seq, ret);
+                exit(3);
+            }
+        }
+        close(fd);
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    int received_fd = -1;
+    for (uint seq = 0; seq < messages; seq++) {
+        int rc = seqpacket_recv_chunk(sv[0], seq, &received_fd);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "message %u failed rc=%d", seq, rc);
+            close(sv[0]);
+            if (received_fd >= 0)
+                close(received_fd);
+            waitpid(pid, &status, 0);
+            fail(name, why);
+            return;
+        }
+    }
+
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (received_fd < 0) {
+        fail(name, "SCM_RIGHTS fd was not delivered");
+        return;
+    }
+    char c = 0;
+    lseek(received_fd, 0, SEEK_SET);
+    if (read(received_fd, &c, 1) != 1 || c != 'Q') {
+        close(received_fd);
+        fail(name, "delivered fd content mismatch");
+        return;
+    }
+    close(received_fd);
+    unlink("__webkit_seqpacket_fd");
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "sender process failed");
+        return;
+    }
+    pass(name);
+}
+
+static uchar yt_inline_byte(uint index)
+{
+    uint x = index * 2654435761u + 0x9e3779b9u;
+    x ^= x >> 17;
+    x *= 2246822519u;
+    x ^= x >> 15;
+    x += index >> 3;
+    return (uchar)x;
+}
+
+static uint yt_inline_checksum(const uchar *buf, uint len)
+{
+    uint h = 2166136261u;
+
+    for (uint i = 0; i < len; i++) {
+        h ^= buf[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static int fill_yt_inline_payload(uchar *buf, uint len)
+{
+    for (uint i = 0; i < len; i++)
+        buf[i] = yt_inline_byte(i);
+    return 0;
+}
+
+static int check_yt_inline_payload(const uchar *buf, uint len, const char *tag)
+{
+    for (uint i = 0; i < len; i++) {
+        uchar want = yt_inline_byte(i);
+        if (buf[i] != want) {
+            fprintf(2, "webkitabitest: %s mismatch at %u got=%u want=%u\n",
+                    tag, i, buf[i], want);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int send_yt_inline_packet(int fd, int type, const uchar *payload)
+{
+    struct {
+        uint magic;
+        uint size;
+        uint checksum;
+    } hdr;
+    struct iovec iov[4];
+    struct msghdr msg;
+    uint split0 = WEBKIT_YT_BASE_JS_CORRUPT_OFFSET;
+    uint split1 = 2058;
+    uint split2 = 7312;
+    uint off = 0;
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.size = WEBKIT_YT_BASE_JS_SIZE;
+    hdr.checksum = yt_inline_checksum(payload, WEBKIT_YT_BASE_JS_SIZE);
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = (void *)(payload + off);
+    iov[1].iov_len = split0;
+    off += split0;
+    iov[2].iov_base = (void *)(payload + off);
+    iov[2].iov_len = split1 + split2;
+    off += split1 + split2;
+    iov[3].iov_base = (void *)(payload + off);
+    iov[3].iov_len = WEBKIT_YT_BASE_JS_SIZE - off;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 4;
+
+    int ret = sendmsg_raw(fd, &msg, 0);
+    int want = (int)(sizeof(hdr) + WEBKIT_YT_BASE_JS_SIZE);
+    if (type == SOCK_STREAM)
+        return ret == want ? 0 : -1;
+    return ret == want ? 0 : -2;
+}
+
+static int recv_yt_inline_packet(int fd, int type, uchar *payload)
+{
+    struct {
+        uint magic;
+        uint size;
+        uint checksum;
+    } hdr;
+    struct iovec iov[8];
+    struct msghdr msg;
+    uint off = 0;
+    uint chunks[7] = {
+        WEBKIT_YT_BASE_JS_CORRUPT_OFFSET - 64,
+        64,
+        2058,
+        7312,
+        65536,
+        1048576,
+        0,
+    };
+
+    chunks[6] = WEBKIT_YT_BASE_JS_SIZE -
+        (chunks[0] + chunks[1] + chunks[2] + chunks[3] + chunks[4] + chunks[5]);
+
+    memset(&hdr, 0, sizeof(hdr));
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    for (uint i = 0; i < 7; i++) {
+        iov[i + 1].iov_base = payload + off;
+        iov[i + 1].iov_len = chunks[i];
+        off += chunks[i];
+    }
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 8;
+
+    int ret = recvmsg_raw(fd, &msg, 0);
+    int want = (int)(sizeof(hdr) + WEBKIT_YT_BASE_JS_SIZE);
+    if (ret != want || (type == SOCK_SEQPACKET && (msg.msg_flags & MSG_TRUNC))) {
+        fprintf(2, "webkitabitest: inline recv type=%d ret=%d want=%d flags=0x%x\n",
+                type, ret, want, msg.msg_flags);
+        return -1;
+    }
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.size != WEBKIT_YT_BASE_JS_SIZE)
+        return -2;
+    if (hdr.checksum != yt_inline_checksum(payload, WEBKIT_YT_BASE_JS_SIZE))
+        return -3;
+    return check_yt_inline_payload(payload, WEBKIT_YT_BASE_JS_SIZE,
+                                   type == SOCK_SEQPACKET ? "seqpacket inline" :
+                                   "stream inline");
+}
+
+static void test_webkit_large_inline_ipc(int type)
+{
+    const char *name = type == SOCK_SEQPACKET
+        ? "AF_UNIX large inline seqpacket integrity"
+        : "AF_UNIX large inline stream integrity";
+    int sv[2];
+    int pid;
+    int status = 0;
+    uchar *payload = malloc(WEBKIT_YT_BASE_JS_SIZE);
+
+    if (payload == NULL) {
+        fail(name, "malloc failed");
+        return;
+    }
+    fill_yt_inline_payload(payload, WEBKIT_YT_BASE_JS_SIZE);
+
+    if (socketpair_raw(type | SOCK_CLOEXEC, sv) < 0) {
+        free(payload);
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        free(payload);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        close(sv[0]);
+        int rc = send_yt_inline_packet(sv[1], type, payload);
+        close(sv[1]);
+        exit(rc == 0 ? 0 : 31);
+    }
+
+    close(sv[1]);
+    memset(payload, 0, WEBKIT_YT_BASE_JS_SIZE);
+    int rc = recv_yt_inline_packet(sv[0], type, payload);
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    free(payload);
+    if (rc < 0) {
+        fail(name, "payload mismatch");
+        return;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "sender process failed");
+        return;
+    }
+    pass(name);
+}
+
+static void test_webkit_stream_page_chunk_transfer(void)
+{
+    const char *name = "AF_UNIX stream WebKit page chunk transfer";
+    int sv[2];
+    int pid;
+    int status = 0;
+    uchar *payload = malloc(WEBKIT_YT_APP_JS_SIZE);
+
+    if (payload == NULL) {
+        fail(name, "malloc failed");
+        return;
+    }
+    fill_yt_inline_payload(payload, WEBKIT_YT_APP_JS_SIZE);
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        free(payload);
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        free(payload);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        uint off = 0;
+        close(sv[0]);
+        while (off < WEBKIT_YT_APP_JS_SIZE) {
+            uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+            if (chunk > WEBKIT_PAGE_CHUNK)
+                chunk = WEBKIT_PAGE_CHUNK;
+            int n = write(sv[1], payload + off, chunk);
+            if (n != (int)chunk) {
+                fprintf(2, "webkitabitest: stream chunk write off=%u n=%d chunk=%u\n",
+                        off, n, chunk);
+                exit(41);
+            }
+            off += chunk;
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    memset(payload, 0, WEBKIT_YT_APP_JS_SIZE);
+    uint off = 0;
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_PAGE_CHUNK)
+            chunk = WEBKIT_PAGE_CHUNK;
+        int n = read(sv[0], payload + off, chunk);
+        if (n <= 0) {
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            free(payload);
+            fail(name, "short read before EOF");
+            return;
+        }
+        off += n;
+    }
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+
+    if (check_yt_inline_payload(payload, WEBKIT_YT_APP_JS_SIZE, "stream page chunks") < 0) {
+        free(payload);
+        fail(name, "payload mismatch");
+        return;
+    }
+    free(payload);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "sender process failed");
+        return;
+    }
+    pass(name);
+}
+
 static void test_parent_child_socket_handoff(void)
 {
     const char *name = "parent/child AF_UNIX socket handoff";
@@ -1478,6 +2183,291 @@ static void test_large_memfd_shared_mapping(void)
     }
     munmap(p, LARGE_SHM_SIZE);
     close(fd);
+    pass(name);
+}
+
+static uchar shared_resource_byte(uint index)
+{
+    uint x = index * 1103515245u + 12345u;
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    return (uchar)x;
+}
+
+static void test_large_memfd_scm_resource_mapping(void)
+{
+    const char *name = "large memfd SCM_RIGHTS shared resource";
+    int fd = memfd_create_raw("webkit-shareable-resource", MFD_CLOEXEC);
+    int sv[2];
+    int pid;
+    int status = 0;
+    char *p;
+
+    if (fd < 0) {
+        fail(name, "memfd_create failed");
+        return;
+    }
+    if (ftruncate(fd, SHAREABLE_RESOURCE_SIZE) < 0) {
+        close(fd);
+        fail(name, "ftruncate failed");
+        return;
+    }
+    p = mmap(0, SHAREABLE_RESOURCE_SIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        fail(name, "writer mmap failed");
+        return;
+    }
+    for (uint i = 0; i < SHAREABLE_RESOURCE_SIZE; i++)
+        p[i] = (char)shared_resource_byte(i);
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        munmap(p, SHAREABLE_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        munmap(p, SHAREABLE_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        char byte = 0;
+        char control[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr *cmsg;
+        struct iovec iov;
+        struct msghdr msg;
+        int got_fd = -1;
+        char *rp;
+
+        close(sv[0]);
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = &byte;
+        iov.iov_len = sizeof(byte);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+        if (recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC) != 1 || byte != 'R')
+            exit(11);
+        if (msg.msg_controllen < CMSG_LEN(sizeof(int)))
+            exit(12);
+        cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+            exit(13);
+        memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+        if (got_fd < 0)
+            exit(14);
+        rp = mmap(0, SHAREABLE_RESOURCE_SIZE, PROT_READ, MAP_SHARED,
+                  got_fd, 0);
+        if (rp == MAP_FAILED)
+            exit(15);
+        for (uint i = 0; i < SHAREABLE_RESOURCE_SIZE; i++) {
+            if ((uchar)rp[i] != shared_resource_byte(i)) {
+                fprintf(2, "webkitabitest: shared resource mismatch at %u got=%u want=%u\n",
+                        i, (uchar)rp[i], shared_resource_byte(i));
+                exit(16);
+            }
+        }
+        munmap(rp, SHAREABLE_RESOURCE_SIZE);
+        close(got_fd);
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    char byte = 'R';
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg = (struct cmsghdr *)control;
+    struct iovec iov;
+    struct msghdr msg;
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &byte;
+    iov.iov_len = sizeof(byte);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    if (sendmsg_raw(sv[0], &msg, 0) != 1) {
+        close(sv[0]);
+        waitpid(pid, &status, 0);
+        munmap(p, SHAREABLE_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "sendmsg failed");
+        return;
+    }
+
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    munmap(p, SHAREABLE_RESOURCE_SIZE);
+    close(fd);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
+static uchar yt_resource_byte(uint index)
+{
+    uint x = index * 1664525u + 1013904223u;
+    x ^= x >> 15;
+    x *= 3266489917u;
+    x ^= x >> 16;
+    return (uchar)x;
+}
+
+static void test_webkit_ool_seqpacket_resource_mapping(void)
+{
+    const char *name = "WebKit OOL seqpacket shared resource";
+    int fd = memfd_create_raw("webkit-ool-resource", MFD_CLOEXEC);
+    int sv[2];
+    int pid;
+    int status = 0;
+    char *p;
+
+    if (fd < 0) {
+        fail(name, "memfd_create failed");
+        return;
+    }
+    if (ftruncate(fd, WEBKIT_YT_RESOURCE_SIZE) < 0) {
+        close(fd);
+        fail(name, "ftruncate failed");
+        return;
+    }
+    p = mmap(0, WEBKIT_YT_RESOURCE_SIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        fail(name, "writer mmap failed");
+        return;
+    }
+    for (uint i = 0; i < WEBKIT_YT_RESOURCE_SIZE; i++)
+        p[i] = (char)yt_resource_byte(i);
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        munmap(p, WEBKIT_YT_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        munmap(p, WEBKIT_YT_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        struct {
+            uint magic;
+            uint size;
+        } hdr;
+        char control[CMSG_SPACE(sizeof(int))];
+        struct iovec iov;
+        struct msghdr msg;
+        int got_fd = -1;
+        char *rp;
+
+        close(sv[0]);
+        memset(&hdr, 0, sizeof(hdr));
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = &hdr;
+        iov.iov_len = sizeof(hdr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+        if (recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC) != (int)sizeof(hdr))
+            exit(21);
+        if ((msg.msg_flags & MSG_TRUNC) || hdr.magic != IPC_STRESS_MAGIC ||
+            hdr.size != WEBKIT_YT_RESOURCE_SIZE)
+            exit(22);
+        if (msg.msg_controllen < CMSG_LEN(sizeof(int)))
+            exit(23);
+        struct cmsghdr *cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+            exit(24);
+        memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+        if (got_fd < 0)
+            exit(25);
+
+        rp = mmap(0, WEBKIT_YT_RESOURCE_SIZE, PROT_READ, MAP_SHARED,
+                  got_fd, 0);
+        if (rp == MAP_FAILED)
+            exit(26);
+        for (uint i = 0; i < WEBKIT_YT_RESOURCE_SIZE; i++) {
+            if ((uchar)rp[i] != yt_resource_byte(i)) {
+                fprintf(2, "webkitabitest: OOL resource mismatch at %u got=%u want=%u\n",
+                        i, (uchar)rp[i], yt_resource_byte(i));
+                exit(27);
+            }
+        }
+        munmap(rp, WEBKIT_YT_RESOURCE_SIZE);
+        close(got_fd);
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    struct {
+        uint magic;
+        uint size;
+    } hdr;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg = (struct cmsghdr *)control;
+    struct iovec iov;
+    struct msghdr msg;
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.size = WEBKIT_YT_RESOURCE_SIZE;
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &hdr;
+    iov.iov_len = sizeof(hdr);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)sizeof(hdr)) {
+        close(sv[0]);
+        waitpid(pid, &status, 0);
+        munmap(p, WEBKIT_YT_RESOURCE_SIZE);
+        close(fd);
+        fail(name, "sendmsg failed");
+        return;
+    }
+
+    munmap(p, WEBKIT_YT_RESOURCE_SIZE);
+    close(fd);
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
     pass(name);
 }
 
@@ -1737,6 +2727,55 @@ static void test_timerfd_poll(void)
     pass(name);
 }
 
+static void test_futex_timeout(void)
+{
+    const char *name = "futex timed waits";
+    volatile uint32 word = 1;
+    struct timespec rel = {.tv_sec = 0, .tv_nsec = 20 * 1000 * 1000};
+    struct timespec abs;
+    int rc;
+
+    rc = futex_raw((uint32 *)&word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
+                   2, &rel, 0, 0);
+    if (rc != -EAGAIN) {
+        fail(name, "relative wait did not reject mismatched value");
+        return;
+    }
+
+    rc = futex_raw((uint32 *)&word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
+                   1, &rel, 0, 0);
+    if (rc != -ETIMEDOUT) {
+        fail(name, "relative wait did not time out");
+        return;
+    }
+
+    if (clock_gettime_raw(CLOCK_MONOTONIC, &abs) < 0) {
+        fail(name, "clock_gettime failed");
+        return;
+    }
+    abs.tv_nsec += 20 * 1000 * 1000;
+    if (abs.tv_nsec >= 1000000000LL) {
+        abs.tv_sec++;
+        abs.tv_nsec -= 1000000000LL;
+    }
+
+    rc = futex_raw((uint32 *)&word, FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG,
+                   1, &abs, 0, FUTEX_BITSET_MATCH_ANY);
+    if (rc != -ETIMEDOUT) {
+        fail(name, "absolute bitset wait did not time out");
+        return;
+    }
+
+    rc = futex_raw((uint32 *)&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG,
+                   1, 0, 0, 0);
+    if (rc != 0) {
+        fail(name, "wake on empty queue failed");
+        return;
+    }
+
+    pass(name);
+}
+
 static void test_random_devices(void)
 {
     const char *name = "/dev/random and /dev/urandom";
@@ -1821,6 +2860,131 @@ static void test_memory_locking_abi(void)
     pass(name);
 }
 
+static void test_procfs_meminfo_webkit_parse(void)
+{
+    const char *name = "procfs meminfo WebKit parse";
+    char buf[4096];
+    int fd = open("/proc/meminfo", O_RDONLY);
+    int n;
+    size_t memory_available = (size_t)-1;
+    size_t memory_total = (size_t)-1;
+    size_t memory_free = (size_t)-1;
+    size_t active_file = (size_t)-1;
+    size_t inactive_file = (size_t)-1;
+    size_t slab_reclaimable = (size_t)-1;
+
+    if (fd < 0) {
+        fail(name, "open /proc/meminfo failed");
+        return;
+    }
+    if (lseek(fd, 0, SEEK_SET) != 0) {
+        close(fd);
+        fail(name, "lseek /proc/meminfo failed");
+        return;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        fail(name, "read /proc/meminfo failed");
+        return;
+    }
+    buf[n] = '\0';
+
+    char *line = buf;
+    while (*line != '\0') {
+        char *next = strchr(line, '\n');
+        if (next != 0)
+            *next++ = '\0';
+        char *colon = strchr(line, ':');
+        if (colon != 0) {
+            char *p = colon + 1;
+            size_t amount = 0;
+            while (*p == ' ' || *p == '\t')
+                p++;
+            while (*p >= '0' && *p <= '9') {
+                amount = amount * 10 + (size_t)(*p - '0');
+                p++;
+            }
+            if (memcmp(line, "MemTotal:", 9) == 0)
+                memory_total = amount;
+            else if (memcmp(line, "MemFree:", 8) == 0)
+                memory_free = amount;
+            else if (memcmp(line, "MemAvailable:", 13) == 0)
+                memory_available = amount;
+            else if (memcmp(line, "Active(file):", 13) == 0)
+                active_file = amount;
+            else if (memcmp(line, "Inactive(file):", 15) == 0)
+                inactive_file = amount;
+            else if (memcmp(line, "SReclaimable:", 13) == 0)
+                slab_reclaimable = amount;
+        }
+        if (next == 0)
+            break;
+        line = next;
+    }
+
+    if (memory_total == 0 || memory_total == (size_t)-1) {
+        fail(name, "missing MemTotal");
+        return;
+    }
+    if (memory_free == (size_t)-1 || memory_available == (size_t)-1 ||
+        active_file == (size_t)-1 || inactive_file == (size_t)-1 ||
+        slab_reclaimable == (size_t)-1) {
+        fail(name, "missing WebKit meminfo token");
+        return;
+    }
+    if (memory_available > memory_total) {
+        fail(name, "MemAvailable exceeds MemTotal");
+        return;
+    }
+    pass(name);
+}
+
+static int text_contains(const char *haystack, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+
+    if (needle_len == 0)
+        return 1;
+    for (const char *p = haystack; *p != '\0'; p++) {
+        if (memcmp(p, needle, needle_len) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void test_procfs_status_linux_shape(void)
+{
+    const char *name = "procfs status Linux shape";
+    char buf[4096];
+    int fd = open("/proc/self/status", O_RDONLY);
+    int n;
+
+    if (fd < 0) {
+        fail(name, "open /proc/self/status failed");
+        return;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        fail(name, "read /proc/self/status failed");
+        return;
+    }
+    buf[n] = '\0';
+
+    if (!text_contains(buf, "Tgid:\t") ||
+        !text_contains(buf, "VmRSS:\t") ||
+        !text_contains(buf, "RssAnon:\t") ||
+        !text_contains(buf, "Threads:\t") ||
+        !text_contains(buf, "SigPnd:\t") ||
+        !text_contains(buf, "CapEff:\t") ||
+        !text_contains(buf, "Cpus_allowed_list:\t")) {
+        fail(name, "missing Linux status token");
+        return;
+    }
+    pass(name);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "checkclosed") == 0) {
@@ -1833,6 +2997,8 @@ int main(int argc, char **argv)
     test_socketpair_stream();
     test_socketpair_seqpacket_policy();
     test_socket_nonblock_poll();
+    test_socket_nonblock_connect();
+    test_socket_nonblock_connect_epoll();
     test_socket_sol_options();
     test_socket_cloexec_exec();
     test_scm_rights_batch();
@@ -1840,19 +3006,28 @@ int main(int argc, char **argv)
     test_scm_rights_recvmmsg_batch();
     test_scm_rights_process_lifetime();
     test_ipc_stream_stress();
+    test_ipc_seqpacket_stress();
+    test_webkit_large_inline_ipc(SOCK_SEQPACKET);
+    test_webkit_large_inline_ipc(SOCK_STREAM);
+    test_webkit_stream_page_chunk_transfer();
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
     test_memfd_shared_mapping();
     test_native_memfd_syscall_alias();
     test_large_memfd_shared_mapping();
+    test_large_memfd_scm_resource_mapping();
+    test_webkit_ool_seqpacket_resource_mapping();
     test_vfs_cache_shape();
     test_advisory_locks();
     test_mmap_file_truncate();
     test_waitpid_reap();
     test_timerfd_poll();
+    test_futex_timeout();
     test_random_devices();
     test_executable_memory_policy();
     test_memory_locking_abi();
+    test_procfs_meminfo_webkit_parse();
+    test_procfs_status_linux_shape();
 
     printf("webkitabitest: %d passed, %d skipped, %d failed\n",
            passed, skipped, failed);

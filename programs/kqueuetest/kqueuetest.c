@@ -319,7 +319,102 @@ static void test_multi_event(void) {
     close(kq);
 }
 
-/* 1j. kevent_wait with timeout=0 (non-blocking poll) */
+/* 1j. Kqueue fd readiness rescans nested sources */
+static void test_nested_kqueue_readiness(void) {
+    const char *name = "nested kqueue fd readiness";
+    int fds[2];
+    if (pipe(fds) < 0) { TEST_FAIL(name, "pipe() failed"); return; }
+
+    int inner = kqueue();
+    int outer = kqueue();
+    if (inner < 0 || outer < 0) {
+        TEST_FAIL(name, "kqueue() failed");
+        close(fds[0]); close(fds[1]);
+        if (inner >= 0) close(inner);
+        if (outer >= 0) close(outer);
+        return;
+    }
+
+    struct kevent ev;
+    kev_set(&ev, fds[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 11);
+    if (kevent_register(inner, &ev, 1) < 0) {
+        TEST_FAIL(name, "inner register failed");
+        close(fds[0]); close(fds[1]); close(inner); close(outer);
+        return;
+    }
+
+    kev_set(&ev, inner, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 22);
+    if (kevent_register(outer, &ev, 1) < 0) {
+        TEST_FAIL(name, "outer register failed");
+        close(fds[0]); close(fds[1]); close(inner); close(outer);
+        return;
+    }
+
+    if (write(fds[1], "x", 1) != 1) {
+        TEST_FAIL(name, "pipe write failed");
+        close(fds[0]); close(fds[1]); close(inner); close(outer);
+        return;
+    }
+
+    struct kevent out;
+    int ret = kevent_wait(outer, &out, 1, 1000);
+    if (ret <= 0)
+        TEST_FAIL(name, "outer kqueue did not see inner readiness");
+    else if (out.ident != (uint64)inner || out.filter != EVFILT_READ)
+        TEST_FAIL(name, "outer event did not identify inner kqueue");
+    else
+        TEST_PASS(name);
+
+    close(fds[0]); close(fds[1]); close(inner); close(outer);
+}
+
+/* 1k. EV_ADD modify re-checks existing readiness */
+static void test_ev_add_modify_rechecks(void) {
+    const char *name = "EV_ADD modify rechecks readiness";
+    int fds[2];
+    if (pipe(fds) < 0) { TEST_FAIL(name, "pipe() failed"); return; }
+
+    int kq = kqueue();
+    if (kq < 0) {
+        TEST_FAIL(name, "kqueue() failed");
+        close(fds[0]); close(fds[1]);
+        return;
+    }
+
+    struct kevent ev;
+    kev_set(&ev, fds[0], EVFILT_READ, EV_ADD | EV_DISABLE, 0, 0, 123);
+    if (kevent_register(kq, &ev, 1) < 0) {
+        TEST_FAIL(name, "disabled register failed");
+        close(fds[0]); close(fds[1]); close(kq);
+        return;
+    }
+
+    if (write(fds[1], "m", 1) != 1) {
+        TEST_FAIL(name, "pipe write failed");
+        close(fds[0]); close(fds[1]); close(kq);
+        return;
+    }
+
+    kev_set(&ev, fds[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 123);
+    if (kevent_register(kq, &ev, 1) < 0) {
+        TEST_FAIL(name, "enable modify failed");
+        close(fds[0]); close(fds[1]); close(kq);
+        return;
+    }
+
+    struct kevent out;
+    int ret = kevent_wait(kq, &out, 1, 1000);
+    if (ret <= 0)
+        TEST_FAIL(name, "modified watch did not report buffered data");
+    else if (out.filter != EVFILT_READ || out.udata != 123)
+        TEST_FAIL(name, "wrong event after modify");
+    else
+        TEST_PASS(name);
+
+    close(fds[0]); close(fds[1]); close(kq);
+}
+
+/* 1l. kevent_wait with timeout=0 (non-blocking poll) */
 static void test_poll_no_event(void) {
     const char *name = "kevent_wait timeout=0 (poll)";
     int kq = kqueue();
@@ -852,6 +947,8 @@ int main(int argc, char *argv[]) {
     test_ev_disable_enable();
     test_ev_delete();
     test_multi_event();
+    test_nested_kqueue_readiness();
+    test_ev_add_modify_rechecks();
     test_poll_no_event();
 
     printf("kqueuetest: === Negative / Error-Path Tests ===\n");
