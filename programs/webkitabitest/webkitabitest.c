@@ -1327,6 +1327,115 @@ static void test_scm_rights_recvmmsg_batch(void)
     pass(name);
 }
 
+static void test_scm_rights_recvmmsg_payload_barrier(void)
+{
+    const char *name = "SCM_RIGHTS recvmmsg payload barrier";
+    int sv[2];
+    int fd = -1;
+    int got_fd = -1;
+    char control[CMSG_SPACE(sizeof(int))];
+    char recv_control[CMSG_SPACE(sizeof(int))];
+    char payload[] = "XY";
+    char extra = 'Z';
+    char first[3] = {0, 0, 0};
+    char last = 0;
+    char got = 0;
+    struct iovec send_iov;
+    struct iovec recv_iov;
+    struct iovec last_iov;
+    struct msghdr send_msg;
+    struct msghdr last_msg;
+    struct mmsghdr recv_msg;
+    struct cmsghdr *cmsg;
+
+    unlink("__webkit_rbarrier");
+    fd = open("__webkit_rbarrier", O_CREAT | O_RDWR);
+    if (fd < 0 || socketpair_raw(SOCK_STREAM, sv) < 0) {
+        if (fd >= 0) close(fd);
+        fail(name, "setup failed");
+        return;
+    }
+    write(fd, "Q", 1);
+    lseek(fd, 0, SEEK_SET);
+
+    memset(control, 0, sizeof(control));
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+
+    send_iov.iov_base = payload;
+    send_iov.iov_len = sizeof(payload) - 1;
+    memset(&send_msg, 0, sizeof(send_msg));
+    send_msg.msg_iov = &send_iov;
+    send_msg.msg_iovlen = 1;
+    send_msg.msg_control = control;
+    send_msg.msg_controllen = sizeof(control);
+
+    if (sendmsg_raw(sv[0], &send_msg, MSG_DONTWAIT) != 2 ||
+        write(sv[0], &extra, 1) != 1) {
+        close(fd); close(sv[0]); close(sv[1]);
+        fail(name, "send failed");
+        return;
+    }
+    close(fd);
+
+    memset(recv_control, 0, sizeof(recv_control));
+    recv_iov.iov_base = first;
+    recv_iov.iov_len = sizeof(first);
+    memset(&recv_msg, 0, sizeof(recv_msg));
+    recv_msg.msg_hdr.msg_iov = &recv_iov;
+    recv_msg.msg_hdr.msg_iovlen = 1;
+    recv_msg.msg_hdr.msg_control = recv_control;
+    recv_msg.msg_hdr.msg_controllen = sizeof(recv_control);
+
+    if (recvmmsg_raw(sv[1], &recv_msg, 1, 0) != 1 ||
+        recv_msg.msg_len != 2 || first[0] != 'X' || first[1] != 'Y' ||
+        first[2] != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "recvmmsg crossed fd barrier");
+        return;
+    }
+
+    cmsg = (struct cmsghdr *)recv_control;
+    if (recv_msg.msg_hdr.msg_controllen < CMSG_LEN(sizeof(int)) ||
+        cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "control message missing");
+        return;
+    }
+
+    memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+    if (read(got_fd, &got, 1) != 1 || got != 'Q') {
+        close(got_fd); close(sv[0]); close(sv[1]);
+        fail(name, "received fd contents wrong");
+        return;
+    }
+    close(got_fd);
+
+    memset(recv_control, 0, sizeof(recv_control));
+    last_iov.iov_base = &last;
+    last_iov.iov_len = 1;
+    memset(&last_msg, 0, sizeof(last_msg));
+    last_msg.msg_iov = &last_iov;
+    last_msg.msg_iovlen = 1;
+    last_msg.msg_control = recv_control;
+    last_msg.msg_controllen = sizeof(recv_control);
+
+    if (recvmsg_raw(sv[1], &last_msg, 0) != 1 || last != 'Z' ||
+        last_msg.msg_controllen != 0) {
+        close(sv[0]); close(sv[1]);
+        fail(name, "recvmsg tail failed");
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    unlink("__webkit_rbarrier");
+    pass(name);
+}
+
 static void test_unix_sendmmsg_large_stream(void)
 {
     const char *name = "AF_UNIX sendmmsg large stream payload";
@@ -3883,6 +3992,7 @@ int main(int argc, char **argv)
     test_scm_rights_stream_first_byte_barrier();
     test_scm_rights_stream_payload_barrier();
     test_scm_rights_recvmmsg_batch();
+    test_scm_rights_recvmmsg_payload_barrier();
     test_unix_sendmmsg_large_stream();
     test_scm_rights_process_lifetime();
     test_scm_rights_stream_barriers();
