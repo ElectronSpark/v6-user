@@ -3311,6 +3311,43 @@ static void test_procfs_status_linux_shape(void)
     pass(name);
 }
 
+static void test_procfs_cpuinfo_runtime_shape(void)
+{
+    const char *name = "procfs cpuinfo runtime shape";
+    char buf[4096];
+    int fd = open("/proc/cpuinfo", O_RDONLY);
+    int n;
+
+    if (fd < 0) {
+        fail(name, "open /proc/cpuinfo failed");
+        return;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        fail(name, "read /proc/cpuinfo failed");
+        return;
+    }
+    buf[n] = '\0';
+
+    if (!text_contains(buf, "processor\t: 0\n") ||
+        !text_contains(buf, "model name\t:") ||
+        !text_contains(buf, "flags\t\t:")) {
+        fail(name, "missing Linux cpuinfo token");
+        return;
+    }
+#if defined(__x86_64__)
+    if (!text_contains(buf, "vendor_id\t:") ||
+        !text_contains(buf, "cpu family\t:") ||
+        !text_contains(buf, "address sizes\t:") ||
+        text_contains(buf, "isa\t\t: rv64")) {
+        fail(name, "x86_64 cpuinfo did not match runtime architecture");
+        return;
+    }
+#endif
+    pass(name);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "checkclosed") == 0) {
@@ -3357,6 +3394,7 @@ int main(int argc, char **argv)
     test_memory_locking_abi();
     test_procfs_meminfo_webkit_parse();
     test_procfs_status_linux_shape();
+    test_procfs_cpuinfo_runtime_shape();
 
     printf("webkitabitest: %d passed, %d skipped, %d failed\n",
            passed, skipped, failed);
