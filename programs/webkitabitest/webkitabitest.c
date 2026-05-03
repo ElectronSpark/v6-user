@@ -3015,6 +3015,39 @@ static void test_waitpid_reap(void)
     pass(name);
 }
 
+static void test_waitpid_signal_status(void)
+{
+    const char *name = "waitpid reports signal termination";
+    int pid = fork();
+    int status = 0;
+    int got;
+
+    if (pid < 0) {
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        for (;;)
+            sleep(10);
+    }
+
+    if (kill(pid, SIGTERM) < 0) {
+        fail(name, "kill failed");
+        return;
+    }
+
+    got = waitpid(pid, &status, 0);
+    if (got != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        char why[96];
+        snprintf(why, sizeof(why), "got=%d pid=%d status=0x%x termsig=%d",
+                 got, pid, status, WTERMSIG(status));
+        fail(name, why);
+        return;
+    }
+
+    pass(name);
+}
+
 static void test_timerfd_poll(void)
 {
     const char *name = "timerfd poll timeout";
@@ -3387,6 +3420,7 @@ int main(int argc, char **argv)
     test_advisory_locks();
     test_mmap_file_truncate();
     test_waitpid_reap();
+    test_waitpid_signal_status();
     test_timerfd_poll();
     test_futex_timeout();
     test_random_devices();
