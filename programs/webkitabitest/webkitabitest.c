@@ -52,6 +52,7 @@
 #define IPC_STRESS_MAX_PAYLOAD 8192
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
+#define WEBKIT_IPC_DATA_CHUNK 2048u
 #if defined(__x86_64__)
 #define SYS_memfd_create_native 319
 #else
@@ -1904,6 +1905,248 @@ static void test_webkit_large_inline_ipc(int type)
     pass(name);
 }
 
+struct webkit_chunk_header {
+    uint magic;
+    uint seq;
+    uint offset;
+    uint len;
+    uint total;
+    uint checksum;
+};
+
+static int webkit_chunk_send(int fd, uint seq, uint offset, uint len)
+{
+    struct webkit_chunk_header hdr;
+    uchar payload[WEBKIT_IPC_DATA_CHUNK];
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    for (uint i = 0; i < len; i++)
+        payload[i] = yt_inline_byte(offset + i);
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.offset = offset;
+    hdr.len = len;
+    hdr.total = WEBKIT_YT_APP_JS_SIZE;
+    hdr.checksum = yt_inline_checksum(payload, len);
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = len;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    for (;;) {
+        int ret = sendmsg_raw(fd, &msg, MSG_DONTWAIT);
+        if (ret == (int)(sizeof(hdr) + len))
+            return 0;
+        if (ret == -EAGAIN) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll_raw(&pfd, 1, 1000) <= 0)
+                return -2;
+            continue;
+        }
+        fprintf(2, "webkitabitest: chunk seqpacket send seq=%u off=%u len=%u ret=%d\n",
+                seq, offset, len, ret);
+        return -1;
+    }
+}
+
+static int webkit_chunk_send_nowait(int fd, uint seq, uint offset, uint len)
+{
+    struct webkit_chunk_header hdr;
+    uchar payload[WEBKIT_IPC_DATA_CHUNK];
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    for (uint i = 0; i < len; i++)
+        payload[i] = yt_inline_byte(offset + i);
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.offset = offset;
+    hdr.len = len;
+    hdr.total = WEBKIT_YT_APP_JS_SIZE;
+    hdr.checksum = yt_inline_checksum(payload, len);
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = len;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    return sendmsg_raw(fd, &msg, MSG_DONTWAIT);
+}
+
+static int webkit_chunk_recv(int fd, uint seq, uint offset, uint len)
+{
+    struct webkit_chunk_header hdr;
+    uchar payload[WEBKIT_IPC_DATA_CHUNK];
+    struct iovec iov[2];
+    struct msghdr msg;
+    int ret;
+
+    memset(&hdr, 0, sizeof(hdr));
+    memset(payload, 0, sizeof(payload));
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = sizeof(payload);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    ret = recvmsg_raw(fd, &msg, 0);
+    if (ret != (int)(sizeof(hdr) + len)) {
+        fprintf(2, "webkitabitest: chunk seqpacket recv seq=%u ret=%d want=%u flags=0x%x\n",
+                seq, ret, (uint)(sizeof(hdr) + len), msg.msg_flags);
+        return -1;
+    }
+    if (msg.msg_flags & MSG_TRUNC)
+        return -2;
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.seq != seq ||
+        hdr.offset != offset || hdr.len != len ||
+        hdr.total != WEBKIT_YT_APP_JS_SIZE)
+        return -3;
+    if (hdr.checksum != yt_inline_checksum(payload, len))
+        return -4;
+    for (uint i = 0; i < len; i++) {
+        uchar want = yt_inline_byte(offset + i);
+        if (payload[i] != want) {
+            fprintf(2, "webkitabitest: chunk seqpacket mismatch seq=%u byte=%u got=%u want=%u\n",
+                    seq, i, payload[i], want);
+            return -5;
+        }
+    }
+    return 0;
+}
+
+static void test_webkit_seqpacket_chunk_transfer(void)
+{
+    const char *name = "AF_UNIX seqpacket WebKit 2048 chunk transfer";
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        uint off = 0;
+        uint seq = 0;
+        close(sv[0]);
+        while (off < WEBKIT_YT_APP_JS_SIZE) {
+            uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+            if (chunk > WEBKIT_IPC_DATA_CHUNK)
+                chunk = WEBKIT_IPC_DATA_CHUNK;
+            if (webkit_chunk_send(sv[1], seq, off, chunk) < 0)
+                exit(51);
+            off += chunk;
+            seq++;
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    uint off = 0;
+    uint seq = 0;
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_IPC_DATA_CHUNK)
+            chunk = WEBKIT_IPC_DATA_CHUNK;
+        int rc = webkit_chunk_recv(sv[0], seq, off, chunk);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "message %u failed rc=%d", seq, rc);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, why);
+            return;
+        }
+        off += chunk;
+        seq++;
+    }
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "sender process failed");
+        return;
+    }
+    pass(name);
+}
+
+static void test_webkit_seqpacket_chunk_burst_queue(void)
+{
+    const char *name = "AF_UNIX seqpacket WebKit full burst queue";
+    int sv[2];
+    uint off = 0;
+    uint seq = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_IPC_DATA_CHUNK)
+            chunk = WEBKIT_IPC_DATA_CHUNK;
+        int ret = webkit_chunk_send_nowait(sv[1], seq, off, chunk);
+        if (ret != (int)(sizeof(struct webkit_chunk_header) + chunk)) {
+            char why[96];
+            snprintf(why, sizeof(why), "send seq=%u ret=%d", seq, ret);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+        off += chunk;
+        seq++;
+    }
+
+    off = 0;
+    seq = 0;
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_IPC_DATA_CHUNK)
+            chunk = WEBKIT_IPC_DATA_CHUNK;
+        int rc = webkit_chunk_recv(sv[0], seq, off, chunk);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "recv seq=%u rc=%d", seq, rc);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+        off += chunk;
+        seq++;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
 static void test_webkit_stream_page_chunk_transfer(void)
 {
     const char *name = "AF_UNIX stream WebKit page chunk transfer";
@@ -3009,6 +3252,8 @@ int main(int argc, char **argv)
     test_ipc_seqpacket_stress();
     test_webkit_large_inline_ipc(SOCK_SEQPACKET);
     test_webkit_large_inline_ipc(SOCK_STREAM);
+    test_webkit_seqpacket_chunk_transfer();
+    test_webkit_seqpacket_chunk_burst_queue();
     test_webkit_stream_page_chunk_transfer();
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
