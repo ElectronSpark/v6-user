@@ -337,6 +337,11 @@ static int recvmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
                              flags, 0, 0);
 }
 
+static int sendmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
+{
+    return (int)raw_syscall4(SYS_sendmmsg, fd, (int64)msgvec, vlen, flags);
+}
+
 static int poll_raw(struct pollfd *fds, int nfds, int timeout)
 {
     return (int)raw_syscall3(SYS_poll, (int64)fds, nfds, timeout);
@@ -1319,6 +1324,81 @@ static void test_scm_rights_recvmmsg_batch(void)
     close(sv[1]);
     unlink("__webkit_rfd1");
     unlink("__webkit_rfd2");
+    pass(name);
+}
+
+static void test_unix_sendmmsg_large_stream(void)
+{
+    const char *name = "AF_UNIX sendmmsg large stream payload";
+    int sv[2];
+    const uint payload_len = 20000;
+    uchar *payload = malloc(payload_len);
+    uchar *received = malloc(payload_len);
+    if (payload == NULL || received == NULL) {
+        fail(name, "malloc failed");
+        free(payload);
+        free(received);
+        return;
+    }
+
+    for (uint i = 0; i < payload_len; i++)
+        payload[i] = (uchar)(i * 37u + 11u);
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        free(payload);
+        free(received);
+        return;
+    }
+
+    struct iovec iov[3];
+    struct mmsghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = payload;
+    iov[0].iov_len = 9000;
+    iov[1].iov_base = payload + 9000;
+    iov[1].iov_len = 7000;
+    iov[2].iov_base = payload + 16000;
+    iov[2].iov_len = payload_len - 16000;
+    msg.msg_hdr.msg_iov = iov;
+    msg.msg_hdr.msg_iovlen = 3;
+
+    if (sendmmsg_raw(sv[0], &msg, 1, 0) != 1 || msg.msg_len != payload_len) {
+        fail(name, "sendmmsg did not accept full payload");
+        close(sv[0]);
+        close(sv[1]);
+        free(payload);
+        free(received);
+        return;
+    }
+
+    uint got = 0;
+    while (got < payload_len) {
+        int n = read(sv[1], received + got, payload_len - got);
+        if (n <= 0) {
+            fail(name, "read failed");
+            close(sv[0]);
+            close(sv[1]);
+            free(payload);
+            free(received);
+            return;
+        }
+        got += (uint)n;
+    }
+
+    if (memcmp(payload, received, payload_len) != 0) {
+        fail(name, "payload mismatch");
+        close(sv[0]);
+        close(sv[1]);
+        free(payload);
+        free(received);
+        return;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    free(payload);
+    free(received);
     pass(name);
 }
 
@@ -3803,6 +3883,7 @@ int main(int argc, char **argv)
     test_scm_rights_stream_first_byte_barrier();
     test_scm_rights_stream_payload_barrier();
     test_scm_rights_recvmmsg_batch();
+    test_unix_sendmmsg_large_stream();
     test_scm_rights_process_lifetime();
     test_scm_rights_stream_barriers();
     test_ipc_stream_stress();
