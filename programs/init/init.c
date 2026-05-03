@@ -230,6 +230,9 @@ int main(void) {
     mkdir("/proc");
     if (mount("none", "/proc", "procfs", 0, 0) < 0)
         printf("init: warning: mount /proc failed\n");
+    mkdir("/sys");
+    if (mount("none", "/sys", "sysfs", 0, 0) < 0)
+        printf("init: warning: mount /sys failed\n");
 
     // The ext4 rootfs already contains /usr with Python stdlib.
     // No separate disk mount needed.
