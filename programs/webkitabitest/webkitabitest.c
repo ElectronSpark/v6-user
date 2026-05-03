@@ -2408,6 +2408,77 @@ static void test_webkit_seqpacket_chunk_burst_queue(void)
     pass(name);
 }
 
+static void test_webkit_seqpacket_rebased_burst_queue(void)
+{
+    const char *name = "AF_UNIX seqpacket rebased burst queue";
+    int sv[2];
+    uint off = 0;
+    uint seq = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    for (uint i = 0; i < 300; i++) {
+        int ret = webkit_chunk_send_nowait(sv[1], i, i * WEBKIT_IPC_DATA_CHUNK,
+                                           WEBKIT_IPC_DATA_CHUNK);
+        if (ret != (int)(sizeof(struct webkit_chunk_header) + WEBKIT_IPC_DATA_CHUNK)) {
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "warmup send failed");
+            return;
+        }
+        if (webkit_chunk_recv(sv[0], i, i * WEBKIT_IPC_DATA_CHUNK,
+                              WEBKIT_IPC_DATA_CHUNK) < 0) {
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "warmup receive failed");
+            return;
+        }
+    }
+
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_IPC_DATA_CHUNK)
+            chunk = WEBKIT_IPC_DATA_CHUNK;
+        int ret = webkit_chunk_send_nowait(sv[1], seq, off, chunk);
+        if (ret != (int)(sizeof(struct webkit_chunk_header) + chunk)) {
+            char why[96];
+            snprintf(why, sizeof(why), "send seq=%u ret=%d", seq, ret);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+        off += chunk;
+        seq++;
+    }
+
+    off = 0;
+    seq = 0;
+    while (off < WEBKIT_YT_APP_JS_SIZE) {
+        uint chunk = WEBKIT_YT_APP_JS_SIZE - off;
+        if (chunk > WEBKIT_IPC_DATA_CHUNK)
+            chunk = WEBKIT_IPC_DATA_CHUNK;
+        int rc = webkit_chunk_recv(sv[0], seq, off, chunk);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "recv seq=%u rc=%d", seq, rc);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, why);
+            return;
+        }
+        off += chunk;
+        seq++;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
 static void test_webkit_seqpacket_full_buffer_backpressure(void)
 {
     const char *name = "AF_UNIX seqpacket full buffer returns EAGAIN";
@@ -3705,6 +3776,7 @@ int main(int argc, char **argv)
     test_webkit_large_inline_ipc(SOCK_STREAM);
     test_webkit_seqpacket_chunk_transfer();
     test_webkit_seqpacket_chunk_burst_queue();
+    test_webkit_seqpacket_rebased_burst_queue();
     test_webkit_seqpacket_full_buffer_backpressure();
     test_webkit_stream_page_chunk_transfer();
     test_parent_child_socket_handoff();
