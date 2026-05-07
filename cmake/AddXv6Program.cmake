@@ -27,6 +27,8 @@ function(xv6_user_program NAME)
     target_link_options(${_target} PRIVATE
         -nostdlib
         -Wl,-z,max-page-size=4096
+        -Wl,-e,start
+        -Wl,-u,start
         -T ${USER_LINKER_SCRIPT})
 
     set_target_properties(${_target} PROPERTIES

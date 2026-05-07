@@ -8,6 +8,7 @@
 #include "user/user.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/dev/netconf.h"
+#include "kernel/inc/syscall.h"
 
 #ifndef TIOCSCTTY
 #define TIOCSCTTY 0x540E
@@ -200,6 +201,42 @@ static void configure_network(void)
                req.mode == NETCONF_MODE_DHCP ? "dhcp" : "static");
 }
 
+static int is_env_assignment(const char *s)
+{
+    const char *p = s;
+
+    if (*p == '\0' || *p == '=')
+        return 0;
+    while (*p && *p != '=')
+        p++;
+    return *p == '=';
+}
+
+static int exec_with_env(const char *path, char **argv, char **envp)
+{
+#if defined(__x86_64__)
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "a"((long)SYS_exec), "D"(path), "S"(argv), "d"(envp)
+                     : "rcx", "r11", "memory");
+    return (int)ret;
+#elif defined(__riscv)
+    register uint64 arg0 asm("a0") = (uint64)path;
+    register uint64 arg1 asm("a1") = (uint64)argv;
+    register uint64 arg2 asm("a2") = (uint64)envp;
+    register uint64 syscall_num asm("a7") = SYS_exec;
+    asm volatile("ecall"
+                 : "+r"(arg0)
+                 : "r"(arg1), "r"(arg2), "r"(syscall_num)
+                 : "memory");
+    return (int)arg0;
+#else
+    (void)envp;
+    return exec(path, argv);
+#endif
+}
+
 int main(void) {
     int pid, wpid;
 
@@ -242,8 +279,9 @@ int main(void) {
 
     // Launch background services listed in /etc/startup. Each non-empty,
     // non-comment line is forked as a separate process. Tokens are split
-    // on spaces/tabs (no quoting). The launched program inherits init's
-    // controlling tty so its output appears on the console.
+    // on spaces/tabs (no quoting). Leading NAME=value tokens become the
+    // exec environment. The launched program inherits init's controlling tty
+    // so its output appears on the console.
     {
         int sfd = open("/etc/startup", O_RDONLY);
         if (sfd >= 0) {
@@ -263,21 +301,41 @@ int main(void) {
                     char *p = line;
                     while (*p == ' ' || *p == '\t') p++;
                     if (*p && *p != '#') {
-                        // tokenise into argv
+                        static char *tokens[32];
+                        static char *senv[16];
                         static char *sargv[16];
-                        int sargc = 0;
+                        int ntokens = 0;
                         char *q = p;
-                        while (*q && sargc < 15) {
-                            sargv[sargc++] = q;
+                        while (*q && ntokens < 31) {
+                            tokens[ntokens++] = q;
                             while (*q && *q != ' ' && *q != '\t') q++;
                             if (!*q) break;
                             *q++ = '\0';
                             while (*q == ' ' || *q == '\t') q++;
                         }
+                        tokens[ntokens] = 0;
+
+                        int envc = 0;
+                        int cmdi = 0;
+                        while (cmdi < ntokens && envc < 15 &&
+                               is_env_assignment(tokens[cmdi])) {
+                            senv[envc++] = tokens[cmdi++];
+                        }
+                        senv[envc] = 0;
+                        if (cmdi >= ntokens)
+                            goto next_startup_line;
+
+                        int sargc = 0;
+                        while (cmdi < ntokens && sargc < 15)
+                            sargv[sargc++] = tokens[cmdi++];
                         sargv[sargc] = 0;
+
                         int dpid = fork();
                         if (dpid == 0) {
-                            exec(sargv[0], sargv);
+                            if (envc > 0)
+                                exec_with_env(sargv[0], sargv, senv);
+                            else
+                                exec(sargv[0], sargv);
                             printf("init: exec %s failed\n", sargv[0]);
                             exit(1);
                         } else if (dpid > 0) {
@@ -286,6 +344,7 @@ int main(void) {
                         }
                     }
 
+next_startup_line:
                     *eol = saved;
                     line = (saved == '\0') ? eol : eol + 1;
                 }

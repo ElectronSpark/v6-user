@@ -11,6 +11,7 @@
 #define SOL_SOCKET 1
 #define SO_ERROR 4
 #define MSG_DONTWAIT 0x40
+#define EAGAIN 11
 #define EINPROGRESS 115
 #define LOCAL_TEST_PORT_BASE 18080
 
@@ -25,6 +26,16 @@ struct sockaddr_in {
     uint16 sin_port;
     uint32 sin_addr;
     char sin_zero[8];
+};
+
+struct msghdr {
+    void *msg_name;
+    uint32 msg_namelen;
+    struct iovec *msg_iov;
+    uint64 msg_iovlen;
+    void *msg_control;
+    uint64 msg_controllen;
+    int msg_flags;
 };
 
 #if defined(__riscv)
@@ -205,6 +216,11 @@ static int recvfrom_raw(int fd, void *buf, int len, int flags)
     return (int)raw_syscall6(SYS_recvfrom, fd, (int64)buf, len, flags, 0, 0);
 }
 
+static int recvmsg_raw(int fd, struct msghdr *msg, int flags)
+{
+    return (int)raw_syscall3(SYS_recvmsg, fd, (int64)msg, flags);
+}
+
 static int connect_one(const char *ip, int port, int send_http)
 {
     struct sockaddr_in sa;
@@ -287,6 +303,152 @@ static int connect_one(const char *ip, int port, int send_http)
     return 0;
 }
 
+static int http_download_one(const char *ip, int port, const char *path,
+                             const char *host, int use_recvmsg)
+{
+    struct sockaddr_in sa;
+    struct pollfd pfd;
+    char req[512];
+    char buf[8192];
+    int fd;
+    int rc;
+    int so_error = 0;
+    int optlen = sizeof(so_error);
+    int header_done = 0;
+    int status = 0;
+    uint64 total = 0;
+    int start_tick;
+    int end_tick;
+    int idle_polls = 0;
+
+    fd = socket_raw(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        printf("webkitnettest: download socket failed\n");
+        return -1;
+    }
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = bswap16((uint16)port);
+    sa.sin_addr = parse_ipv4(ip);
+    if (sa.sin_addr == 0) {
+        printf("webkitnettest: invalid IPv4 %s\n", ip);
+        close(fd);
+        return -1;
+    }
+
+    rc = connect_raw(fd, &sa);
+    if (rc < 0 && rc != -EINPROGRESS) {
+        printf("webkitnettest: download connect immediate failure %d\n", rc);
+        close(fd);
+        return -1;
+    }
+
+    pfd.fd = fd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    rc = poll_raw(&pfd, 1, 10000);
+    if (rc <= 0 || !(pfd.revents & (POLLOUT | POLLERR | POLLHUP))) {
+        printf("webkitnettest: download connect poll failed rc=%d revents=0x%x\n",
+               rc, pfd.revents);
+        close(fd);
+        return -1;
+    }
+
+    if (getsockopt_raw(fd, SOL_SOCKET, SO_ERROR, &so_error, &optlen) < 0 ||
+        so_error != 0) {
+        printf("webkitnettest: download SO_ERROR=%d\n", so_error);
+        close(fd);
+        return -1;
+    }
+
+    snprintf(req, sizeof(req),
+             "GET %s HTTP/1.0\r\n"
+             "Host: %s\r\n"
+             "Connection: close\r\n"
+             "User-Agent: xv6-webkitnettest/1\r\n"
+             "\r\n",
+             path, host);
+    rc = sendto_raw(fd, req, strlen(req), 0);
+    if (rc != strlen(req)) {
+        printf("webkitnettest: download request short send %d want %d\n",
+               rc, (int)strlen(req));
+        close(fd);
+        return -1;
+    }
+
+    start_tick = uptime();
+    for (;;) {
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        rc = poll_raw(&pfd, 1, 10000);
+        if (rc == 0) {
+            idle_polls++;
+            printf("webkitnettest: download idle poll bytes=%lu ticks=%d\n",
+                   total, uptime() - start_tick);
+            if (idle_polls >= 3) {
+                close(fd);
+                return -1;
+            }
+            continue;
+        }
+        if (rc < 0) {
+            printf("webkitnettest: download poll failed %d\n", rc);
+            close(fd);
+            return -1;
+        }
+
+        for (;;) {
+            int n;
+            if (use_recvmsg) {
+                struct iovec iov = { .iov_base = buf, .iov_len = sizeof(buf) };
+                struct msghdr msg;
+                memset(&msg, 0, sizeof(msg));
+                msg.msg_iov = &iov;
+                msg.msg_iovlen = 1;
+                n = recvmsg_raw(fd, &msg, MSG_DONTWAIT);
+            } else {
+                n = recvfrom_raw(fd, buf, sizeof(buf), MSG_DONTWAIT);
+            }
+            if (n == 0)
+                goto done;
+            if (n == -EAGAIN)
+                break;
+            if (n < 0) {
+                printf("webkitnettest: download recv failed %d\n", n);
+                close(fd);
+                return -1;
+            }
+            idle_polls = 0;
+            if (!header_done) {
+                for (int i = 0; i + 3 < n; i++) {
+                    if (buf[i] == '\r' && buf[i + 1] == '\n' &&
+                        buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+                        header_done = 1;
+                        if (n >= 12 && buf[0] == 'H' && buf[9] >= '0' && buf[9] <= '9')
+                            status = (buf[9] - '0') * 100 +
+                                     (buf[10] - '0') * 10 +
+                                     (buf[11] - '0');
+                        total += n - (i + 4);
+                        break;
+                    }
+                }
+            } else {
+                total += n;
+            }
+        }
+    }
+
+done:
+    end_tick = uptime();
+    close(fd);
+    printf("webkitnettest: download api=%s status=%d bytes=%lu ticks=%d bytes_per_tick=%lu\n",
+           use_recvmsg ? "recvmsg" : "recvfrom", status, total, end_tick - start_tick,
+           (end_tick > start_tick) ? total / (uint64)(end_tick - start_tick) : total);
+    return (status >= 200 && status < 300 && total > 0) ? 0 : -1;
+}
+
 static void run_local_server(int port, int accept_count)
 {
     struct sockaddr_in sa;
@@ -334,6 +496,19 @@ static void run_local_server(int port, int accept_count)
 
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && (strcmp(argv[1], "download") == 0 ||
+                      strcmp(argv[1], "download-recvmsg") == 0)) {
+        const char *ip = argc > 2 ? argv[2] : "10.0.2.2";
+        int port = argc > 3 ? atoi(argv[3]) : 18081;
+        const char *path = argc > 4 ? argv[4] : "/";
+        const char *host = argc > 5 ? argv[5] : "10.0.2.2";
+        int use_recvmsg = strcmp(argv[1], "download-recvmsg") == 0;
+
+        printf("webkitnettest: download target %s:%d%s host=%s api=%s\n",
+               ip, port, path, host, use_recvmsg ? "recvmsg" : "recvfrom");
+        exit(http_download_one(ip, port, path, host, use_recvmsg) == 0 ? 0 : 1);
+    }
+
     const char *ip = argc > 1 ? argv[1] : "127.0.0.1";
     int port = argc > 2 ? atoi(argv[2]) : LOCAL_TEST_PORT_BASE + (getpid() % 1000);
     int parallel = argc > 3 ? atoi(argv[3]) : 4;

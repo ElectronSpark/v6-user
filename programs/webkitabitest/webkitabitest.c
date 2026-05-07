@@ -34,6 +34,7 @@
 #define CLOCK_MONOTONIC 1
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
+#define FUTEX_REQUEUE 3
 #define FUTEX_WAIT_BITSET 9
 #define FUTEX_PRIVATE_FLAG 128
 #define FUTEX_BITSET_MATCH_ANY 0xffffffffu
@@ -41,15 +42,39 @@
 #define TFD_CLOEXEC O_CLOEXEC
 #define EPOLLIN 0x001
 #define EPOLLOUT 0x004
+#define EPOLLET (1U << 31)
+#define EPOLLONESHOT (1U << 30)
 #define EPOLL_CTL_ADD 1
+#define EPOLL_CTL_DEL 2
+#define EPOLL_CTL_MOD 3
 #define EPOLL_CLOEXEC O_CLOEXEC
+#define SNDCTL_DSP_SPEED 0xc0045002
+#define SNDCTL_DSP_SETFMT 0xc0045005
+#define SNDCTL_DSP_CHANNELS 0xc0045006
+#define SNDCTL_DSP_RESET 0x5000
+#define AFMT_U8 0x00000008
+#define OSS_VIRTUAL_FIFO_BYTES (4096 * 16)
 #define LARGE_SHM_SIZE (1024 * 1024)
 #define SHAREABLE_RESOURCE_SIZE (10 * 1024 * 1024)
 #define WEBKIT_YT_RESOURCE_SIZE 9701939u
+#define WEBKIT_YT_HTML_SIZE 707955u
+#define WEBKIT_YT_HTML_TRACE_SIZE 1143823u
+#define WEBKIT_YT_HTML_QUIET_SIZE 1264133u
 #define WEBKIT_YT_APP_JS_SIZE 9701895u
 #define WEBKIT_YT_BASE_JS_SIZE 2461301u
 #define WEBKIT_YT_BASE_JS_CORRUPT_OFFSET 114688u
+#define WEBKIT_YT_WEBCOMPONENTS_IPC_SIZE 78720u
+#define WEBKIT_YT_WEB_ANIMATIONS_SIZE 50864u
+#define WEBKIT_YT_SPF_SIZE 38138u
+#define WEBKIT_YT_NETWORK_SIZE 14141u
+#define WEBKIT_YT_CSS_IPC_SIZE 2759200u
+#define WEBKIT_YT_APP_JS_IPC_SIZE 9709232u
+#define WEBKIT_YT_POST_BOOT_IPC_SIZE 123760u
 #define WEBKIT_PAGE_CHUNK 4096u
+#define WEBKITABI_PAGE_SIZE 4096
+#define WEBKIT_YT_HTML_INLINE_CHUNK 1378u
+#define WEBKIT_YT_HTML_MAX_INLINE_CHUNK 4988u
+#define WEBKIT_IPC_RECV_CAPACITY (64u * 1024u)
 #define IPC_STRESS_MAX_PAYLOAD 8192
 #define IPC_STRESS_MESSAGES 2500
 #define IPC_STRESS_MAGIC 0x574b4950u
@@ -64,7 +89,9 @@
 #define ENOMEM 12
 #define EFAULT 14
 #define ENOENT 2
+#define EEXIST 17
 #define EINVAL 22
+#define EMSGSIZE 90
 #define ETIMEDOUT 110
 #define EINPROGRESS 115
 
@@ -604,6 +631,38 @@ static void test_socketpair_seqpacket_policy(void)
     pass(name);
 }
 
+static void test_seqpacket_recvmsg_dontwait_empty(void)
+{
+    const char *name = "AF_UNIX seqpacket recvmsg MSG_DONTWAIT empty";
+    int sv[2];
+    char byte = 0;
+    struct iovec iov;
+    struct msghdr msg;
+    int ret;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &byte;
+    iov.iov_len = sizeof(byte);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    ret = recvmsg_raw(sv[1], &msg, MSG_DONTWAIT);
+    close(sv[0]);
+    close(sv[1]);
+    if (ret != -EAGAIN) {
+        char why[80];
+        snprintf(why, sizeof(why), "expected -EAGAIN got %d", ret);
+        fail(name, why);
+        return;
+    }
+    pass(name);
+}
+
 static void test_socket_nonblock_poll(void)
 {
     const char *name = "AF_UNIX nonblock poll readiness";
@@ -818,6 +877,271 @@ out:
         close(client);
     if (listener >= 0)
         close(listener);
+}
+
+static void test_epoll_level_read_redelivery(void)
+{
+    const char *name = "epoll level read redelivery";
+    int fds[2] = {-1, -1};
+    int epfd = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+
+    if (pipe(fds) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        fail(name, "epoll_create1 failed");
+        goto out;
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data = 0x4c4556454cULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        fail(name, "epoll_ctl add failed");
+        goto out;
+    }
+    if (write(fds[1], "x", 1) != 1) {
+        fail(name, "pipe write failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "first level read event missing");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "unread level read event was not redelivered");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (epfd >= 0)
+        close(epfd);
+    if (fds[0] >= 0)
+        close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
+}
+
+static void test_epoll_ctl_linux_item_semantics(void)
+{
+    const char *name = "epoll ctl Linux item semantics";
+    int fds[2] = {-1, -1};
+    int epfd = -1;
+    struct epoll_event_abi ev;
+
+    if (pipe(fds) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        fail(name, "epoll_create1 failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data = 0x45504f4c4c43544cULL;
+
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, fds[0], &ev) != -ENOENT) {
+        fail(name, "MOD of missing fd did not return ENOENT");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_DEL, fds[0], 0) != -ENOENT) {
+        fail(name, "DEL of missing fd did not return ENOENT");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        fail(name, "ADD failed");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fds[0], &ev) != -EEXIST) {
+        fail(name, "ADD of existing fd did not return EEXIST");
+        goto out;
+    }
+    ev.events = 0;
+    ev.data = 0x4d4f445a45524fULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, fds[0], &ev) < 0) {
+        fail(name, "MOD existing fd to empty mask failed");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_DEL, fds[0], 0) < 0) {
+        fail(name, "DEL existing fd failed");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_DEL, fds[0], 0) != -ENOENT) {
+        fail(name, "second DEL did not return ENOENT");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (epfd >= 0)
+        close(epfd);
+    if (fds[0] >= 0)
+        close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
+}
+
+static void test_epoll_oneshot_rearm(void)
+{
+    const char *name = "epoll oneshot disable and rearm";
+    int fds[2] = {-1, -1};
+    int epfd = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+
+    if (pipe(fds) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        fail(name, "epoll_create1 failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLONESHOT;
+    ev.data = 0x4f4e4553484f54ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+    if (write(fds[1], "x", 1) != 1) {
+        fail(name, "pipe write failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "first oneshot event missing");
+        goto out;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 0) {
+        fail(name, "oneshot fd stayed enabled after delivery");
+        goto out;
+    }
+
+    ev.data = 0x524541524d4544ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, fds[0], &ev) < 0) {
+        fail(name, "epoll_ctl MOD rearm failed");
+        goto out;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "rearmed oneshot event missing");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (epfd >= 0)
+        close(epfd);
+    if (fds[0] >= 0)
+        close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
+}
+
+static void test_nested_epoll_level_read_redelivery(void)
+{
+    const char *name = "nested epoll level read redelivery";
+    int fds[2] = {-1, -1};
+    int inner = -1;
+    int outer = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+
+    if (pipe(fds) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+
+    inner = epoll_create1_raw(EPOLL_CLOEXEC);
+    outer = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (inner < 0 || outer < 0) {
+        fail(name, "epoll_create1 failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data = 0x494e4e4552554c4cULL;
+    if (epoll_ctl_raw(inner, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        fail(name, "inner epoll_ctl add failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data = 0x4f55544552554c4cULL;
+    if (epoll_ctl_raw(outer, EPOLL_CTL_ADD, inner, &ev) < 0) {
+        fail(name, "outer epoll_ctl add failed");
+        goto out;
+    }
+
+    if (write(fds[1], "x", 1) != 1) {
+        fail(name, "pipe write failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(outer, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "outer event missing");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(outer, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "unread inner epoll fd was not redelivered");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(inner, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN)) {
+        fail(name, "inner pipe event missing");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(outer, &out, 1, 0) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "outer did not resurface still-readable inner fd");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (outer >= 0)
+        close(outer);
+    if (inner >= 0)
+        close(inner);
+    if (fds[0] >= 0)
+        close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
 }
 
 static void test_socket_sol_options(void)
@@ -1878,6 +2202,398 @@ static void test_scm_rights_stream_barriers(void)
     pass(name);
 }
 
+static void test_wayland_stream_wrapped_iov_batch(void)
+{
+    const char *name = "Wayland-shaped stream wrapped iov batch";
+    enum { RING = 256, TAIL = 44, FIRST = RING - TAIL, SECOND = 16 };
+    int sv[2];
+    uchar expect[FIRST + SECOND];
+    uchar ring[RING];
+    struct iovec riov[2];
+    struct msghdr rmsg;
+    uint off = 0;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    memset(expect, 0, sizeof(expect));
+    for (uint i = 0; i < 15 && off + 12 <= sizeof(expect); i++) {
+        uint32 obj = 1 + i;
+        uint32 word = (12u << 16) | (i & 0xffffu);
+        uint32 arg = 0x100 + i;
+        memcpy(expect + off, &obj, sizeof(obj));
+        memcpy(expect + off + 4, &word, sizeof(word));
+        memcpy(expect + off + 8, &arg, sizeof(arg));
+        off += 12;
+    }
+    while (off + 16 <= sizeof(expect)) {
+        uint32 obj = 0x40 + off;
+        uint32 word = (16u << 16) | 9u;
+        uint32 arg0 = 0x200 + off;
+        uint32 arg1 = 0x300 + off;
+        memcpy(expect + off, &obj, sizeof(obj));
+        memcpy(expect + off + 4, &word, sizeof(word));
+        memcpy(expect + off + 8, &arg0, sizeof(arg0));
+        memcpy(expect + off + 12, &arg1, sizeof(arg1));
+        off += 16;
+    }
+    if (off != sizeof(expect)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "test vector size mismatch");
+        return;
+    }
+
+    if (write(sv[0], expect, sizeof(expect)) != (int)sizeof(expect)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "stream write failed");
+        return;
+    }
+
+    memset(ring, 0xa5, sizeof(ring));
+    memset(&rmsg, 0, sizeof(rmsg));
+    riov[0].iov_base = ring + TAIL;
+    riov[0].iov_len = FIRST;
+    riov[1].iov_base = ring;
+    riov[1].iov_len = SECOND;
+    rmsg.msg_iov = riov;
+    rmsg.msg_iovlen = 2;
+
+    if (recvmsg_raw(sv[1], &rmsg, MSG_DONTWAIT) != (int)sizeof(expect)) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "wrapped recvmsg did not coalesce full batch");
+        return;
+    }
+
+    if (memcmp(ring + TAIL, expect, FIRST) != 0 ||
+        memcmp(ring, expect + FIRST, SECOND) != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "wrapped iov bytes were corrupted");
+        return;
+    }
+
+    for (uint pos = 0; pos < sizeof(expect); ) {
+        uint32 obj;
+        uint32 word;
+        uchar hdr[8];
+        for (uint j = 0; j < sizeof(hdr); j++)
+            hdr[j] = ring[(TAIL + pos + j) % RING];
+        memcpy(&obj, hdr, sizeof(obj));
+        memcpy(&word, hdr + 4, sizeof(word));
+        if (obj == 0 || (word >> 16) < 8 || pos + (word >> 16) > sizeof(expect)) {
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "wrapped message header decoded invalid");
+            return;
+        }
+        pos += word >> 16;
+    }
+
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
+static void put_wayland_words(uchar *buf, uint *off, uint32 a, uint32 b)
+{
+    memcpy(buf + *off, &a, sizeof(a));
+    memcpy(buf + *off + 4, &b, sizeof(b));
+    *off += 8;
+}
+
+static void put_wayland_u32(uchar *buf, uint *off, uint32 v)
+{
+    memcpy(buf + *off, &v, sizeof(v));
+    *off += 4;
+}
+
+static void test_wayland_stream_scm_batch(void)
+{
+    const char *name = "Wayland-shaped stream SCM_RIGHTS batch";
+    int sv[2];
+    int fd;
+    int got_fd = -1;
+    uchar first[512];
+    uchar second[84];
+    uchar expect[sizeof(first) + sizeof(second)];
+    uchar got[sizeof(expect)];
+    uint first_len = 0;
+    uint second_len = 0;
+    uint got_len = 0;
+    int saw_fd = 0;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    fd = memfd_create_raw("wayland-scm-batch", MFD_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, 4096) < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        if (fd >= 0)
+            close(fd);
+        fail(name, "memfd setup failed");
+        return;
+    }
+
+    memset(first, 0, sizeof(first));
+    memset(second, 0, sizeof(second));
+
+    /* Registry bind and sync traffic before the shared-memory pool. */
+    put_wayland_words(first, &first_len, 2, (40u << 16) | 0u);
+    put_wayland_u32(first, &first_len, 4);
+    put_wayland_u32(first, &first_len, 0x100);
+    put_wayland_u32(first, &first_len, 1);
+    put_wayland_u32(first, &first_len, 0x200);
+    put_wayland_u32(first, &first_len, 0x300);
+    put_wayland_u32(first, &first_len, 0x400);
+    put_wayland_words(first, &first_len, 2, (44u << 16) | 0u);
+    for (uint i = 0; i < 9; i++)
+        put_wayland_u32(first, &first_len, 0x500 + i);
+    put_wayland_words(first, &first_len, 2, (32u << 16) | 0u);
+    for (uint i = 0; i < 6; i++)
+        put_wayland_u32(first, &first_len, 0x600 + i);
+    put_wayland_words(first, &first_len, 2, (36u << 16) | 0u);
+    for (uint i = 0; i < 7; i++)
+        put_wayland_u32(first, &first_len, 0x700 + i);
+    put_wayland_words(first, &first_len, 1, (12u << 16) | 0u);
+    put_wayland_u32(first, &first_len, 0x800);
+    put_wayland_words(first, &first_len, 2, (48u << 16) | 0u);
+    for (uint i = 0; i < 10; i++)
+        put_wayland_u32(first, &first_len, 0x900 + i);
+
+    /* wl_shm.create_pool carries the fd; following resizes are plain bytes. */
+    put_wayland_words(first, &first_len, 6, (16u << 16) | 0u);
+    put_wayland_u32(first, &first_len, 10);
+    put_wayland_u32(first, &first_len, 4096);
+    for (uint i = 0; i < 7; i++) {
+        put_wayland_words(first, &first_len, 10, (12u << 16) | 2u);
+        put_wayland_u32(first, &first_len, 8192 + i * 4096);
+    }
+
+    put_wayland_words(second, &second_len, 2, (32u << 16) | 0u);
+    for (uint i = 0; i < 6; i++)
+        put_wayland_u32(second, &second_len, 0xa00 + i);
+    put_wayland_words(second, &second_len, 4, (12u << 16) | 0u);
+    put_wayland_u32(second, &second_len, 12);
+    put_wayland_words(second, &second_len, 9, (16u << 16) | 1u);
+    put_wayland_u32(second, &second_len, 11);
+    put_wayland_u32(second, &second_len, 12);
+    put_wayland_words(second, &second_len, 4, (12u << 16) | 0u);
+    put_wayland_u32(second, &second_len, 14);
+    put_wayland_words(second, &second_len, 1, (12u << 16) | 0u);
+    put_wayland_u32(second, &second_len, 0xb00);
+
+    if (second_len != sizeof(second) || first_len > sizeof(first)) {
+        close(fd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "test vector size mismatch");
+        return;
+    }
+
+    memcpy(expect, first, first_len);
+    memcpy(expect + first_len, second, second_len);
+
+    {
+        struct iovec iov;
+        struct msghdr msg;
+        struct cmsghdr *cmsg;
+        char control[CMSG_SPACE(sizeof(int))];
+
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = first;
+        iov.iov_len = first_len;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        cmsg = (struct cmsghdr *)control;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+        if (sendmsg_raw(sv[0], &msg, 0) != (int)first_len) {
+            close(fd);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "first sendmsg failed");
+            return;
+        }
+    }
+
+    if (write(sv[0], second, second_len) != (int)second_len) {
+        close(fd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "second write failed");
+        return;
+    }
+
+    while (got_len < first_len + second_len) {
+        struct iovec iov[2];
+        struct msghdr msg;
+        struct cmsghdr *cmsg;
+        char control[CMSG_SPACE(sizeof(int))];
+        uint first_chunk;
+        uint second_chunk;
+        int n;
+
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        first_chunk = (sizeof(got) - got_len > 37) ?
+            37 : sizeof(got) - got_len;
+        second_chunk = sizeof(got) - got_len - first_chunk;
+        if (second_chunk > 97)
+            second_chunk = 97;
+        iov[0].iov_base = got + got_len;
+        iov[0].iov_len = first_chunk;
+        iov[1].iov_base = got + got_len + first_chunk;
+        iov[1].iov_len = second_chunk;
+        msg.msg_iov = iov;
+        msg.msg_iovlen = 2;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        n = recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC | MSG_DONTWAIT);
+        if (n == -EAGAIN)
+            continue;
+        if (n <= 0) {
+            close(fd);
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "recvmsg failed");
+            return;
+        }
+        if ((uint)n > sizeof(got) - got_len)
+            n = sizeof(got) - got_len;
+        got_len += (uint)n;
+
+        if (msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+            cmsg = (struct cmsghdr *)control;
+            if (cmsg->cmsg_level == SOL_SOCKET &&
+                cmsg->cmsg_type == SCM_RIGHTS) {
+                memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+                saw_fd = got_fd >= 0;
+            }
+        }
+    }
+
+    if (!saw_fd) {
+        close(fd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "SCM_RIGHTS fd was not delivered");
+        return;
+    }
+    close(got_fd);
+
+    if (memcmp(got, expect, first_len + second_len) != 0) {
+        close(fd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "stream bytes changed around SCM_RIGHTS");
+        return;
+    }
+
+    close(fd);
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
+static void test_unix_stream_short_read_stops_iov(void)
+{
+    const char *name = "AF_UNIX stream short read preserves iov order";
+    int sv[2];
+    int pid;
+    int status = 0;
+    unsigned char first[152];
+    unsigned char second[24];
+    unsigned char got[4096];
+    struct iovec iov[2];
+    struct msghdr msg;
+    int n;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    for (uint i = 0; i < sizeof(first); i++)
+        first[i] = (unsigned char)(0x40 + (i & 0x1f));
+    for (uint i = 0; i < sizeof(second); i++)
+        second[i] = (unsigned char)(0x90 + i);
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        close(sv[1]);
+        if (write(sv[0], first, sizeof(first)) != (int)sizeof(first))
+            exit(2);
+        sleep(1);
+        if (write(sv[0], second, sizeof(second)) != (int)sizeof(second))
+            exit(3);
+        close(sv[0]);
+        exit(0);
+    }
+
+    close(sv[0]);
+    memset(got, 0x5a, sizeof(got));
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = got + sizeof(second);
+    iov[0].iov_len = sizeof(got) - sizeof(second);
+    iov[1].iov_base = got;
+    iov[1].iov_len = sizeof(second);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    n = recvmsg_raw(sv[1], &msg, 0);
+    if (n != (int)sizeof(first)) {
+        close(sv[1]);
+        waitpid(pid, &status, 0);
+        fail(name, "recvmsg crossed into next iov after short stream read");
+        return;
+    }
+    for (uint i = 0; i < sizeof(second); i++) {
+        if (got[i] != 0x5a) {
+            close(sv[1]);
+            waitpid(pid, &status, 0);
+            fail(name, "second iov was written after short first iov read");
+            return;
+        }
+    }
+    if (memcmp(got + sizeof(second), first, sizeof(first)) != 0) {
+        close(sv[1]);
+        waitpid(pid, &status, 0);
+        fail(name, "first payload mismatch");
+        return;
+    }
+    n = read(sv[1], got, sizeof(second));
+    close(sv[1]);
+    waitpid(pid, &status, 0);
+    if (n != (int)sizeof(second) ||
+        memcmp(got, second, sizeof(second)) != 0 ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "remaining stream payload mismatch");
+        return;
+    }
+
+    pass(name);
+}
+
 struct ipc_stress_header {
     uint magic;
     uint seq;
@@ -2891,6 +3607,102 @@ static void test_webkit_seqpacket_full_buffer_backpressure(void)
     pass(name);
 }
 
+static void test_webkit_seqpacket_recvmmsg_epollout_wake(void)
+{
+    const char *name = "AF_UNIX seqpacket recvmmsg wakes EPOLLOUT";
+    int sv[2];
+    int epfd;
+    uint seq = 0;
+    char byte = 'x';
+    char got = 0;
+    struct iovec iov;
+    struct mmsghdr msg;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    for (;;) {
+        int ret = write(sv[0], &byte, 1);
+        if (ret == 1) {
+            seq++;
+            if (seq > 20000) {
+                close(sv[0]);
+                close(sv[1]);
+                fail(name, "send never hit backpressure");
+                return;
+            }
+            continue;
+        }
+        if (ret != -EAGAIN) {
+            close(sv[0]);
+            close(sv[1]);
+            fail(name, "fill send failed before EAGAIN");
+            return;
+        }
+        break;
+    }
+
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "epoll_create1 failed");
+        return;
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT;
+    ev.data = 0x5151574b;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[0], &ev) < 0) {
+        close(epfd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "epoll_ctl add failed");
+        return;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 0) {
+        close(epfd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "full seqpacket socket reported writable");
+        return;
+    }
+
+    got = 0;
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &got;
+    iov.iov_len = sizeof(got);
+    msg.msg_hdr.msg_iov = &iov;
+    msg.msg_hdr.msg_iovlen = 1;
+    if (recvmmsg_raw(sv[1], &msg, 1, MSG_DONTWAIT) != 1 ||
+        msg.msg_len != 1 || got != byte) {
+        close(epfd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "recvmmsg drain failed");
+        return;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLOUT) || out.data != ev.data) {
+        close(epfd);
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "EPOLLOUT did not wake after recvmmsg drain");
+        return;
+    }
+
+    close(epfd);
+    close(sv[0]);
+    close(sv[1]);
+    pass(name);
+}
+
 static void test_webkit_stream_page_chunk_transfer(void)
 {
     const char *name = "AF_UNIX stream WebKit page chunk transfer";
@@ -3318,6 +4130,513 @@ static uchar yt_resource_byte(uint index)
     return (uchar)x;
 }
 
+static uint64 fnv64_bytes(const uchar *buf, uint len)
+{
+    uint64 h = 1469598103934665603ULL;
+
+    for (uint i = 0; i < len; i++) {
+        h ^= buf[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static void test_webkit_ool_seqpacket_html_mapping(void)
+{
+    const char *name = "WebKit OOL seqpacket YouTube HTML body";
+    int fd = memfd_create_raw("webkit-ool-html", MFD_CLOEXEC);
+    int sv[2];
+    int pid;
+    int status = 0;
+    char *p;
+
+    struct webkit_ool_html_header {
+        uint magic;
+        uint size;
+        uint64 full_hash;
+        uint64 block_hash[11];
+    } hdr;
+
+    if (fd < 0) {
+        fail(name, "memfd_create failed");
+        return;
+    }
+    if (ftruncate(fd, WEBKIT_YT_HTML_SIZE) < 0) {
+        close(fd);
+        fail(name, "ftruncate failed");
+        return;
+    }
+    p = mmap(0, WEBKIT_YT_HTML_SIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        fail(name, "writer mmap failed");
+        return;
+    }
+
+    /*
+     * Mirror WebKit's out-of-line IPC message path: copy the encoded
+     * message body into a writable MAP_SHARED memfd, pass the fd in a
+     * seqpacket control message, close/unmap promptly, and let the peer
+     * mmap the body read-only.
+     */
+    for (uint i = 0; i < WEBKIT_YT_HTML_SIZE; i++)
+        p[i] = (char)yt_resource_byte(i ^ (i >> 7));
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.size = WEBKIT_YT_HTML_SIZE;
+    hdr.full_hash = fnv64_bytes((uchar *)p, WEBKIT_YT_HTML_SIZE);
+    for (uint b = 0; b < 11; b++) {
+        uint off = b * 65536u;
+        uint len = WEBKIT_YT_HTML_SIZE - off;
+        if (len > 65536u)
+            len = 65536u;
+        hdr.block_hash[b] = fnv64_bytes((uchar *)p + off, len);
+    }
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        munmap(p, WEBKIT_YT_HTML_SIZE);
+        close(fd);
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        munmap(p, WEBKIT_YT_HTML_SIZE);
+        close(fd);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        struct webkit_ool_html_header rhdr;
+        char control[CMSG_SPACE(sizeof(int))];
+        struct iovec iov;
+        struct msghdr msg;
+        int got_fd = -1;
+        char *rp;
+
+        close(sv[0]);
+        memset(&rhdr, 0, sizeof(rhdr));
+        memset(control, 0, sizeof(control));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = &rhdr;
+        iov.iov_len = sizeof(rhdr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+        if (recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC) != (int)sizeof(rhdr))
+            exit(31);
+        if ((msg.msg_flags & MSG_TRUNC) || rhdr.magic != IPC_STRESS_MAGIC ||
+            rhdr.size != WEBKIT_YT_HTML_SIZE)
+            exit(32);
+        if (msg.msg_controllen < CMSG_LEN(sizeof(int)))
+            exit(33);
+        struct cmsghdr *cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+            exit(34);
+        memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+        if (got_fd < 0)
+            exit(35);
+
+        rp = mmap(0, WEBKIT_YT_HTML_SIZE, PROT_READ, MAP_SHARED, got_fd, 0);
+        if (rp == MAP_FAILED)
+            exit(36);
+
+        uint64 full = fnv64_bytes((uchar *)rp, WEBKIT_YT_HTML_SIZE);
+        if (full != rhdr.full_hash) {
+            fprintf(2, "webkitabitest: OOL HTML full hash got=%lu want=%lu\n",
+                    full, rhdr.full_hash);
+            exit(37);
+        }
+        for (uint b = 0; b < 11; b++) {
+            uint off = b * 65536u;
+            uint len = WEBKIT_YT_HTML_SIZE - off;
+            if (len > 65536u)
+                len = 65536u;
+            uint64 got = fnv64_bytes((uchar *)rp + off, len);
+            if (got != rhdr.block_hash[b]) {
+                fprintf(2, "webkitabitest: OOL HTML block %u hash got=%lu want=%lu\n",
+                        b, got, rhdr.block_hash[b]);
+                exit(38);
+            }
+        }
+        for (uint i = 0; i < WEBKIT_YT_HTML_SIZE; i++) {
+            uchar want = yt_resource_byte(i ^ (i >> 7));
+            if ((uchar)rp[i] != want) {
+                fprintf(2, "webkitabitest: OOL HTML mismatch at %u got=%u want=%u\n",
+                        i, (uchar)rp[i], want);
+                exit(39);
+            }
+        }
+        munmap(rp, WEBKIT_YT_HTML_SIZE);
+        close(got_fd);
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg = (struct cmsghdr *)control;
+    struct iovec iov;
+    struct msghdr msg;
+
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &hdr;
+    iov.iov_len = sizeof(hdr);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    if (sendmsg_raw(sv[0], &msg, 0) != (int)sizeof(hdr)) {
+        close(sv[0]);
+        waitpid(pid, &status, 0);
+        munmap(p, WEBKIT_YT_HTML_SIZE);
+        close(fd);
+        fail(name, "sendmsg failed");
+        return;
+    }
+
+    munmap(p, WEBKIT_YT_HTML_SIZE);
+    close(fd);
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
+static void test_webkit_inline_seqpacket_html_chunks(void)
+{
+    const char *name = "WebKit inline seqpacket YouTube HTML chunks";
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        uchar buf[WEBKIT_YT_HTML_INLINE_CHUNK + 64];
+        struct iovec iov;
+        struct msghdr msg;
+        uint offset = 0;
+        uint64 hash = 1469598103934665603ULL;
+        uint64 block_hash[11];
+
+        close(sv[0]);
+        memset(block_hash, 0, sizeof(block_hash));
+        while (offset < WEBKIT_YT_HTML_SIZE) {
+            uint want_len = WEBKIT_YT_HTML_SIZE - offset;
+            if (want_len > WEBKIT_YT_HTML_INLINE_CHUNK)
+                want_len = WEBKIT_YT_HTML_INLINE_CHUNK;
+
+            memset(&msg, 0, sizeof(msg));
+            iov.iov_base = buf;
+            iov.iov_len = sizeof(buf);
+            msg.msg_iov = &iov;
+            msg.msg_iovlen = 1;
+            int got = recvmsg_raw(sv[1], &msg, 0);
+            if (got != (int)want_len || (msg.msg_flags & MSG_TRUNC)) {
+                fprintf(2, "webkitabitest: inline HTML recv offset=%u got=%d want=%u flags=0x%x\n",
+                        offset, got, want_len, msg.msg_flags);
+                exit(41);
+            }
+
+            for (uint i = 0; i < want_len; i++) {
+                uchar want = yt_resource_byte((offset + i) ^ ((offset + i) >> 7));
+                if (buf[i] != want) {
+                    fprintf(2, "webkitabitest: inline HTML byte mismatch at %u got=%u want=%u\n",
+                            offset + i, buf[i], want);
+                    exit(42);
+                }
+                hash ^= buf[i];
+                hash *= 1099511628211ULL;
+            }
+
+            uint consumed = 0;
+            while (consumed < want_len) {
+                uint absolute = offset + consumed;
+                uint block = absolute / 65536u;
+                uint in_block = absolute % 65536u;
+                uint run = want_len - consumed;
+                if (run > 65536u - in_block)
+                    run = 65536u - in_block;
+                uint64 h = block_hash[block] ? block_hash[block] : 1469598103934665603ULL;
+                for (uint i = 0; i < run; i++) {
+                    h ^= buf[consumed + i];
+                    h *= 1099511628211ULL;
+                }
+                block_hash[block] = h;
+                consumed += run;
+            }
+
+            offset += want_len;
+        }
+
+        uint64 expected_full = 1469598103934665603ULL;
+        for (uint i = 0; i < WEBKIT_YT_HTML_SIZE; i++) {
+            expected_full ^= yt_resource_byte(i ^ (i >> 7));
+            expected_full *= 1099511628211ULL;
+        }
+        if (hash != expected_full) {
+            fprintf(2, "webkitabitest: inline HTML full hash got=%lu want=%lu\n",
+                    hash, expected_full);
+            exit(43);
+        }
+        for (uint b = 0; b < 11; b++) {
+            uint off = b * 65536u;
+            uint len = WEBKIT_YT_HTML_SIZE - off;
+            if (len > 65536u)
+                len = 65536u;
+            uint64 want = 1469598103934665603ULL;
+            for (uint i = 0; i < len; i++) {
+                want ^= yt_resource_byte((off + i) ^ ((off + i) >> 7));
+                want *= 1099511628211ULL;
+            }
+            if (block_hash[b] != want) {
+                fprintf(2, "webkitabitest: inline HTML block %u hash got=%lu want=%lu\n",
+                        b, block_hash[b], want);
+                exit(44);
+            }
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    for (uint offset = 0; offset < WEBKIT_YT_HTML_SIZE;) {
+        uchar buf[WEBKIT_YT_HTML_INLINE_CHUNK];
+        uint len = WEBKIT_YT_HTML_SIZE - offset;
+        struct iovec iov;
+        struct msghdr msg;
+
+        if (len > WEBKIT_YT_HTML_INLINE_CHUNK)
+            len = WEBKIT_YT_HTML_INLINE_CHUNK;
+        for (uint i = 0; i < len; i++)
+            buf[i] = yt_resource_byte((offset + i) ^ ((offset + i) >> 7));
+
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = buf;
+        iov.iov_len = len;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        if (sendmsg_raw(sv[0], &msg, 0) != (int)len) {
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "sendmsg failed");
+            return;
+        }
+        offset += len;
+    }
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
+static int webkit_html_iov_send(int fd, uint seq, uint offset, uint len)
+{
+    struct webkit_chunk_header hdr;
+    uchar payload[WEBKIT_YT_HTML_MAX_INLINE_CHUNK];
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    if (len > sizeof(payload))
+        return -EMSGSIZE;
+    for (uint i = 0; i < len; i++)
+        payload[i] = yt_resource_byte((offset + i) ^ ((offset + i) >> 7));
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.offset = offset;
+    hdr.len = len;
+    hdr.total = WEBKIT_YT_HTML_SIZE;
+    hdr.checksum = yt_inline_checksum(payload, len);
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = len;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    for (;;) {
+        int ret = sendmsg_raw(fd, &msg, MSG_DONTWAIT);
+        if (ret == (int)(sizeof(hdr) + len))
+            return 0;
+        if (ret == -EAGAIN) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll_raw(&pfd, 1, 1000) <= 0)
+                return -ETIMEDOUT;
+            continue;
+        }
+        return ret;
+    }
+}
+
+static int webkit_html_iov_recv(int fd, uint seq, uint offset, uint len)
+{
+    struct webkit_chunk_header hdr;
+    uchar payload[WEBKIT_YT_HTML_MAX_INLINE_CHUNK];
+    struct iovec iov[2];
+    struct msghdr msg;
+    int ret;
+
+    if (len > sizeof(payload))
+        return -EMSGSIZE;
+    memset(&hdr, 0, sizeof(hdr));
+    memset(payload, 0, sizeof(payload));
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = payload;
+    iov[1].iov_len = sizeof(payload);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    ret = recvmsg_raw(fd, &msg, 0);
+    if (ret != (int)(sizeof(hdr) + len)) {
+        fprintf(2, "webkitabitest: HTML iov recv seq=%u ret=%d want=%u flags=0x%x\n",
+                seq, ret, (uint)(sizeof(hdr) + len), msg.msg_flags);
+        return -1;
+    }
+    if (msg.msg_flags & MSG_TRUNC)
+        return -2;
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.seq != seq ||
+        hdr.offset != offset || hdr.len != len ||
+        hdr.total != WEBKIT_YT_HTML_SIZE) {
+        fprintf(2, "webkitabitest: HTML iov header got seq=%u off=%u len=%u total=%u want seq=%u off=%u len=%u\n",
+                hdr.seq, hdr.offset, hdr.len, hdr.total, seq, offset, len);
+        return -3;
+    }
+    if (hdr.checksum != yt_inline_checksum(payload, len))
+        return -4;
+    for (uint i = 0; i < len; i++) {
+        uchar want = yt_resource_byte((offset + i) ^ ((offset + i) >> 7));
+        if (payload[i] != want) {
+            fprintf(2, "webkitabitest: HTML iov byte mismatch seq=%u abs=%u got=%u want=%u\n",
+                    seq, offset + i, payload[i], want);
+            return -5;
+        }
+    }
+    return 0;
+}
+
+static uint webkit_html_chunk_len(uint offset)
+{
+    uint remaining = WEBKIT_YT_HTML_SIZE - offset;
+    uint len;
+
+    if (offset == 0)
+        len = 512;
+    else if (offset == 512)
+        len = 4988;
+    else if ((offset % 65536u) > 64000u)
+        len = 122;
+    else if ((offset / WEBKIT_YT_HTML_INLINE_CHUNK) % 53u == 17u)
+        len = 1080;
+    else if ((offset / WEBKIT_YT_HTML_INLINE_CHUNK) % 53u == 18u)
+        len = 1250;
+    else
+        len = WEBKIT_YT_HTML_INLINE_CHUNK;
+
+    if (len > remaining)
+        len = remaining;
+    return len;
+}
+
+static void test_webkit_inline_iov_html_order(void)
+{
+    const char *name = "WebKit inline seqpacket iovec HTML order";
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        uint offset = 0;
+        uint seq = 0;
+
+        close(sv[0]);
+        while (offset < WEBKIT_YT_HTML_SIZE) {
+            uint len = webkit_html_chunk_len(offset);
+            int rc = webkit_html_iov_recv(sv[1], seq, offset, len);
+            if (rc < 0) {
+                fprintf(2, "webkitabitest: HTML iov order recv failed seq=%u off=%u len=%u rc=%d\n",
+                        seq, offset, len, rc);
+                exit(45);
+            }
+            offset += len;
+            seq++;
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    for (uint offset = 0, seq = 0; offset < WEBKIT_YT_HTML_SIZE; seq++) {
+        uint len = webkit_html_chunk_len(offset);
+        int rc = webkit_html_iov_send(sv[0], seq, offset, len);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "send seq=%u off=%u len=%u rc=%d",
+                     seq, offset, len, rc);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, why);
+            return;
+        }
+        offset += len;
+    }
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
 static void test_webkit_ool_seqpacket_resource_mapping(void)
 {
     const char *name = "WebKit OOL seqpacket shared resource";
@@ -3458,6 +4777,536 @@ static void test_webkit_ool_seqpacket_resource_mapping(void)
     pass(name);
 }
 
+struct webkit_ipc_ool_header {
+    uint magic;
+    uint seq;
+    uint size;
+    uint attachment_count;
+    uint64 full_hash;
+    uint64 first_hash;
+    uint64 last_hash;
+};
+
+struct webkit_ipc_attachment_info {
+    uint type;
+    uint index;
+};
+
+static uchar yt_mainhtml_byte(uint index, uint seq, uint size)
+{
+    return yt_resource_byte(index ^ (index >> 7) ^ (seq * 131u) ^
+                            (size >> 5));
+}
+
+static void fill_mainhtml_payload(char *p, uint size, uint seq)
+{
+    for (uint i = 0; i < size; i++)
+        p[i] = (char)yt_mainhtml_byte(i, seq, size);
+}
+
+static uint64 mainhtml_window_hash(char *p, uint size, uint off)
+{
+    uint len = size - off;
+    if (len > 65536u)
+        len = 65536u;
+    return fnv64_bytes((uchar *)p + off, len);
+}
+
+static int send_mainhtml_pre_message(int fd, uint seq)
+{
+    struct {
+        uint magic;
+        uint seq;
+        uint kind;
+        uint body_size;
+    } msg;
+    struct iovec iov[2];
+    struct msghdr mh;
+    char body[17];
+
+    msg.magic = IPC_STRESS_MAGIC;
+    msg.seq = seq;
+    msg.kind = 0x43414e43u; /* CANC */
+    msg.body_size = sizeof(body);
+    for (uint i = 0; i < sizeof(body); i++)
+        body[i] = (char)('a' + ((seq + i) % 26));
+
+    memset(&mh, 0, sizeof(mh));
+    iov[0].iov_base = &msg;
+    iov[0].iov_len = sizeof(msg);
+    iov[1].iov_base = body;
+    iov[1].iov_len = sizeof(body);
+    mh.msg_iov = iov;
+    mh.msg_iovlen = 2;
+    return sendmsg_raw(fd, &mh, 0) == (int)(sizeof(msg) + sizeof(body))
+        ? 0 : -1;
+}
+
+static int recv_mainhtml_pre_message(int fd, uint seq)
+{
+    char packet[128];
+    char control[CMSG_SPACE(sizeof(int) * 254)];
+    struct iovec iov;
+    struct msghdr mh;
+
+    memset(packet, 0, sizeof(packet));
+    memset(control, 0, sizeof(control));
+    memset(&mh, 0, sizeof(mh));
+    iov.iov_base = packet;
+    iov.iov_len = sizeof(packet);
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    mh.msg_control = control;
+    mh.msg_controllen = sizeof(control);
+
+    int got = recvmsg_raw(fd, &mh, MSG_CMSG_CLOEXEC);
+    if (got != 33 || (mh.msg_flags & MSG_TRUNC) ||
+        mh.msg_controllen != 0)
+        return -1;
+
+    uint *words = (uint *)packet;
+    if (words[0] != IPC_STRESS_MAGIC || words[1] != seq ||
+        words[2] != 0x43414e43u || words[3] != 17)
+        return -1;
+    return 0;
+}
+
+static int send_mainhtml_ool_message(int sock, int body_fd, char *body,
+                                     uint size, uint seq)
+{
+    struct webkit_ipc_ool_header hdr;
+    struct webkit_ipc_attachment_info info;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg = (struct cmsghdr *)control;
+    struct iovec iov[2];
+    struct msghdr mh;
+
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.size = size;
+    hdr.attachment_count = 1;
+    hdr.full_hash = fnv64_bytes((uchar *)body, size);
+    hdr.first_hash = mainhtml_window_hash(body, size, 0);
+    hdr.last_hash = mainhtml_window_hash(body, size,
+        size > 65536u ? size - 65536u : 0);
+    info.type = 1;
+    info.index = seq;
+
+    memset(control, 0, sizeof(control));
+    memset(&mh, 0, sizeof(mh));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = &info;
+    iov[1].iov_len = sizeof(info);
+    mh.msg_iov = iov;
+    mh.msg_iovlen = 2;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &body_fd, sizeof(body_fd));
+    mh.msg_control = control;
+    mh.msg_controllen = sizeof(control);
+
+    return sendmsg_raw(sock, &mh, 0) == (int)(sizeof(hdr) + sizeof(info))
+        ? 0 : -1;
+}
+
+static int recv_mainhtml_ool_message(int sock, uint seq)
+{
+    char packet[WEBKIT_IPC_RECV_CAPACITY];
+    char control[CMSG_SPACE(sizeof(int) * 254)];
+    struct iovec iov;
+    struct msghdr mh;
+    int got_fd = -1;
+    char *rp;
+
+    memset(packet, 0, sizeof(packet));
+    memset(control, 0, sizeof(control));
+    memset(&mh, 0, sizeof(mh));
+    iov.iov_base = packet;
+    iov.iov_len = sizeof(packet);
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    mh.msg_control = control;
+    mh.msg_controllen = sizeof(control);
+
+    int got = recvmsg_raw(sock, &mh, MSG_CMSG_CLOEXEC);
+    if (got != (int)(sizeof(struct webkit_ipc_ool_header) +
+                     sizeof(struct webkit_ipc_attachment_info)) ||
+        (mh.msg_flags & MSG_TRUNC))
+        return 41;
+    if (mh.msg_controllen < CMSG_LEN(sizeof(int)))
+        return 42;
+
+    struct webkit_ipc_ool_header *hdr =
+        (struct webkit_ipc_ool_header *)packet;
+    struct webkit_ipc_attachment_info *info =
+        (struct webkit_ipc_attachment_info *)(packet + sizeof(*hdr));
+    if (hdr->magic != IPC_STRESS_MAGIC || hdr->seq != seq ||
+        hdr->attachment_count != 1 || info->type != 1 || info->index != seq)
+        return 43;
+
+    struct cmsghdr *cmsg = (struct cmsghdr *)control;
+    if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+        return 44;
+    memcpy(&got_fd, CMSG_DATA(cmsg), sizeof(got_fd));
+    if (got_fd < 0)
+        return 45;
+
+    rp = mmap(0, hdr->size, PROT_READ, MAP_SHARED, got_fd, 0);
+    if (rp == MAP_FAILED) {
+        close(got_fd);
+        return 46;
+    }
+
+    uint64 full = fnv64_bytes((uchar *)rp, hdr->size);
+    uint64 first = mainhtml_window_hash(rp, hdr->size, 0);
+    uint64 last = mainhtml_window_hash(rp, hdr->size,
+        hdr->size > 65536u ? hdr->size - 65536u : 0);
+    if (full != hdr->full_hash || first != hdr->first_hash ||
+        last != hdr->last_hash) {
+        munmap(rp, hdr->size);
+        close(got_fd);
+        return 47;
+    }
+    for (uint i = 0; i < hdr->size; i += 4093u) {
+        uchar want = yt_mainhtml_byte(i, seq, hdr->size);
+        if ((uchar)rp[i] != want) {
+            munmap(rp, hdr->size);
+            close(got_fd);
+            return 48;
+        }
+    }
+    if (hdr->size > 0) {
+        uint i = hdr->size - 1;
+        uchar want = yt_mainhtml_byte(i, seq, hdr->size);
+        if ((uchar)rp[i] != want) {
+            munmap(rp, hdr->size);
+            close(got_fd);
+            return 49;
+        }
+    }
+
+    munmap(rp, hdr->size);
+    close(got_fd);
+    return 0;
+}
+
+static void test_webkit_ool_seqpacket_mainhtml_sequence(void)
+{
+    const char *name = "WebKit OOL seqpacket current YouTube HTML sequence";
+    const uint sizes[] = {
+        WEBKIT_YT_HTML_SIZE,
+        WEBKIT_YT_HTML_TRACE_SIZE,
+        WEBKIT_YT_HTML_QUIET_SIZE,
+        WEBKIT_YT_HTML_TRACE_SIZE,
+        WEBKIT_YT_HTML_QUIET_SIZE,
+        WEBKIT_YT_HTML_SIZE,
+    };
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        close(sv[0]);
+        for (uint seq = 0; seq < sizeof(sizes) / sizeof(sizes[0]); seq++) {
+            if (recv_mainhtml_pre_message(sv[1], seq) < 0)
+                exit(50);
+            int rc = recv_mainhtml_ool_message(sv[1], seq);
+            if (rc != 0)
+                exit(rc);
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    for (uint seq = 0; seq < sizeof(sizes) / sizeof(sizes[0]); seq++) {
+        int fd = memfd_create_raw("webkit-mainhtml-seq", MFD_CLOEXEC);
+        char *p;
+        if (fd < 0) {
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "memfd_create failed");
+            return;
+        }
+        if (ftruncate(fd, sizes[seq]) < 0) {
+            close(fd);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "ftruncate failed");
+            return;
+        }
+        p = mmap(0, sizes[seq], PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (p == MAP_FAILED) {
+            close(fd);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "writer mmap failed");
+            return;
+        }
+        fill_mainhtml_payload(p, sizes[seq], seq);
+        if (send_mainhtml_pre_message(sv[0], seq) < 0 ||
+            send_mainhtml_ool_message(sv[0], fd, p, sizes[seq], seq) < 0) {
+            munmap(p, sizes[seq]);
+            close(fd);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "sendmsg sequence failed");
+            return;
+        }
+        munmap(p, sizes[seq]);
+        close(fd);
+    }
+
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
+static int send_webkit_boot_inline_message(int sock, uint seq, uint size)
+{
+    struct webkit_ipc_ool_header hdr;
+    struct iovec iov[2];
+    struct msghdr mh;
+    char *body = malloc(size ? size : 1);
+
+    if (body == NULL)
+        return -1;
+
+    fill_mainhtml_payload(body, size, seq);
+    hdr.magic = IPC_STRESS_MAGIC;
+    hdr.seq = seq;
+    hdr.size = size;
+    hdr.attachment_count = 0;
+    hdr.full_hash = fnv64_bytes((uchar *)body, size);
+    hdr.first_hash = mainhtml_window_hash(body, size, 0);
+    hdr.last_hash = mainhtml_window_hash(body, size,
+        size > 65536u ? size - 65536u : 0);
+
+    memset(&mh, 0, sizeof(mh));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = body;
+    iov[1].iov_len = size;
+    mh.msg_iov = iov;
+    mh.msg_iovlen = 2;
+
+    int want = (int)(sizeof(hdr) + size);
+    for (;;) {
+        int ret = sendmsg_raw(sock, &mh, MSG_DONTWAIT);
+        if (ret == want) {
+            free(body);
+            return 0;
+        }
+        if (ret == -EAGAIN) {
+            struct pollfd pfd;
+            pfd.fd = sock;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll_raw(&pfd, 1, 1000) > 0)
+                continue;
+        }
+        fprintf(2, "webkitabitest: boot inline send seq=%u size=%u ret=%d\n",
+                seq, size, ret);
+        free(body);
+        return -1;
+    }
+}
+
+static int recv_webkit_boot_inline_message(int sock, uint seq, uint size)
+{
+    struct webkit_ipc_ool_header hdr;
+    struct iovec iov[2];
+    struct msghdr mh;
+    char control[CMSG_SPACE(sizeof(int) * 4)];
+    char *body = malloc(size ? size : 1);
+    int rc = 0;
+
+    if (body == NULL)
+        return -1;
+
+    memset(&hdr, 0, sizeof(hdr));
+    memset(body, 0, size);
+    memset(control, 0, sizeof(control));
+    memset(&mh, 0, sizeof(mh));
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = body;
+    iov[1].iov_len = size;
+    mh.msg_iov = iov;
+    mh.msg_iovlen = 2;
+    mh.msg_control = control;
+    mh.msg_controllen = sizeof(control);
+
+    int got = recvmsg_raw(sock, &mh, MSG_CMSG_CLOEXEC);
+    if (got != (int)(sizeof(hdr) + size) || (mh.msg_flags & MSG_TRUNC) ||
+        mh.msg_controllen != 0) {
+        fprintf(2, "webkitabitest: boot inline recv seq=%u size=%u got=%d flags=0x%x controllen=%u\n",
+                seq, size, got, mh.msg_flags, mh.msg_controllen);
+        rc = 2;
+        goto out;
+    }
+    if (hdr.magic != IPC_STRESS_MAGIC || hdr.seq != seq ||
+        hdr.size != size || hdr.attachment_count != 0) {
+        rc = 3;
+        goto out;
+    }
+    if (hdr.full_hash != fnv64_bytes((uchar *)body, size) ||
+        hdr.first_hash != mainhtml_window_hash(body, size, 0) ||
+        hdr.last_hash != mainhtml_window_hash(body, size,
+            size > 65536u ? size - 65536u : 0)) {
+        rc = 4;
+        goto out;
+    }
+    for (uint i = 0; i < size; i += 4091u) {
+        if ((uchar)body[i] != yt_mainhtml_byte(i, seq, size)) {
+            rc = 5;
+            goto out;
+        }
+    }
+    if (size && (uchar)body[size - 1] != yt_mainhtml_byte(size - 1, seq, size))
+        rc = 6;
+
+out:
+    free(body);
+    return rc;
+}
+
+static int send_webkit_boot_ool_message(int sock, uint seq, uint size)
+{
+    int fd = memfd_create_raw("webkit-youtube-boot-ool", MFD_CLOEXEC);
+    char *p;
+    int rc = 0;
+
+    if (fd < 0)
+        return -1;
+    if (ftruncate(fd, size) < 0) {
+        close(fd);
+        return -2;
+    }
+    p = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        return -3;
+    }
+    fill_mainhtml_payload(p, size, seq);
+
+    for (;;) {
+        rc = send_mainhtml_ool_message(sock, fd, p, size, seq);
+        if (rc == 0)
+            break;
+        struct pollfd pfd;
+        pfd.fd = sock;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        if (poll_raw(&pfd, 1, 1000) <= 0)
+            break;
+    }
+
+    munmap(p, size);
+    close(fd);
+    return rc;
+}
+
+static void test_webkit_ool_seqpacket_youtube_boot_chain(void)
+{
+    const char *name = "WebKit OOL seqpacket YouTube boot chain";
+    struct {
+        uint size;
+        int ool;
+    } steps[] = {
+        { WEBKIT_YT_WEB_ANIMATIONS_SIZE, 0 },
+        { WEBKIT_YT_WEBCOMPONENTS_IPC_SIZE, 1 },
+        { WEBKIT_YT_SPF_SIZE, 0 },
+        { WEBKIT_YT_NETWORK_SIZE, 0 },
+        { WEBKIT_YT_CSS_IPC_SIZE, 1 },
+        { WEBKIT_YT_APP_JS_IPC_SIZE, 1 },
+        { WEBKIT_YT_POST_BOOT_IPC_SIZE, 1 },
+        { WEBKIT_YT_WEBCOMPONENTS_IPC_SIZE, 1 },
+        { WEBKIT_YT_WEB_ANIMATIONS_SIZE, 0 },
+    };
+    int sv[2];
+    int pid;
+    int status = 0;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fail(name, "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        close(sv[0]);
+        for (uint seq = 0; seq < sizeof(steps) / sizeof(steps[0]); seq++) {
+            if (recv_mainhtml_pre_message(sv[1], seq) < 0)
+                exit(60);
+            int rc = steps[seq].ool
+                ? recv_mainhtml_ool_message(sv[1], seq)
+                : recv_webkit_boot_inline_message(sv[1], seq, steps[seq].size);
+            if (rc != 0) {
+                fprintf(2, "webkitabitest: boot chain recv seq=%u size=%u ool=%d rc=%d\n",
+                        seq, steps[seq].size, steps[seq].ool, rc);
+                exit(61);
+            }
+        }
+        close(sv[1]);
+        exit(0);
+    }
+
+    close(sv[1]);
+    for (uint seq = 0; seq < sizeof(steps) / sizeof(steps[0]); seq++) {
+        int rc;
+        if (send_mainhtml_pre_message(sv[0], seq) < 0) {
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, "pre-message send failed");
+            return;
+        }
+        rc = steps[seq].ool
+            ? send_webkit_boot_ool_message(sv[0], seq, steps[seq].size)
+            : send_webkit_boot_inline_message(sv[0], seq, steps[seq].size);
+        if (rc < 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "send seq=%u size=%u ool=%d rc=%d",
+                     seq, steps[seq].size, steps[seq].ool, rc);
+            close(sv[0]);
+            waitpid(pid, &status, 0);
+            fail(name, why);
+            return;
+        }
+    }
+    close(sv[0]);
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fail(name, "reader process failed");
+        return;
+    }
+    pass(name);
+}
+
 static void test_vfs_cache_shape(void)
 {
     const char *name = "VFS cache-shape operations";
@@ -3465,70 +5314,56 @@ static void test_vfs_cache_shape(void)
     struct stat st;
     struct statfs sfs;
     char buf[4];
-
-    printf("TRACE: vfs-cache cleanup\n");
     unlink("__webkit_cache/a");
     unlink("__webkit_cache/b");
     unlink("__webkit_cache/renamed");
     unlink("__webkit_cache");
-    printf("TRACE: vfs-cache mkdir\n");
     mkdir("__webkit_cache");
-
-    printf("TRACE: vfs-cache open a\n");
     fd = open("__webkit_cache/a", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open nested file failed");
         return;
     }
-    printf("TRACE: vfs-cache write\n");
     if (write(fd, "cache", 5) != 5) {
         close(fd);
         fail(name, "write failed");
         return;
     }
-    printf("TRACE: vfs-cache fsync\n");
     if (fsync_raw(fd) < 0) {
         close(fd);
         fail(name, "fsync failed");
         return;
     }
-    printf("TRACE: vfs-cache fdatasync\n");
     if (fdatasync_raw(fd) < 0) {
         close(fd);
         fail(name, "fdatasync failed");
         return;
     }
-    printf("TRACE: vfs-cache ftruncate\n");
     if (ftruncate(fd, 8192) < 0) {
         close(fd);
         fail(name, "ftruncate failed");
         return;
     }
-    printf("TRACE: vfs-cache fstat\n");
     if (fstat(fd, &st) < 0 || st.st_size < 8192) {
         close(fd);
         fail(name, "fstat failed");
         return;
     }
-    printf("TRACE: vfs-cache fstatfs\n");
     if (fstatfs_raw(fd, &sfs) < 0) {
         close(fd);
         fail(name, "fstatfs failed");
         return;
     }
-    printf("TRACE: vfs-cache statfs\n");
     if (statfs_raw("__webkit_cache", &sfs) < 0) {
         close(fd);
         fail(name, "statfs failed");
         return;
     }
-    printf("TRACE: vfs-cache unlink-open\n");
     if (unlink("__webkit_cache/a") < 0) {
         close(fd);
         fail(name, "unlink while open failed");
         return;
     }
-    printf("TRACE: vfs-cache read-unlinked\n");
     lseek(fd, 0, SEEK_SET);
     memset(buf, 0, sizeof(buf));
     if (read(fd, buf, 4) != 4 || memcmp(buf, "cach", 4) != 0) {
@@ -3536,30 +5371,23 @@ static void test_vfs_cache_shape(void)
         fail(name, "open unlinked file lost contents");
         return;
     }
-    printf("TRACE: vfs-cache close-unlinked\n");
     close(fd);
-
-    printf("TRACE: vfs-cache open b\n");
     fd = open("__webkit_cache/b", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open rename source failed");
         return;
     }
     close(fd);
-    printf("TRACE: vfs-cache open renamed\n");
     fd = open("__webkit_cache/renamed", O_CREAT | O_RDWR);
     if (fd < 0) {
         fail(name, "open rename destination failed");
         return;
     }
     close(fd);
-    printf("TRACE: vfs-cache rename-over\n");
     if (rename("__webkit_cache/b", "__webkit_cache/renamed") < 0) {
         fail(name, "rename over existing failed");
         return;
     }
-
-    printf("TRACE: vfs-cache final cleanup\n");
     unlink("__webkit_cache/renamed");
     unlink("__webkit_cache");
     pass(name);
@@ -3571,7 +5399,8 @@ static void test_long_webkit_path_lstat(void)
     const char *path =
         "/.local/share/webkitgtk-4.1/MiniBrowser/databases/indexeddb/v1/"
         "https_www.youtube.com_0/"
-        "393640625DD26AE85875E2BD3E4B023F12F4202FBB07F0E527625D644200D965";
+        "393640625DD26AE85875E2BD3E4B023F12F4202FBB07F0E527625D644200D965."
+        "missing-for-abi-test";
     struct stat st;
     int ret;
 
@@ -3669,6 +5498,124 @@ static void test_mmap_file_truncate(void)
     munmap(p, 8192);
     close(fd);
     unlink("__webkit_mmap_file");
+    pass(name);
+}
+
+static int ranges_overlap(const void *a, uint64 alen, const void *b, uint64 blen)
+{
+    uint64 as = (uint64)a;
+    uint64 bs = (uint64)b;
+    uint64 ae = as + alen;
+    uint64 be = bs + blen;
+
+    return ae > as && be > bs && as < be && bs < ae;
+}
+
+static int check_pattern(const unsigned char *p, uint len, unsigned char seed)
+{
+    for (uint i = 0; i < len; i++) {
+        unsigned char want = (unsigned char)(seed + i * 13u);
+        if (p[i] != want)
+            return -1;
+    }
+    return 0;
+}
+
+static void fill_pattern(unsigned char *p, uint len, unsigned char seed)
+{
+    for (uint i = 0; i < len; i++)
+        p[i] = (unsigned char)(seed + i * 13u);
+}
+
+static void test_wayland_shm_pool_resize_mmap(void)
+{
+    const char *name = "Wayland shm pool mmap resize preserves heap";
+    static const uint sizes[] = {
+        4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768,
+    };
+    int fd = -1;
+    char *mapping = MAP_FAILED;
+    uint mapping_size = 0;
+    unsigned char *guard_a;
+    unsigned char *guard_b;
+
+    guard_a = malloc(65536);
+    guard_b = malloc(65536);
+    if (!guard_a || !guard_b) {
+        free(guard_a);
+        free(guard_b);
+        fail(name, "heap allocation failed");
+        return;
+    }
+    fill_pattern(guard_a, 65536, 0x31);
+    fill_pattern(guard_b, 65536, 0x79);
+
+    fd = memfd_create_raw("wayland-shm-resize", MFD_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]) < 0) {
+        if (fd >= 0)
+            close(fd);
+        free(guard_a);
+        free(guard_b);
+        fail(name, "memfd setup failed");
+        return;
+    }
+
+    mapping = mmap(0, sizes[0], PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapping == MAP_FAILED) {
+        close(fd);
+        free(guard_a);
+        free(guard_b);
+        fail(name, "initial mmap failed");
+        return;
+    }
+    mapping_size = sizes[0];
+    mapping[0] = 'w';
+    mapping[mapping_size - 1] = '0';
+
+    for (uint i = 1; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        char *new_mapping;
+
+        new_mapping = mmap(0, sizes[i], PROT_READ | PROT_WRITE,
+                           MAP_SHARED, fd, 0);
+        if (new_mapping == MAP_FAILED) {
+            munmap(mapping, mapping_size);
+            close(fd);
+            free(guard_a);
+            free(guard_b);
+            fail(name, "resize mmap failed");
+            return;
+        }
+        if (ranges_overlap(new_mapping, sizes[i], guard_a, 65536) ||
+            ranges_overlap(new_mapping, sizes[i], guard_b, 65536)) {
+            munmap(new_mapping, sizes[i]);
+            munmap(mapping, mapping_size);
+            close(fd);
+            free(guard_a);
+            free(guard_b);
+            fail(name, "mmap overlapped live heap allocation");
+            return;
+        }
+        new_mapping[0] = 'W';
+        new_mapping[sizes[i] - 1] = (char)('0' + i);
+        munmap(mapping, mapping_size);
+        mapping = new_mapping;
+        mapping_size = sizes[i];
+
+        if (check_pattern(guard_a, 65536, 0x31) < 0 ||
+            check_pattern(guard_b, 65536, 0x79) < 0) {
+            munmap(mapping, mapping_size);
+            close(fd);
+            free(guard_a);
+            free(guard_b);
+            fail(name, "heap sentinel changed after resize mmap");
+            return;
+        }
+    }
+
+    munmap(mapping, mapping_size);
+    close(fd);
+    free(guard_a);
+    free(guard_b);
     pass(name);
 }
 
@@ -3772,6 +5719,81 @@ static void test_waitpid_signal_status(void)
     pass(name);
 }
 
+static void touch_x86_fpu_state(void)
+{
+#if defined(__x86_64__)
+    asm volatile("xorps %%xmm0, %%xmm0\n\t"
+                 "addps %%xmm0, %%xmm0"
+                 :
+                 :
+                 : "xmm0", "memory");
+#endif
+}
+
+static void test_fpu_signal_exit_owner_save(void)
+{
+    const char *name = "FPU owner signal exit save";
+    int ready[2];
+    int pid;
+    int status = 0;
+    int got;
+    char ch = 'x';
+
+#if !defined(__x86_64__)
+    skip(name, "x86_64 lazy-FPU regression test");
+    return;
+#endif
+
+    if (pipe(ready) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(ready[0]);
+        close(ready[1]);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        close(ready[0]);
+        touch_x86_fpu_state();
+        write(ready[1], &ch, 1);
+        close(ready[1]);
+        for (;;)
+            touch_x86_fpu_state();
+    }
+
+    close(ready[1]);
+    if (read(ready[0], &ch, 1) != 1) {
+        close(ready[0]);
+        kill(pid, SIGTERM);
+        waitpid(pid, &status, 0);
+        fail(name, "child did not report FPU readiness");
+        return;
+    }
+    close(ready[0]);
+
+    if (kill(pid, SIGTERM) < 0) {
+        waitpid(pid, &status, 0);
+        fail(name, "kill failed");
+        return;
+    }
+
+    got = waitpid(pid, &status, 0);
+    if (got != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
+        char why[96];
+        snprintf(why, sizeof(why), "got=%d pid=%d status=0x%x termsig=%d",
+                 got, pid, status, WTERMSIG(status));
+        fail(name, why);
+        return;
+    }
+
+    pass(name);
+}
+
 static void test_timerfd_poll(void)
 {
     const char *name = "timerfd poll timeout";
@@ -3859,6 +5881,106 @@ static void test_futex_timeout(void)
     pass(name);
 }
 
+static void test_futex_requeue_return_and_wake(void)
+{
+    const char *name = "futex requeue return and wake";
+    volatile uint32 *words;
+    int ready[2];
+    int fd;
+    int pid;
+    int rc;
+    int status = 0;
+    char ch = 'r';
+    struct timespec settle = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
+
+    fd = memfd_create_raw("futex-requeue", MFD_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, WEBKITABI_PAGE_SIZE) < 0) {
+        if (fd >= 0)
+            close(fd);
+        fail(name, "shared memfd setup failed");
+        return;
+    }
+
+    words = mmap(0, WEBKITABI_PAGE_SIZE, PROT_READ | PROT_WRITE,
+                 MAP_SHARED, fd, 0);
+    close(fd);
+    if (words == MAP_FAILED) {
+        fail(name, "shared futex mapping failed");
+        return;
+    }
+    words[0] = 0;
+    words[1] = 0;
+
+    if (pipe(ready) < 0) {
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "pipe failed");
+        return;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(ready[0]);
+        close(ready[1]);
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        close(ready[0]);
+        write(ready[1], &ch, 1);
+        close(ready[1]);
+        rc = futex_raw((uint32 *)&words[0], FUTEX_WAIT, 0, 0, 0, 0);
+        exit(rc == 0 ? 0 : 2);
+    }
+
+    close(ready[1]);
+    if (read(ready[0], &ch, 1) != 1) {
+        close(ready[0]);
+        kill(pid, 15);
+        waitpid(pid, &status, 0);
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "child did not report readiness");
+        return;
+    }
+    close(ready[0]);
+
+    nanosleep(&settle, 0);
+
+    rc = futex_raw((uint32 *)&words[0], FUTEX_REQUEUE, 0,
+                   (const struct timespec *)1,
+                   (uint32 *)&words[1], 0);
+    if (rc != 1) {
+        futex_raw((uint32 *)&words[1], FUTEX_WAKE, 1, 0, 0, 0);
+        futex_raw((uint32 *)&words[0], FUTEX_WAKE, 1, 0, 0, 0);
+        kill(pid, 15);
+        waitpid(pid, &status, 0);
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "requeue did not report moved waiter");
+        return;
+    }
+
+    rc = futex_raw((uint32 *)&words[1], FUTEX_WAKE, 1, 0, 0, 0);
+    if (rc != 1) {
+        futex_raw((uint32 *)&words[0], FUTEX_WAKE, 1, 0, 0, 0);
+        kill(pid, 15);
+        waitpid(pid, &status, 0);
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "target wake did not find requeued waiter");
+        return;
+    }
+
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        munmap((void *)words, WEBKITABI_PAGE_SIZE);
+        fail(name, "child did not leave futex wait cleanly");
+        return;
+    }
+
+    munmap((void *)words, WEBKITABI_PAGE_SIZE);
+    pass(name);
+}
+
 static void test_random_devices(void)
 {
     const char *name = "/dev/random and /dev/urandom";
@@ -3879,6 +6001,216 @@ static void test_random_devices(void)
         return;
     }
     close(fd);
+    pass(name);
+}
+
+static void test_cdev_fcntl_setfl(void)
+{
+    const char *name = "cdev fcntl setfl";
+    int fd = open("/dev/dsp", O_RDWR);
+    if (fd < 0) {
+        skip(name, "/dev/dsp unavailable");
+        return;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        close(fd);
+        fail(name, "F_GETFL failed");
+        return;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(fd);
+        fail(name, "F_SETFL O_NONBLOCK failed");
+        return;
+    }
+    int new_flags = fcntl(fd, F_GETFL, 0);
+    if ((new_flags & O_NONBLOCK) == 0) {
+        close(fd);
+        fail(name, "O_NONBLOCK did not stick");
+        return;
+    }
+
+    char sample = 0x5a;
+    if (write(fd, &sample, 1) != 1) {
+        close(fd);
+        fail(name, "write after F_SETFL failed");
+        return;
+    }
+
+    close(fd);
+    pass(name);
+}
+
+static void test_oss_epoll_virtual_write_ready(void)
+{
+    const char *name = "OSS virtual PCM epoll write readiness";
+    static char fill[OSS_VIRTUAL_FIFO_BYTES];
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    struct pollfd pfd;
+    int fd = open("/dev/dsp", O_RDWR);
+    int epfd = -1;
+    int value;
+    int rc;
+
+    if (fd < 0) {
+        skip(name, "/dev/dsp unavailable");
+        return;
+    }
+
+    value = AFMT_U8;
+    if (ioctl(fd, SNDCTL_DSP_SETFMT, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_SETFMT failed");
+        return;
+    }
+    value = 1;
+    if (ioctl(fd, SNDCTL_DSP_CHANNELS, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_CHANNELS failed");
+        return;
+    }
+    value = 8000;
+    if (ioctl(fd, SNDCTL_DSP_SPEED, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_SPEED failed");
+        return;
+    }
+
+    if (ioctl(fd, SNDCTL_DSP_RESET, 0) < 0 ||
+        write(fd, fill, sizeof(fill)) != (int)sizeof(fill)) {
+        close(fd);
+        fail(name, "failed to fill virtual PCM FIFO");
+        return;
+    }
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLOUT;
+    if (poll_raw(&pfd, 1, 1000) <= 0 || !(pfd.revents & POLLOUT)) {
+        close(fd);
+        fail(name, "poll did not rediscover writable virtual PCM");
+        return;
+    }
+
+    if (ioctl(fd, SNDCTL_DSP_RESET, 0) < 0 ||
+        write(fd, fill, sizeof(fill)) != (int)sizeof(fill)) {
+        close(fd);
+        fail(name, "failed to refill virtual PCM FIFO");
+        return;
+    }
+
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        close(fd);
+        fail(name, "epoll_create1 failed");
+        return;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT;
+    ev.data = 0x4f535350434dULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+        close(epfd);
+        close(fd);
+        fail(name, "epoll_ctl add failed");
+        return;
+    }
+
+    memset(&out, 0, sizeof(out));
+    rc = epoll_pwait_raw(epfd, &out, 1, 1000);
+    if (rc != 1 || !(out.events & EPOLLOUT) || out.data != ev.data) {
+        close(epfd);
+        close(fd);
+        fail(name, "epoll did not report virtual PCM write readiness");
+        return;
+    }
+
+    ioctl(fd, SNDCTL_DSP_RESET, 0);
+    close(epfd);
+    close(fd);
+    pass(name);
+}
+
+static uint64 monotonic_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime_raw(CLOCK_MONOTONIC, &ts) < 0)
+        return 0;
+    return (uint64)ts.tv_sec * 1000ULL + (uint64)ts.tv_nsec / 1000000ULL;
+}
+
+static void test_oss_nonblock_write_backpressure(void)
+{
+    const char *name = "OSS virtual PCM nonblock write backpressure";
+    static char fill[OSS_VIRTUAL_FIFO_BYTES];
+    static char extra[4096];
+    int fd = open("/dev/dsp", O_RDWR);
+    int value;
+
+    if (fd < 0) {
+        skip(name, "/dev/dsp unavailable");
+        return;
+    }
+
+    value = AFMT_U8;
+    if (ioctl(fd, SNDCTL_DSP_SETFMT, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_SETFMT failed");
+        return;
+    }
+    value = 1;
+    if (ioctl(fd, SNDCTL_DSP_CHANNELS, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_CHANNELS failed");
+        return;
+    }
+    value = 8000;
+    if (ioctl(fd, SNDCTL_DSP_SPEED, &value) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_SPEED failed");
+        return;
+    }
+    if (ioctl(fd, SNDCTL_DSP_RESET, 0) < 0) {
+        close(fd);
+        fail(name, "SNDCTL_DSP_RESET failed");
+        return;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(fd);
+        fail(name, "F_SETFL O_NONBLOCK failed");
+        return;
+    }
+
+    if (write(fd, fill, sizeof(fill)) != (int)sizeof(fill)) {
+        close(fd);
+        fail(name, "failed to fill virtual PCM FIFO");
+        return;
+    }
+
+    uint64 start = monotonic_ms();
+    int rc = write(fd, extra, sizeof(extra));
+    uint64 elapsed = monotonic_ms() - start;
+
+    ioctl(fd, SNDCTL_DSP_RESET, 0);
+    close(fd);
+
+    if (rc == (int)sizeof(extra)) {
+        fail(name, "nonblocking write slept until full request completed");
+        return;
+    }
+    if (rc < 0 && rc != -EAGAIN) {
+        fail(name, "nonblocking write returned unexpected error");
+        return;
+    }
+    if (elapsed > 100) {
+        fail(name, "nonblocking write took too long");
+        return;
+    }
+
     pass(name);
 }
 
@@ -4111,14 +6443,90 @@ int main(int argc, char **argv)
         int fd = atoi(argv[2]);
         exit(check_fd_closed_after_exec(fd) == 0 ? 0 : 1);
     }
+    if (argc == 2 && strcmp(argv[1], "stream-page") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_webkit_stream_page_chunk_transfer();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "ool-html") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_webkit_ool_seqpacket_html_mapping();
+        test_webkit_ool_seqpacket_mainhtml_sequence();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "ool-mainhtml") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_webkit_ool_seqpacket_mainhtml_sequence();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "ool-youtube-chain") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_seqpacket_recvmsg_dontwait_empty();
+        test_webkit_ool_seqpacket_youtube_boot_chain();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "inline-html") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_webkit_inline_seqpacket_html_chunks();
+        test_webkit_inline_iov_html_order();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "epoll") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_epoll_level_read_redelivery();
+        test_epoll_ctl_linux_item_semantics();
+        test_epoll_oneshot_rearm();
+        test_nested_epoll_level_read_redelivery();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "fpu") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_fpu_signal_exit_owner_save();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "seq-wake") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_webkit_seqpacket_recvmmsg_epollout_wake();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "oss") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_cdev_fcntl_setfl();
+        test_oss_epoll_virtual_write_ready();
+        test_oss_nonblock_write_backpressure();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
 
     printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
 
     test_socketpair_stream();
     test_socketpair_seqpacket_policy();
+    test_seqpacket_recvmsg_dontwait_empty();
     test_socket_nonblock_poll();
     test_socket_nonblock_connect();
     test_socket_nonblock_connect_epoll();
+    test_epoll_level_read_redelivery();
+    test_epoll_ctl_linux_item_semantics();
+    test_epoll_oneshot_rearm();
+    test_nested_epoll_level_read_redelivery();
     test_socket_sol_options();
     test_socket_cloexec_exec();
     test_scm_rights_batch();
@@ -4132,6 +6540,9 @@ int main(int argc, char **argv)
     test_unix_sendmmsg_large_stream();
     test_scm_rights_process_lifetime();
     test_scm_rights_stream_barriers();
+    test_wayland_stream_wrapped_iov_batch();
+    test_wayland_stream_scm_batch();
+    test_unix_stream_short_read_stops_iov();
     test_ipc_stream_stress();
     test_ipc_seqpacket_stress();
     test_webkit_large_inline_ipc(SOCK_SEQPACKET);
@@ -4140,6 +6551,7 @@ int main(int argc, char **argv)
     test_webkit_seqpacket_chunk_burst_queue();
     test_webkit_seqpacket_rebased_burst_queue();
     test_webkit_seqpacket_full_buffer_backpressure();
+    test_webkit_seqpacket_recvmmsg_epollout_wake();
     test_webkit_stream_page_chunk_transfer();
     test_parent_child_socket_handoff();
     test_fd_pressure_cleanup();
@@ -4147,17 +6559,28 @@ int main(int argc, char **argv)
     test_native_memfd_syscall_alias();
     test_large_memfd_shared_mapping();
     test_large_memfd_scm_resource_mapping();
+    test_webkit_inline_seqpacket_html_chunks();
+    test_webkit_inline_iov_html_order();
+    test_webkit_ool_seqpacket_html_mapping();
+    test_webkit_ool_seqpacket_mainhtml_sequence();
+    test_webkit_ool_seqpacket_youtube_boot_chain();
     test_webkit_ool_seqpacket_resource_mapping();
     test_vfs_cache_shape();
     test_long_webkit_path_lstat();
     test_advisory_locks();
     test_mmap_file_truncate();
+    test_wayland_shm_pool_resize_mmap();
     test_mremap_failure_errno();
     test_waitpid_reap();
     test_waitpid_signal_status();
+    test_fpu_signal_exit_owner_save();
     test_timerfd_poll();
     test_futex_timeout();
+    test_futex_requeue_return_and_wake();
     test_random_devices();
+    test_cdev_fcntl_setfl();
+    test_oss_epoll_virtual_write_ready();
+    test_oss_nonblock_write_backpressure();
     test_executable_memory_policy();
     test_memory_locking_abi();
     test_procfs_meminfo_webkit_parse();

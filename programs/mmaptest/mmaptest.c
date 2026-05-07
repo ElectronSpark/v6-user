@@ -608,6 +608,104 @@ void test_mprotect_none(void) {
     printf("OK\n");
 }
 
+static void write_ret42_code(char *p) {
+    unsigned char code[] = {
+        0xb8, 0x2a, 0x00, 0x00, 0x00, /* mov $42,%eax */
+        0xc3                                /* ret */
+    };
+    memcpy(p, code, sizeof(code));
+}
+
+/*
+ * test_mmap_exec_rw_to_rx - JIT-style permission transition: generate code
+ * into RW anonymous memory, mprotect it RX, then execute it.
+ */
+void test_mmap_exec_rw_to_rx(void) {
+    printf("test_mmap_exec_rw_to_rx: ");
+
+    char *p = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - mmap\n");
+        exit(1);
+    }
+
+    write_ret42_code(p);
+    if (mprotect(p, 4096, PROT_READ | PROT_EXEC) != 0) {
+        printf("FAIL - mprotect RX\n");
+        exit(1);
+    }
+
+    int (*fn)(void) = (int (*)(void))p;
+    if (fn() != 42) {
+        printf("FAIL - executable mapping returned wrong value\n");
+        exit(1);
+    }
+
+    munmap(p, 4096);
+    printf("OK\n");
+}
+
+/*
+ * test_mmap_exec_rwx - Linux-compatible RWX anonymous mmap.  JavaScriptCore's
+ * POSIX executable allocator reserves its JIT pool this way on non-Darwin.
+ */
+void test_mmap_exec_rwx(void) {
+    printf("test_mmap_exec_rwx: ");
+
+    char *p = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - mmap RWX\n");
+        exit(1);
+    }
+
+    write_ret42_code(p);
+
+    int (*fn)(void) = (int (*)(void))p;
+    if (fn() != 42) {
+        printf("FAIL - RWX mapping returned wrong value\n");
+        exit(1);
+    }
+
+    munmap(p, 4096);
+    printf("OK\n");
+}
+
+/*
+ * test_mmap_fixed_noreplace - MAP_FIXED_NOREPLACE must fail rather than
+ * clobbering an existing mapping.
+ */
+void test_mmap_fixed_noreplace(void) {
+    printf("test_mmap_fixed_noreplace: ");
+
+    char *p = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - initial mmap\n");
+        exit(1);
+    }
+    p[0] = 'A';
+
+    char *q = mmap(p, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    /*
+     * The raw xv6 syscall wrapper returns negative errno values directly,
+     * while libc-style callers may see MAP_FAILED with errno set.
+     */
+    if (q != MAP_FAILED && (int64)q >= 0) {
+        printf("FAIL - MAP_FIXED_NOREPLACE replaced mapping\n");
+        exit(1);
+    }
+    if (p[0] != 'A') {
+        printf("FAIL - existing mapping was clobbered\n");
+        exit(1);
+    }
+
+    munmap(p, 4096);
+    printf("OK\n");
+}
+
 /*
  * test_unaligned_range_rounding - xv6 accepts unaligned mprotect/munmap
  * addresses.  The rounded kernel range must cover the original byte range,
@@ -1337,6 +1435,9 @@ int main(int argc, char *argv[]) {
 
     test_mprotect_read_write();
     test_mprotect_none();
+    test_mmap_exec_rw_to_rx();
+    test_mmap_exec_rwx();
+    test_mmap_fixed_noreplace();
     test_unaligned_range_rounding();
     test_mmap_after_unaligned_brk();
     test_mremap_grow();

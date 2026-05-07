@@ -139,3 +139,5 @@ entry("netconf");
 # Power management
 entry("poweroff");
 entry("reboot");
+
+print ".section .note.GNU-stack,\"\",\@progbits\n";
