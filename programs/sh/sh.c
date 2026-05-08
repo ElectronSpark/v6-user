@@ -21,20 +21,27 @@
 #include <sys/types.h>
 #include <sys/termios.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <curses.h>
 #include <pwd.h>
-extern int getdents(int fd, void *dirp, int count);
 extern char **environ;
 static int exec(const char *path, char **argv) { return execve(path, argv, environ); }
+static int getdents(int fd, void *dirp, int count) {
+    return (int)syscall(SYS_getdents64, fd, dirp, (size_t)count);
+}
 static inline void waitgdb(void) {
+#if defined(__riscv)
     asm volatile("li a0, 0\n\tebreak" ::: "a0", "memory");
+#endif
 }
 static inline void waitgdb_stopentry(void) {
+#if defined(__riscv)
     asm volatile("li a0, 1\n\tebreak" ::: "a0", "memory");
+#endif
 }
 #else
 #include "user.h"
@@ -234,7 +241,6 @@ static int orig_termios_saved;
 static int raw_mode;
 #ifdef USE_NCURSES_SHELL
 static int ncurses_active;
-static int ncurses_initialized;
 #endif
 
 // Current working directory (for prompt)
@@ -549,6 +555,7 @@ static void term_write(const char *s, int n) {
             if (ch == '\r') {
                 int y, x;
                 getyx(stdscr, y, x);
+                (void)x;
                 move(y, 0);
             } else if (ch == '\b') {
                 int y, x;
@@ -563,7 +570,8 @@ static void term_write(const char *s, int n) {
         return;
     }
 #endif
-    write(1, s, n);
+    if (write(1, s, n) < 0) {
+    }
 }
 
 static void term_putc(char c) { term_write(&c, 1); }
@@ -1514,10 +1522,8 @@ static void builtin_history(void) {
     }
 }
 
+#ifndef USE_NCURSES_SHELL
 static char **build_exec_envp(void) {
-#ifdef USE_NCURSES_SHELL
-    return environ;
-#else
     static char env_storage[MAX_ENV_VARS][MAX_ENV_NAME + MAX_ENV_VALUE + 2];
     static char *envp[MAX_ENV_VARS + 1];
     int out = 0;
@@ -1541,14 +1547,22 @@ static char **build_exec_envp(void) {
     }
     envp[out] = 0;
     return envp;
-#endif
 }
+#endif
 
 static int shell_exec(char *path, char **argv) {
 #ifdef USE_NCURSES_SHELL
     return exec(path, argv);
 #else
     return exec_with_env(path, argv, build_exec_envp());
+#endif
+}
+
+static int shell_fork(void) {
+#ifdef USE_NCURSES_SHELL
+    return fork();
+#else
+    return vfork();
 #endif
 }
 
@@ -1606,7 +1620,8 @@ static void exec_with_path(char *cmd, char **argv) {
 static void run_pipe_left(struct cmd *cmd, int *p) __attribute__((noreturn));
 static void run_pipe_left(struct cmd *cmd, int *p) {
     close(1);
-    dup(p[1]);
+    if (dup(p[1]) < 0)
+        panic("dup");
     close(p[0]);
     close(p[1]);
     runcmd(cmd);
@@ -1615,7 +1630,8 @@ static void run_pipe_left(struct cmd *cmd, int *p) {
 static void run_pipe_right(struct cmd *cmd, int *p) __attribute__((noreturn));
 static void run_pipe_right(struct cmd *cmd, int *p) {
     close(0);
-    dup(p[0]);
+    if (dup(p[0]) < 0)
+        panic("dup");
     close(p[0]);
     close(p[1]);
     runcmd(cmd);
@@ -1640,6 +1656,7 @@ void runcmd(struct cmd *cmd) {
     switch (cmd->type) {
     default:
         panic("runcmd");
+        break;
 
     case EXEC:
         ecmd = (struct execcmd *)cmd;
@@ -1686,9 +1703,9 @@ void runcmd(struct cmd *cmd) {
 
     case LIST:
         lcmd = (struct listcmd *)cmd;
-        pid = vfork();
+        pid = shell_fork();
         if (pid < 0)
-            panic("vfork");
+            panic("fork");
         if (pid == 0)
             runcmd(lcmd->left);
         wait(0);
@@ -1699,14 +1716,14 @@ void runcmd(struct cmd *cmd) {
         pcmd = (struct pipecmd *)cmd;
         if (pipe(p) < 0)
             panic("pipe");
-        pid = vfork();
+        pid = shell_fork();
         if (pid < 0)
-            panic("vfork");
+            panic("fork");
         if (pid == 0)
             run_pipe_left(pcmd->left, p);
-        pid = vfork();
+        pid = shell_fork();
         if (pid < 0)
-            panic("vfork");
+            panic("fork");
         if (pid == 0)
             run_pipe_right(pcmd->right, p);
         close(p[0]);
@@ -1717,9 +1734,9 @@ void runcmd(struct cmd *cmd) {
 
     case BACK:
         bcmd = (struct backcmd *)cmd;
-        pid = vfork();
+        pid = shell_fork();
         if (pid < 0)
-            panic("vfork");
+            panic("fork");
         if (pid == 0)
             runcmd(bcmd->cmd);
         break;
@@ -1745,8 +1762,32 @@ int getcmd(char *buf, int nbuf) {
 // Returns:  0 = keep going,  1 = "exit" was requested,  -1 = error
 // =====================================================================
 
+static int line_has_control_operator(const char *s) {
+    int quote = 0;
+
+    for (; *s; s++) {
+        if (*s == '\\' && s[1] != 0) {
+            s++;
+            continue;
+        }
+        if (quote) {
+            if (*s == quote)
+                quote = 0;
+            continue;
+        }
+        if (*s == '\'' || *s == '"') {
+            quote = *s;
+            continue;
+        }
+        if (strchr("|&;<>()", *s) != 0)
+            return 1;
+    }
+    return 0;
+}
+
 static int run_line(char *buf, int interactive) {
     static char expanded_buf[512];
+    int simple_builtin_line;
 
     int len = strlen(buf);
     // Ensure the line ends with '\n' (parsecmd and builtins expect it)
@@ -1766,8 +1807,10 @@ static int run_line(char *buf, int interactive) {
             return 0;
     }
 
+    simple_builtin_line = !line_has_control_operator(buf);
+
     // ---- Built-in: cd ----
-    if (buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ') {
+    if (simple_builtin_line && buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ') {
         buf[strlen(buf) - 1] = 0; // chop \n
         char *path = buf + 3;
         char *expanded = expand_env_vars(path);
@@ -1779,7 +1822,7 @@ static int run_line(char *buf, int interactive) {
     }
 
     // ---- Built-in: ls ----
-    if (buf[0] == 'l' && buf[1] == 's' &&
+    if (simple_builtin_line && buf[0] == 'l' && buf[1] == 's' &&
         (buf[2] == '\n' || buf[2] == ' ')) {
         buf[strlen(buf) - 1] = 0;
         if (buf[2] == 0 || buf[3] == 0)
@@ -1790,21 +1833,21 @@ static int run_line(char *buf, int interactive) {
     }
 
     // ---- Built-in: history ----
-    if (strncmp_local(buf, "history", 7) == 0 &&
+    if (simple_builtin_line && strncmp_local(buf, "history", 7) == 0 &&
         (buf[7] == '\n' || buf[7] == 0)) {
         builtin_history();
         return 0;
     }
 
     // ---- Built-in: env ----
-    if (strncmp_local(buf, "env", 3) == 0 &&
+    if (simple_builtin_line && strncmp_local(buf, "env", 3) == 0 &&
         (buf[3] == '\n' || buf[3] == 0)) {
         env_list();
         return 0;
     }
 
     // ---- Built-in: export VAR=value ----
-    if (strncmp_local(buf, "export ", 7) == 0) {
+    if (simple_builtin_line && strncmp_local(buf, "export ", 7) == 0) {
         buf[strlen(buf) - 1] = 0;
         char *arg = buf + 7;
         while (*arg == ' ')
@@ -1830,7 +1873,7 @@ static int run_line(char *buf, int interactive) {
     }
 
     // ---- Built-in: unset ----
-    if (strncmp_local(buf, "unset ", 6) == 0) {
+    if (simple_builtin_line && strncmp_local(buf, "unset ", 6) == 0) {
         buf[strlen(buf) - 1] = 0;
         char *name = buf + 6;
         while (*name == ' ')
@@ -1840,7 +1883,7 @@ static int run_line(char *buf, int interactive) {
     }
 
     // ---- Built-in: echo (with expansion) ----
-    if (strncmp_local(buf, "echo ", 5) == 0) {
+    if (simple_builtin_line && strncmp_local(buf, "echo ", 5) == 0) {
         buf[strlen(buf) - 1] = 0;
         char *expanded = expand_env_vars(buf + 5);
         printf("%s\n", expanded);
@@ -1848,7 +1891,7 @@ static int run_line(char *buf, int interactive) {
     }
 
     // ---- Built-in: exit ----
-    if (strncmp_local(buf, "exit", 4) == 0 &&
+    if (simple_builtin_line && strncmp_local(buf, "exit", 4) == 0 &&
         (buf[4] == '\n' || buf[4] == 0))
         return 1;
 
@@ -1926,11 +1969,7 @@ static int run_line(char *buf, int interactive) {
         }
     } else {
         // Non-interactive: simpler fork+exec without job control
-    #ifdef USE_NCURSES_SHELL
-        pid = vfork();
-    #else
         pid = fork();
-    #endif
         if (pid < 0)
             panic("fork");
         if (pid == 0)
