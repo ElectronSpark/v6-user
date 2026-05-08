@@ -5,12 +5,44 @@
  * Tests that:
  * 1. vfork() creates a child that shares address space with parent
  * 2. Parent blocks until child calls exec or exit
- * 3. Child can modify parent's stack (since they share address space)
+ * 3. Child can modify parent's globals before exit/exec
  */
 
 #include "user.h"
+#include "kernel/inc/syscall.h"
 
 volatile int shared_var = 0;
+volatile int sequence = 0;
+char *echo_argv[] = {"echo", "Child exec'd successfully", 0};
+
+static inline __attribute__((always_inline)) long
+raw_exec_no_stack(const char *path, char *const argv[])
+{
+    long ret;
+    register long rax asm("rax") = SYS_exec;
+    register long rdi asm("rdi") = (long)path;
+    register long rsi asm("rsi") = (long)argv;
+
+    asm volatile("syscall"
+                 : "+r"(rax)
+                 : "r"(rdi), "r"(rsi)
+                 : "rcx", "r11", "memory");
+    ret = rax;
+    return ret;
+}
+
+static inline __attribute__((always_inline, noreturn)) void
+raw_exit_no_stack(int status)
+{
+    register long rax asm("rax") = SYS_exit;
+    register long rdi asm("rdi") = status;
+
+    asm volatile("syscall\n\tud2"
+                 :
+                 : "r"(rax), "r"(rdi)
+                 : "rcx", "r11", "memory");
+    __builtin_unreachable();
+}
 
 void test_vforkexit(void) {
     printf("=== Test 1: vfork with exit ===\n");
@@ -25,11 +57,8 @@ void test_vforkexit(void) {
     }
 
     if (pid == 0) {
-        // Child: modify shared variable, then exit
-        printf("Child: modifying shared_var\n");
         shared_var = 42;
-        printf("Child: shared_var = %d, calling exit\n", shared_var);
-        exit(0);
+        raw_exit_no_stack(0);
     }
 
     // Parent: should see child's modification
@@ -61,13 +90,9 @@ void test_vfork_exec(void) {
     }
 
     if (pid == 0) {
-        // Child: modify variable, then exec
         shared_var = 200;
-        printf("Child: shared_var = %d, calling exec echo\n", shared_var);
-        char *argv[] = {"echo", "Child exec'd successfully", 0};
-        exec("echo", argv);
-        printf("FAIL: exec failed\n");
-        exit(1);
+        raw_exec_no_stack("/bin/echo", echo_argv);
+        raw_exit_no_stack(1);
     }
 
     // Parent: should see child's modification before exec
@@ -83,13 +108,17 @@ void test_vfork_exec(void) {
     int status;
     wait(&status);
     printf("Child exited with status %d\n", status);
+    if (status != 0) {
+        printf("FAIL: exec child should exit 0\n");
+        exit(1);
+    }
     printf("Test 2 passed!\n\n");
 }
 
 void test_vfork_ordering(void) {
     printf("=== Test 3: vfork parent blocks until child finishes ===\n");
 
-    volatile int sequence = 0;
+    sequence = 0;
 
     int pid = vfork();
     if (pid < 0) {
@@ -98,10 +127,8 @@ void test_vfork_ordering(void) {
     }
 
     if (pid == 0) {
-        // Child runs first
         sequence = 1;
-        printf("Child: set sequence = %d\n", sequence);
-        exit(0);
+        raw_exit_no_stack(0);
     }
 
     // Parent: sequence should already be 1 because parent was blocked
