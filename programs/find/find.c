@@ -1,10 +1,60 @@
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#else
 #include "kernel/inc/types.h"
 #include "kernel/inc/vfs/stat.h"
 #include "user/user.h"
 #include "kernel/inc/vfs/xv6fs/ondisk.h"
 #include "kernel/inc/vfs/fcntl.h"
+#endif
 
 int find(char *path, char *name) {
+#ifdef HOST_LIBC_PROGRAM
+    DIR *dir;
+    struct dirent *de;
+    struct stat st;
+    int status = 0;
+
+    if (lstat(path, &st) < 0) {
+        fprintf(2, "find: cannot stat %s\n", path);
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        fprintf(2, "find: %s is not a directory\n", path);
+        return -1;
+    }
+
+    dir = opendir(path);
+    if (dir == 0) {
+        fprintf(2, "find: cannot open %s\n", path);
+        return -1;
+    }
+
+    while ((de = readdir(dir)) != 0) {
+        char child[MAXPATH];
+
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+            continue;
+        if (snprintf(child, sizeof(child), "%s/%s", path, de->d_name) >=
+            (int)sizeof(child)) {
+            fprintf(2, "find: path too long: %s/%s\n", path, de->d_name);
+            status = -1;
+            continue;
+        }
+        if (lstat(child, &st) < 0) {
+            fprintf(2, "find: cannot stat %s\n", child);
+            status = -1;
+            continue;
+        }
+        if (strcmp(de->d_name, name) == 0)
+            printf("%s\n", child);
+        if (S_ISDIR(st.st_mode) && find(child, name) < 0)
+            status = -1;
+    }
+
+    closedir(dir);
+    return status;
+#else
     char buf[512], *p;
     int fd;
     int path_length;
@@ -52,6 +102,7 @@ int find(char *path, char *name) {
     }
 
     return 0;
+#endif
 }
 
 int main(int argc, char *argv[]) {

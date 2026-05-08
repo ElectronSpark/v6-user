@@ -1,14 +1,20 @@
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#else
 #include "kernel/inc/types.h"
 #include "kernel/inc/param.h"
 #include "kernel/inc/errno.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/vfs/stat.h"
 #include "user/user.h"
+#endif
 #include "fsutil.h"
 
 #define FSUTIL_DIRENT_BUFSZ 1024
 #define FSUTIL_COPY_BUFSZ 4096
+#ifndef AT_FDCWD
 #define AT_FDCWD (-100)
+#endif
 
 struct linux_dirent64 {
     uint64 d_ino;

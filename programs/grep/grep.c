@@ -1,9 +1,13 @@
 // Simple grep.  Only supports ^ . * $ operators.
 
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#else
 #include "kernel/inc/types.h"
 #include "kernel/inc/vfs/stat.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
+#endif
 
 char buf[1024];
 int match(char *, char *);
@@ -21,7 +25,8 @@ void grep(char *pattern, int fd) {
             *q = 0;
             if (match(pattern, p)) {
                 *q = '\n';
-                write(1, p, q + 1 - p);
+                if (write(1, p, q + 1 - p) < 0)
+                    exit(1);
             }
             p = q + 1;
         }

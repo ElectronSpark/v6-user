@@ -1,6 +1,10 @@
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#else
 #include "kernel/inc/types.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
+#endif
 
 char buf[512];
 

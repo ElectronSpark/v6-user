@@ -1,5 +1,9 @@
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#else
 #include "kernel/inc/types.h"
 #include "user/user.h"
+#endif
 
 static void usage(void) {
     printf("Usage: ps [options]\n");

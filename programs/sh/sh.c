@@ -33,6 +33,11 @@ static int exec(const char *path, char **argv) { return execve(path, argv, envir
 static int getdents(int fd, void *dirp, int count) {
     return (int)syscall(SYS_getdents64, fd, dirp, (size_t)count);
 }
+static int shell_open(const char *path, int flags) {
+    if (flags & O_CREAT)
+        return open(path, flags, 0666);
+    return open(path, flags);
+}
 static inline void waitgdb(void) {
 #if defined(__riscv)
     asm volatile("li a0, 0\n\tebreak" ::: "a0", "memory");
@@ -49,6 +54,7 @@ static inline void waitgdb_stopentry(void) {
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/vfs/stat.h"
 #include "kernel/inc/tty/termios.h"
+#define shell_open(path, flags) open((path), (flags))
 // Stubs — xv6 userlib has no real environ; the shell's internal
 // env_vars[] table is the authoritative store.
 static int setenv(const char *name, const char *value, int overwrite) {
@@ -1694,7 +1700,7 @@ void runcmd(struct cmd *cmd) {
     case REDIR:
         rcmd = (struct redircmd *)cmd;
         close(rcmd->fd);
-        if (open(rcmd->file, rcmd->mode) < 0) {
+        if (shell_open(rcmd->file, rcmd->mode) < 0) {
             errprintf("open %s failed\n", rcmd->file);
             exit(1);
         }
