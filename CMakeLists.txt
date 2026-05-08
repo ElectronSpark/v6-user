@@ -218,6 +218,9 @@ target_include_directories(userlib PUBLIC ${USER_LIB_DIR})
 # ==============================================================================
 set(XV6_SKIP_PROGRAMS pngtest timerdemo CACHE STRING
     "Programs to skip (require ports not available standalone)")
+if(ARCH STREQUAL "x86_64")
+    list(APPEND XV6_SKIP_PROGRAMS sh)
+endif()
 file(GLOB _prog_dirs CONFIGURE_DEPENDS RELATIVE ${CMAKE_SOURCE_DIR}/programs
      ${CMAKE_SOURCE_DIR}/programs/*)
 set(XV6_USER_PROGRAMS "")
