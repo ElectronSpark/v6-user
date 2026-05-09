@@ -1,6 +1,16 @@
 // linuxsyscallabitest.c - raw Linux-number syscall compatibility tests.
 #include "kernel/inc/types.h"
+#ifdef HOST_LIBC_PROGRAM
+#include <sched.h>
+#if defined(__has_include)
+#if __has_include(<sys/rseq.h>)
+#include <sys/rseq.h>
+#define HAVE_GLIBC_RSEQ 1
+#endif
+#endif
+#else
 #include "kernel/inc/clone_flags.h"
+#endif
 #include "kernel/inc/elf.h"
 #include "kernel/inc/uabi/fcntl.h"
 #include "kernel/inc/uabi/stat.h"
@@ -8,6 +18,7 @@
 #include "user/user.h"
 
 #define STACK_SIZE (4096 * 4)
+#define LINUX_KERNEL_SIGSET_SIZE 8
 
 #if defined(__x86_64__)
 #define LINUX_NR_READ 0
@@ -165,7 +176,9 @@
 #define EINVAL 22
 #define ENODEV 19
 #define ELOOP 40
+#ifndef ENOTSUP
 #define ENOTSUP 95
+#endif
 #define EINPROGRESS 115
 #ifndef AT_FDCWD
 #define AT_FDCWD -100
@@ -175,11 +188,21 @@
 #endif
 #define RLIMIT_NOFILE 7
 #define MEMBARRIER_CMD_QUERY 0
+#ifndef MREMAP_MAYMOVE
 #define MREMAP_MAYMOVE 1
+#endif
+#ifndef MLOCK_ONFAULT
 #define MLOCK_ONFAULT 0x1
+#endif
+#ifndef MCL_CURRENT
 #define MCL_CURRENT 0x1
+#endif
+#ifndef MCL_FUTURE
 #define MCL_FUTURE 0x2
+#endif
+#ifndef MCL_ONFAULT
 #define MCL_ONFAULT 0x4
+#endif
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
 #define PR_SET_NAME 15
@@ -187,13 +210,27 @@
 #define O_CREAT 0100
 #define O_EXCL 0200
 #define O_TRUNC 01000
+#ifndef O_DIRECT
 #define O_DIRECT 040000
+#endif
+#ifndef O_DIRECTORY
 #define O_DIRECTORY 0200000
+#endif
+#ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0400000
+#endif
+#ifndef O_NOATIME
 #define O_NOATIME 01000000
+#endif
+#ifndef O_CLOEXEC
 #define O_CLOEXEC 02000000
+#endif
+#ifndef O_PATH
 #define O_PATH 010000000
+#endif
+#ifndef O_TMPFILE
 #define O_TMPFILE 020200000
+#endif
 #define O_RDWR 02
 #define O_WRONLY 01
 #define O_RDONLY 00
@@ -297,6 +334,15 @@ struct linux_dirent64_abi {
 };
 
 static volatile int child_entered;
+
+#ifdef HAVE_GLIBC_RSEQ
+static uint64 glibc_rseq_addr(void)
+{
+    if (__rseq_size == 0)
+        return 0;
+    return (uint64)((char *)__builtin_thread_pointer() + __rseq_offset);
+}
+#endif
 static volatile int child_failed;
 static char *child_stack;
 
@@ -539,6 +585,13 @@ static void test_linux_unmapself_sequence(void)
         exit(1);
     }
 
+#ifdef HOST_LIBC_PROGRAM
+    int pid = clone((int (*)(void *))raw_linux_unmapself_child,
+                    (char *)child_stack + STACK_SIZE,
+                    CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+                    SIGCHLD,
+                    0);
+#else
     struct clone_args args = {
         .flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
                  CLONE_THREAD | SIGCHLD,
@@ -548,6 +601,7 @@ static void test_linux_unmapself_sequence(void)
     };
 
     int pid = clone(&args);
+#endif
     if (pid < 0) {
         printf("linuxsyscallabitest: clone failed: %d\n", pid);
         exit(1);
@@ -566,6 +620,16 @@ static void test_linux_unmapself_sequence(void)
         printf("linuxsyscallabitest: Linux exit number returned in child\n");
         exit(1);
     }
+
+#ifdef HOST_LIBC_PROGRAM
+    int status = 0;
+    int waited = raw_linux_syscall4(61, pid, (int64)&status, 0, 0);
+    if (waited != pid || status != 0) {
+        printf("linuxsyscallabitest: Linux __unmapself child wait failed pid=%d status=%d\n",
+               waited, status);
+        exit(1);
+    }
+#endif
 
     printf("linuxsyscallabitest: Linux __unmapself syscall sequence OK\n");
 }
@@ -1204,15 +1268,15 @@ static void test_linux_stat_dirent_layouts(void)
 static void test_linux_rt_signal_abi(void)
 {
     struct sigaction oldact;
-    sigset_t mask = 0;
-    sigset_t oldmask = 0;
-    sigset_t pending = 0;
+    sigset_t mask = {0};
+    sigset_t oldmask = {0};
+    sigset_t pending = {0};
     siginfo_t info;
     struct linux_timespec zero = {0, 0};
 
     memset(&oldact, 0, sizeof(oldact));
     if (raw_linux_syscall4(LINUX_NR_RT_SIGACTION, SIGUSR1, 0,
-                           (int64)&oldact, sizeof(sigset_t)) != 0) {
+                           (int64)&oldact, LINUX_KERNEL_SIGSET_SIZE) != 0) {
         printf("linuxsyscallabitest: Linux rt_sigaction query failed\n");
         exit(1);
     }
@@ -1224,7 +1288,7 @@ static void test_linux_rt_signal_abi(void)
     }
 
     if (raw_linux_syscall4(LINUX_NR_RT_SIGPROCMASK, LINUX_SIG_SETMASK, 0,
-                           (int64)&oldmask, sizeof(sigset_t)) != 0 ||
+                           (int64)&oldmask, LINUX_KERNEL_SIGSET_SIZE) != 0 ||
         raw_linux_syscall4(LINUX_NR_RT_SIGPROCMASK, LINUX_SIG_SETMASK,
                            (int64)&mask, (int64)&oldmask, 4) != -EINVAL) {
         printf("linuxsyscallabitest: Linux rt_sigprocmask ABI failed\n");
@@ -1232,7 +1296,7 @@ static void test_linux_rt_signal_abi(void)
     }
 
     if (raw_linux_syscall2(LINUX_NR_RT_SIGPENDING, (int64)&pending,
-                           sizeof(sigset_t)) != 0 ||
+                           LINUX_KERNEL_SIGSET_SIZE) != 0 ||
         raw_linux_syscall2(LINUX_NR_RT_SIGPENDING, (int64)&pending, 4) !=
             -EINVAL) {
         printf("linuxsyscallabitest: Linux rt_sigpending ABI failed\n");
@@ -1247,7 +1311,7 @@ static void test_linux_rt_signal_abi(void)
 
     struct linux_pselect6_sigmask psig = {
         .ss = (uint64)&mask,
-        .ss_len = sizeof(sigset_t),
+        .ss_len = LINUX_KERNEL_SIGSET_SIZE,
     };
     if (raw_linux_syscall6(LINUX_NR_PSELECT6, 0, 0, 0, 0, (int64)&zero,
                            (int64)&psig) != 0) {
@@ -1260,25 +1324,26 @@ static void test_linux_rt_signal_abi(void)
         printf("linuxsyscallabitest: Linux pselect6 short sigset accepted\n");
         exit(1);
     }
-    psig.ss_len = sizeof(sigset_t) + 4;
+    psig.ss_len = LINUX_KERNEL_SIGSET_SIZE + 4;
     if (raw_linux_syscall6(LINUX_NR_PSELECT6, 0, 0, 0, 0, (int64)&zero,
                            (int64)&psig) != -EINVAL) {
         printf("linuxsyscallabitest: Linux pselect6 oversized sigset accepted\n");
         exit(1);
     }
     if (raw_linux_syscall5(LINUX_NR_PPOLL, 0, 0, (int64)&zero, (int64)&mask,
-                           sizeof(sigset_t)) != 0 ||
+                           LINUX_KERNEL_SIGSET_SIZE) != 0 ||
         raw_linux_syscall5(LINUX_NR_PPOLL, 0, 0, (int64)&zero, (int64)&mask,
                            4) != -EINVAL ||
         raw_linux_syscall5(LINUX_NR_PPOLL, 0, 0, (int64)&zero, (int64)&mask,
-                           sizeof(sigset_t) + 4) != -EINVAL) {
+                           LINUX_KERNEL_SIGSET_SIZE + 4) != -EINVAL) {
         printf("linuxsyscallabitest: Linux ppoll sigmask ABI failed\n");
         exit(1);
     }
 
     memset(&info, 0, sizeof(info));
     if (raw_linux_syscall4(LINUX_NR_RT_SIGTIMEDWAIT, (int64)&mask,
-                           (int64)&info, (int64)&zero, sizeof(sigset_t)) !=
+                           (int64)&info, (int64)&zero,
+                           LINUX_KERNEL_SIGSET_SIZE) !=
             -EAGAIN ||
         raw_linux_syscall4(LINUX_NR_RT_SIGTIMEDWAIT, (int64)&mask,
                            (int64)&info, (int64)&zero, 4) != -EINVAL) {
@@ -1294,7 +1359,7 @@ static void test_linux_process_runtime_numbers(void)
     struct linux_tms tms;
     uint32 cpu = 99;
     uint32 node = 99;
-    char rseq_area[32];
+    char rseq_area[32] __attribute__((aligned(32)));
     struct linux_cap_header cap_hdr = {
         .version = _LINUX_CAPABILITY_VERSION_3,
         .pid = 0,
@@ -1329,14 +1394,36 @@ static void test_linux_process_runtime_numbers(void)
     }
 
     memset(rseq_area, 0, sizeof(rseq_area));
-    if (raw_linux_syscall4(LINUX_NR_RSEQ, (int64)rseq_area,
-                           sizeof(rseq_area), 0, 0x53053053) != 0 ||
+    int64 rseq_ret = raw_linux_syscall4(LINUX_NR_RSEQ, (int64)rseq_area,
+                                        sizeof(rseq_area), 0, 0x53053053);
+#ifdef HAVE_GLIBC_RSEQ
+    uint64 saved_glibc_rseq = 0;
+    if (rseq_ret == -EBUSY) {
+        saved_glibc_rseq = glibc_rseq_addr();
+        if (saved_glibc_rseq != 0 &&
+            raw_linux_syscall4(LINUX_NR_RSEQ, (int64)saved_glibc_rseq,
+                               __rseq_size, RSEQ_FLAG_UNREGISTER,
+                               0x53053053) == 0) {
+            rseq_ret = raw_linux_syscall4(LINUX_NR_RSEQ, (int64)rseq_area,
+                                          sizeof(rseq_area), 0, 0x53053053);
+        }
+    }
+#endif
+    if (rseq_ret != 0 ||
         raw_linux_syscall4(LINUX_NR_RSEQ, (int64)rseq_area,
                            sizeof(rseq_area), RSEQ_FLAG_UNREGISTER,
                            0x53053053) != 0) {
         printf("linuxsyscallabitest: Linux rseq registration failed\n");
         exit(1);
     }
+#ifdef HAVE_GLIBC_RSEQ
+    if (saved_glibc_rseq != 0 &&
+        raw_linux_syscall4(LINUX_NR_RSEQ, (int64)saved_glibc_rseq,
+                           __rseq_size, __rseq_flags, 0x53053053) != 0) {
+        printf("linuxsyscallabitest: Linux glibc rseq restore failed\n");
+        exit(1);
+    }
+#endif
 
     printf("linuxsyscallabitest: Linux process runtime numbers OK\n");
 }
@@ -1363,9 +1450,14 @@ static void test_linux_wait_fork_numbers(void)
 
     siginfo_t info;
     memset(&info, 0, sizeof(info));
-    if (raw_linux_syscall5(LINUX_NR_WAITID, P_ALL, 0, (int64)&info,
-                           WEXITED | WNOHANG, 0) != -ECHILD) {
-        printf("linuxsyscallabitest: Linux waitid empty-children failed\n");
+    int waitid_empty = raw_linux_syscall5(LINUX_NR_WAITID, P_ALL, 0,
+                                          (int64)&info, WEXITED | WNOHANG, 0);
+    if (waitid_empty != -ECHILD) {
+        int any_status = 0;
+        int wait4_any = raw_linux_syscall4(61, -1, (int64)&any_status,
+                                           WNOHANG, 0);
+        printf("linuxsyscallabitest: Linux waitid empty-children failed ret=%d si_pid=%d wait4_any=%d\n",
+               waitid_empty, info.si_pid, wait4_any);
         exit(1);
     }
 

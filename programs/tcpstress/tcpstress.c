@@ -161,8 +161,7 @@ static int sendto_raw(int fd, const void *buf, int len, int flags) {
     return (int)raw_syscall6(SYS_sendto, fd, (int64)buf, len, flags, 0, 0);
 }
 static int recvmmsg_raw(int fd, struct mmsghdr *vec, int vlen, int flags) {
-    return (int)raw_syscall5(SYS_recvmmsg_time64, fd, (int64)vec, vlen,
-                             flags, 0);
+    return (int)raw_syscall5(SYS_recvmmsg, fd, (int64)vec, vlen, flags, 0);
 }
 
 static uint16 bswap16(uint16 x) { return (uint16)((x << 8) | (x >> 8)); }

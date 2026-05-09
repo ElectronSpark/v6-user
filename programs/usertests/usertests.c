@@ -2133,7 +2133,7 @@ void sbrkmuch(char *s) {
     }
 
     a = sbrk(0);
-    c = sbrk(-(sbrk(0) - oldbrk));
+    c = sbrk(-((char *)sbrk(0) - oldbrk));
     if (c != a) {
         printf("%s: sbrk downsize failed, a %p c %p\n", s, a, c);
         exit(1);
@@ -2145,7 +2145,7 @@ void sbrkmuch(char *s) {
 void kernmem(char *s) {
     char *a;
     int pid;
-    uint64 kb = kernbase(); // Get KERNBASE from kernel via syscall
+    uint64 kb = 0xffff800000000000ULL;
 
     for (a = (char *)(kb); a < (char *)(kb + 2000000); a += 50000) {
         pid = fork();

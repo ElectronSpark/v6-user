@@ -47,10 +47,12 @@ static int failures = 0;
         }                                                                       \
     } while (0)
 
+#ifndef HOST_LIBC_PROGRAM
 /* preadv / pwritev2 thin wrappers — syscall stubs defined in usys.S */
 int preadv(int fd, const struct iovec *iov, int iovcnt, int64 offset);
 int pwritev2(int fd, const struct iovec *iov, int iovcnt, int64 offset,
              int flags);
+#endif
 
 /* ── Test 1: basic writev + readv round-trip ─────────────────────── */
 

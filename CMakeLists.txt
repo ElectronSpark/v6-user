@@ -4,21 +4,17 @@
 # umalloc + fsutil + generated usys.S), and ~60 small programs linked
 # against it. Each program lives in programs/<name>/<name>.c.
 #
-# Standalone usage (requires a cross toolchain on PATH):
+# Standalone usage on x86_64 uses the host compiler and host libc:
 #   cmake -S . -B build \
-#       -DARCH=riscv \
-#       -DCMAKE_C_COMPILER=$XV6_TOOLCHAIN_BIN/riscv64-xv6-linux-musl-gcc \
+#       -DARCH=x86_64 \
+#       -DCMAKE_C_COMPILER=cc \
 #       -DCMAKE_INSTALL_PREFIX=$XV6_SYSROOT
 #   cmake --build build -j --target install
 #
 # Programs install as /bin/_<name> in the sysroot (matches xv6 convention).
 #
-# Umbrella usage: invoked by xv6-os/cmake/BuildUser.cmake which sets
-# the cross compiler from the built toolchain.
-#
-# NOTE: musl-libc-linked programs (a separate set in xv6-tmp using
-# add_musl_program()) are deferred — they require the real custom
-# musl-aware toolchain. See ../MIGRATION.md.
+# Umbrella usage: invoked by xv6-os/cmake/BuildUser.cmake, which stages
+# host-built Linux executables through scripts/build-linux-host-probes.sh.
 
 cmake_minimum_required(VERSION 3.10)
 
@@ -26,16 +22,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not allowed.")
 endif()
 
-# ARCH selection (matches kernel sub-repo naming: riscv | x86_64).
+# ARCH selection. The current Linux userland ABI path is x86_64-only.
 if(NOT DEFINED ARCH)
     if(DEFINED ENV{ARCH})
-        set(ARCH "$ENV{ARCH}" CACHE STRING "Target architecture (riscv or x86_64)")
+        set(ARCH "$ENV{ARCH}" CACHE STRING "Target architecture (x86_64)")
     else()
-        set(ARCH "riscv" CACHE STRING "Target architecture (riscv or x86_64)")
+        set(ARCH "x86_64" CACHE STRING "Target architecture (x86_64)")
     endif()
 endif()
-if(NOT ARCH MATCHES "^(riscv|x86_64)$")
-    message(FATAL_ERROR "Invalid ARCH: ${ARCH}. Must be 'riscv' or 'x86_64'.")
+if(NOT ARCH STREQUAL "x86_64")
+    message(FATAL_ERROR "Invalid ARCH: ${ARCH}. The host-glibc userland is x86_64-only.")
 endif()
 
 # OPT_LEVEL passthrough (defaults to -O0 like xv6-tmp).
@@ -56,35 +52,18 @@ endif()
 set(LAB_NAME "$ENV{LAB}")
 string(TOUPPER "${LAB_NAME}" LABUPPER)
 
-# Toolchain detection mirrors the kernel sub-repo (TOOLPREFIX env or
-# auto-discover). Skip linker test (bare-metal toolchain has no libc).
+# Host compiler detection. Skip linker tests because this CMake project still
+# keeps a legacy freestanding build path for generated objects; installed
+# programs are produced by the host-glibc staging script.
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-if(DEFINED ENV{TOOLPREFIX} AND NOT "$ENV{TOOLPREFIX}" STREQUAL "")
-    set(CMAKE_C_COMPILER   $ENV{TOOLPREFIX}gcc CACHE STRING "C compiler" FORCE)
-    set(CMAKE_ASM_COMPILER $ENV{TOOLPREFIX}gcc CACHE STRING "ASM compiler" FORCE)
-    set(CMAKE_OBJCOPY      $ENV{TOOLPREFIX}objcopy)
-    set(CMAKE_OBJDUMP      $ENV{TOOLPREFIX}objdump)
-elseif(NOT DEFINED CMAKE_C_COMPILER)
-    if(ARCH STREQUAL "riscv")
-        find_program(_user_gcc riscv64-xv6-linux-musl-gcc)
-        if(NOT _user_gcc)
-            find_program(_user_gcc riscv64-unknown-elf-gcc)
-        endif()
-    else()
-        find_program(_user_gcc x86_64-xv6-linux-musl-gcc)
-        if(NOT _user_gcc)
-            find_program(_user_gcc x86_64-elf-gcc)
-        endif()
-        if(NOT _user_gcc)
-            find_program(_user_gcc x86_64-linux-gnu-gcc)
-        endif()
-    endif()
+if(NOT DEFINED CMAKE_C_COMPILER)
+    find_program(_user_gcc NAMES x86_64-linux-gnu-gcc gcc cc)
     if(_user_gcc)
         set(CMAKE_C_COMPILER ${_user_gcc} CACHE STRING "C compiler" FORCE)
         set(CMAKE_ASM_COMPILER ${_user_gcc} CACHE STRING "ASM compiler" FORCE)
     else()
-        message(FATAL_ERROR "No cross compiler found for ARCH=${ARCH}.")
+        message(FATAL_ERROR "No host C compiler found for ARCH=${ARCH}.")
     endif()
 endif()
 
@@ -124,15 +103,9 @@ include(${CMAKE_SOURCE_DIR}/cmake/AddXv6Program.cmake)
 # ==============================================================================
 set(USER_LIB_DIR ${CMAKE_SOURCE_DIR}/lib)
 
-if(ARCH STREQUAL "x86_64")
-    set(USER_ARCH_CFLAGS "")
-    set(USER_LINKER_SCRIPT ${USER_LIB_DIR}/x86_64/user.ld)
-    set(USER_USYS_PL       ${USER_LIB_DIR}/x86_64/usys_x86_64.pl)
-else()
-    set(USER_ARCH_CFLAGS "-march=rv64gc;-mabi=lp64d;-mcmodel=medany")
-    set(USER_LINKER_SCRIPT ${USER_LIB_DIR}/user.ld)
-    set(USER_USYS_PL       ${USER_LIB_DIR}/usys.pl)
-endif()
+set(USER_ARCH_CFLAGS "")
+set(USER_LINKER_SCRIPT ${USER_LIB_DIR}/x86_64/user.ld)
+set(USER_USYS_PL       ${USER_LIB_DIR}/x86_64/usys_x86_64.pl)
 
 # Userland hard-includes kernel headers as `#include "kernel/inc/..."`,
 # so the kernel sub-repo's source root must be on the include path.

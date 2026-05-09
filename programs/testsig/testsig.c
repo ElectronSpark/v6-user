@@ -3,6 +3,47 @@
 // Removed inclusion of kernel/signal.h to avoid prototype conflicts
 #include "user/user.h"
 
+#ifdef HOST_LIBC_PROGRAM
+static volatile sig_atomic_t caught;
+
+static void host_handler(int signo)
+{
+    caught = signo;
+}
+
+int main(void)
+{
+    struct sigaction sa = {0};
+    sigset_t set;
+    sigset_t old;
+
+    printf("Linux signal smoke test (pid=%d)\n", getpid());
+    sa.sa_handler = host_handler;
+    if (sigaction(SIGUSR1, &sa, 0) < 0) {
+        printf("sigaction failed\n");
+        return 1;
+    }
+    kill(getpid(), SIGUSR1);
+    if (caught != SIGUSR1) {
+        printf("signal delivery failed\n");
+        return 1;
+    }
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    if (sigprocmask(SIG_BLOCK, &set, &old) < 0) {
+        printf("sigprocmask block failed\n");
+        return 1;
+    }
+    if (sigprocmask(SIG_SETMASK, &old, 0) < 0) {
+        printf("sigprocmask restore failed\n");
+        return 1;
+    }
+    printf("Linux signal smoke test passed\n");
+    return 0;
+}
+#else
+
 #ifndef SIG_BLOCK
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
@@ -1243,3 +1284,4 @@ int main(void) {
     printf("========================================\n");
     return test_failures;
 }
+#endif /* HOST_LIBC_PROGRAM */

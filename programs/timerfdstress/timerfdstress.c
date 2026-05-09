@@ -12,10 +12,12 @@
 #define EPOLL_CLOEXEC O_CLOEXEC
 #define SIGTERM 15
 
+#ifndef HOST_LIBC_PROGRAM
 struct itimerspec {
     struct timespec it_interval;
     struct timespec it_value;
 };
+#endif
 
 struct epoll_event_abi {
     uint32 events;

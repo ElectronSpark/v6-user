@@ -1,6 +1,10 @@
 // Test program for clone() syscall with shared resources (thread-like behavior)
 #include "kernel/inc/types.h"
+#ifdef HOST_LIBC_PROGRAM
+#include <sched.h>
+#else
 #include "kernel/inc/clone_flags.h"
+#endif
 #include "user/user.h"
 
 #define STACK_SIZE (4096 * 4) // 16KB - must be >= USERSTACK_MINSZ
@@ -10,7 +14,9 @@ volatile int shared_counter = 0;
 volatile int child_done = 0;
 
 // Child thread entry point
-void child_func(void) {
+static int child_func(void *arg) {
+    (void)arg;
+
     // First thing - confirm we're running
     write(1, "CHILD\n", 6);
 
@@ -28,6 +34,7 @@ void child_func(void) {
 
     // Exit the thread
     exit(0);
+    return 0;
 }
 
 // Test 1: Simple fork behavior (no sharing)
@@ -75,8 +82,9 @@ void test_clone_vm(void) {
         exit(1);
     }
 
-    // Set up clone args with CLONE_VM
-    // Pass stack base - kernel will calculate stack top from base + size
+#ifdef HOST_LIBC_PROGRAM
+    int pid = clone(child_func, stack + STACK_SIZE, CLONE_VM | SIGCHLD, 0);
+#else
     struct clone_args args = {
         .flags = CLONE_VM | SIGCHLD,
         .stack = (uint64)stack,
@@ -88,6 +96,7 @@ void test_clone_vm(void) {
     printf("clonetest: stack=%p entry=%p\n", (void *)args.stack,
            (void *)args.entry);
     int pid = clone(&args);
+#endif
 
     if (pid < 0) {
         printf("clonetest: clone failed with %d\n", pid);
@@ -97,7 +106,7 @@ void test_clone_vm(void) {
     if (pid == 0) {
         // We shouldn't get here - child should start at child_func
         // But in case clone returns in child:
-        child_func();
+        child_func(0);
     } else {
         // Parent - wait for child
         printf("clonetest: parent waiting for child %d\n", pid);
@@ -136,8 +145,12 @@ void test_clone_thread(void) {
         exit(1);
     }
 
-    // Set up clone args with all sharing flags
-    // Pass stack base - kernel will calculate stack top from base + size
+#ifdef HOST_LIBC_PROGRAM
+    int pid = clone(child_func, stack + STACK_SIZE,
+                    CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+                    SIGCHLD,
+                    0);
+#else
     struct clone_args args = {
         .flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | SIGCHLD,
         .stack = (uint64)stack,
@@ -147,6 +160,7 @@ void test_clone_thread(void) {
 
     printf("clonetest: calling clone with thread flags\n");
     int pid = clone(&args);
+#endif
 
     if (pid < 0) {
         printf("clonetest: clone failed with %d\n", pid);
@@ -154,7 +168,7 @@ void test_clone_thread(void) {
     }
 
     if (pid == 0) {
-        child_func();
+        child_func(0);
     } else {
         // Parent
         while (!child_done) {

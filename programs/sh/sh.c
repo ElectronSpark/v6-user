@@ -366,6 +366,11 @@ static void env_enable_gui_session(void) {
     env_set("XDG_CACHE_HOME", "/tmp/.cache");
     env_set("WAYLAND_DISPLAY", "wayland-0");
     env_set("GDK_BACKEND", "wayland");
+    env_set("GDK_GL", "disable");
+    env_set("GDK_RENDERING", "image");
+    env_set("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    env_set("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    env_set("WEBKIT_GST_DISABLE_GL_SINK", "1");
     env_set("XCURSOR_PATH", "/share/icons");
     env_set("XCURSOR_THEME", "Adwaita");
     env_set("SSL_CERT_FILE", "/share/netsurf/ca-bundle");

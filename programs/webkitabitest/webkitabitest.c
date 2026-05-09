@@ -26,11 +26,21 @@
 #define MSG_DONTWAIT 0x40
 #define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
+#ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001
+#endif
+#ifndef MLOCK_ONFAULT
 #define MLOCK_ONFAULT 0x01
+#endif
+#ifndef MCL_CURRENT
 #define MCL_CURRENT 0x01
+#endif
+#ifndef MCL_FUTURE
 #define MCL_FUTURE 0x02
+#endif
+#ifndef MCL_ONFAULT
 #define MCL_ONFAULT 0x04
+#endif
 #define CLOCK_MONOTONIC 1
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
@@ -144,10 +154,12 @@ struct mmsghdr {
     uint32 __pad;
 };
 
+#ifndef HOST_LIBC_PROGRAM
 struct itimerspec {
     struct timespec it_interval;
     struct timespec it_value;
 };
+#endif
 
 struct ucred {
     int pid;
@@ -346,7 +358,7 @@ static int accept4_raw(int fd, int flags)
 
 static int connect_unix_raw(int fd, const struct sockaddr_un *sa)
 {
-    return (int)raw_syscall3(SYS_sconnect, fd, (int64)sa, sizeof(*sa));
+    return (int)raw_syscall3(SYS_connect, fd, (int64)sa, sizeof(*sa));
 }
 
 static int sendmsg_raw(int fd, struct msghdr *msg, int flags)
@@ -361,8 +373,7 @@ static int recvmsg_raw(int fd, struct msghdr *msg, int flags)
 
 static int recvmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
 {
-    return (int)raw_syscall6(SYS_recvmmsg_time64, fd, (int64)msgvec, vlen,
-                             flags, 0, 0);
+    return (int)raw_syscall6(SYS_recvmmsg, fd, (int64)msgvec, vlen, flags, 0, 0);
 }
 
 static int sendmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)

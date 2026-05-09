@@ -1,6 +1,11 @@
 #ifndef __XV6_USER_DEFINES_H
 #define __XV6_USER_DEFINES_H
 
+#ifdef HOST_LIBC_PROGRAM
+#include "host_compat.h"
+#include "kernel/inc/mm/memstat.h"
+#else
+
 struct stat;
 
 #include "kernel/inc/types.h"
@@ -258,5 +263,7 @@ void *memcpy(void *, const void *, uint);
 // umalloc.c
 void *malloc(uint);
 void free(void *);
+
+#endif /* HOST_LIBC_PROGRAM */
 
 #endif /* __XV6_USER_DEFINES_H */

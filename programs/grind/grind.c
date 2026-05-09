@@ -120,8 +120,8 @@ void go(int which_child) {
         } else if (what == 15) {
             sbrk(6011);
         } else if (what == 16) {
-            if (sbrk(0) > break0)
-                sbrk(-(sbrk(0) - break0));
+            if ((char *)sbrk(0) > break0)
+                sbrk(-((char *)sbrk(0) - break0));
         } else if (what == 17) {
             int pid = fork();
             if (pid == 0) {

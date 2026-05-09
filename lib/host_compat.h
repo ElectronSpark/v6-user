@@ -1,7 +1,9 @@
 #ifndef XV6_HOST_COMPAT_H
 #define XV6_HOST_COMPAT_H
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 #include <dirent.h>
 #include <errno.h>
@@ -13,10 +15,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
+#include <sys/time.h>
+#include <sys/utsname.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef uint8_t uchar;
@@ -34,6 +43,11 @@ typedef int64_t int64;
 #ifndef NSIG
 #define NSIG 65
 #endif
+
+struct clone_args;
+struct kstats;
+struct kevent;
+struct netconf_req;
 
 static inline int host_compat_errno_ret(long ret) {
     return ret < 0 ? -errno : (int)ret;
@@ -93,6 +107,173 @@ static inline int host_compat_readlink(const char *path, char *buf, int bufsiz) 
 static inline int host_compat_getdents(int fd, void *dirp, int count) {
     return host_compat_errno_ret(
         syscall(SYS_getdents64, fd, dirp, (size_t)count));
+}
+
+static inline int host_compat_exec(const char *path, char **argv) {
+    extern char **environ;
+    return host_compat_errno_ret(execve(path, argv, environ));
+}
+
+static inline int host_compat_mknod4(const char *path, int mode, int major,
+                                     int minor) {
+    return host_compat_errno_ret(
+        mknod(path, (mode_t)mode, makedev((unsigned)major, (unsigned)minor)));
+}
+
+static inline int host_compat_mount5(const char *source, const char *target,
+                                     const char *fstype, unsigned long flags,
+                                     const void *data) {
+    return host_compat_errno_ret(
+        syscall(SYS_mount, source, target, fstype, flags, data));
+}
+
+static inline int host_compat_umount1(const char *target) {
+#ifdef SYS_umount2
+    return host_compat_errno_ret(syscall(SYS_umount2, target, 0));
+#else
+    return -ENOSYS;
+#endif
+}
+
+static inline int host_compat_sleep_ms(int millis) {
+    if (millis < 0)
+        millis = 0;
+    struct timespec ts = {
+        .tv_sec = millis / 1000,
+        .tv_nsec = (long)(millis % 1000) * 1000000L,
+    };
+    while (nanosleep(&ts, &ts) < 0 && errno == EINTR)
+        ;
+    return 0;
+}
+
+static inline int host_compat_uptime(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+        return -errno;
+    return (int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+static inline int host_compat_getrandom(void *buf, int len) {
+#ifdef SYS_getrandom
+    return host_compat_errno_ret(syscall(SYS_getrandom, buf, (size_t)len, 0));
+#else
+    FILE *fp = fopen("/dev/urandom", "rb");
+    if (fp == 0)
+        return -errno;
+    size_t n = fread(buf, 1, (size_t)len, fp);
+    int saved = errno;
+    fclose(fp);
+    errno = saved;
+    return n == (size_t)len ? (int)n : -errno;
+#endif
+}
+
+static inline uint64 memstat(uint64 flags) {
+    (void)flags;
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (fp == 0)
+        return (uint64)-errno;
+    char line[160];
+    while (fgets(line, sizeof(line), fp) != 0)
+        dprintf(1, "%s", line);
+    fclose(fp);
+    return 0;
+}
+
+static inline int dumpchan(void) {
+    return 0;
+}
+
+static inline int dumppcache(void) {
+    return 0;
+}
+
+static inline int dumprq(void) {
+    return 0;
+}
+
+static inline int dumpinode(const char *path) {
+    struct stat st;
+    if (stat(path ? path : ".", &st) < 0)
+        return -errno;
+    dprintf(1, "%s: dev=%lu ino=%lu mode=%o nlink=%lu size=%ld\n",
+            path ? path : ".", (unsigned long)st.st_dev,
+            (unsigned long)st.st_ino, (unsigned)st.st_mode,
+            (unsigned long)st.st_nlink, (long)st.st_size);
+    return 0;
+}
+
+static inline int dumpblk(int mode) {
+    (void)mode;
+    FILE *fp = fopen("/proc/partitions", "r");
+    if (fp == 0)
+        return -errno;
+    char line[160];
+    while (fgets(line, sizeof(line), fp) != 0)
+        dprintf(1, "%s", line);
+    fclose(fp);
+    return 0;
+}
+
+static inline int losetup(int cmd, int loop_num, const char *path) {
+    (void)cmd;
+    (void)loop_num;
+    (void)path;
+    return -ENOSYS;
+}
+
+static inline int kstats(struct kstats *ks) {
+    (void)ks;
+    return -ENOSYS;
+}
+
+static inline int netconf(const struct netconf_req *req) {
+    (void)req;
+    return -ENOSYS;
+}
+
+static inline int kqueue(void) {
+#ifdef SYS_eventfd2
+    return host_compat_errno_ret(syscall(SYS_eventfd2, 0, 0));
+#else
+    return -ENOSYS;
+#endif
+}
+
+static inline int kevent_register(int kqfd, struct kevent *changelist,
+                                  int nchanges) {
+    (void)kqfd;
+    (void)changelist;
+    (void)nchanges;
+    return 0;
+}
+
+static inline int kevent_wait(int kqfd, struct kevent *eventlist, int nevents,
+                              int timeout_ms) {
+    (void)kqfd;
+    (void)eventlist;
+    (void)nevents;
+    host_compat_sleep_ms(timeout_ms);
+    return 0;
+}
+
+static inline int poweroff(void) {
+    return host_compat_errno_ret(
+        syscall(SYS_reboot, 0xfee1dead, 672274793, 0x4321fedc, 0));
+}
+
+static inline int reboot(void) {
+    return host_compat_errno_ret(
+        syscall(SYS_reboot, 0xfee1dead, 672274793, 0x1234567, 0));
+}
+
+static inline void waitgdb(void) {
+    raise(SIGTRAP);
+}
+
+static inline void waitgdb_stopentry(void) {
+    raise(SIGTRAP);
 }
 
 static inline uint strlen_local(const char *s) {
@@ -168,6 +349,15 @@ static inline int dumpproc(int mode, int id) {
     host_compat_fchmodat((dirfd), (path), (mode), (flags))
 #define readlink(path, buf, bufsiz) host_compat_readlink((path), (buf), (bufsiz))
 #define getdents(fd, dirp, count) host_compat_getdents((fd), (dirp), (count))
+#define exec(path, argv) host_compat_exec((path), (argv))
+#define mknod(path, mode, major, minor) \
+    host_compat_mknod4((path), (mode), (major), (minor))
+#define mount(source, target, fstype, flags, data) \
+    host_compat_mount5((source), (target), (fstype), (flags), (data))
+#define umount(target) host_compat_umount1((target))
+#define sleep(millis) host_compat_sleep_ms((millis))
+#define uptime() host_compat_uptime()
+#define getrandom(buf, len) host_compat_getrandom((buf), (len))
 #define fprintf(fd, ...) dprintf((fd), __VA_ARGS__)
 #define strlen strlen_local
 #define atoi atoi_local

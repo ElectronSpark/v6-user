@@ -14,18 +14,20 @@
 volatile int shared_var = 0;
 volatile int sequence = 0;
 char *echo_argv[] = {"echo", "Child exec'd successfully", 0};
+extern char **environ;
 
 static inline __attribute__((always_inline)) long
 raw_exec_no_stack(const char *path, char *const argv[])
 {
     long ret;
-    register long rax asm("rax") = SYS_exec;
+    register long rax asm("rax") = SYS_execve;
     register long rdi asm("rdi") = (long)path;
     register long rsi asm("rsi") = (long)argv;
+    register long rdx asm("rdx") = (long)environ;
 
     asm volatile("syscall"
                  : "+r"(rax)
-                 : "r"(rdi), "r"(rsi)
+                 : "r"(rdi), "r"(rsi), "r"(rdx)
                  : "rcx", "r11", "memory");
     ret = rax;
     return ret;

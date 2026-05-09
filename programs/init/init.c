@@ -214,7 +214,9 @@ static int is_env_assignment(const char *s)
 
 static int exec_with_env(const char *path, char **argv, char **envp)
 {
-#if defined(__x86_64__)
+#ifdef HOST_LIBC_PROGRAM
+    return execve(path, argv, envp);
+#elif defined(__x86_64__)
     long ret;
     __asm__ volatile("syscall"
                      : "=a"(ret)

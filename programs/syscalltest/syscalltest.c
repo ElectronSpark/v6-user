@@ -13,6 +13,24 @@
 #include "kernel/inc/syscall.h"
 #include "user/user.h"
 
+#ifdef HOST_LIBC_PROGRAM
+int main(void)
+{
+    printf("Linux syscall smoke test\n");
+    if (syscall(SYS_getpid) != getpid()) {
+        printf("getpid syscall mismatch\n");
+        return 1;
+    }
+    if (syscall(SYS_clock_gettime, CLOCK_MONOTONIC,
+                &(struct timespec){0}) < 0) {
+        printf("clock_gettime syscall failed\n");
+        return 1;
+    }
+    printf("Linux syscall smoke test passed\n");
+    return 0;
+}
+#else
+
 /* ── stats ── */
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -2591,3 +2609,4 @@ int main(int argc, char *argv[]) {
 
     exit(tests_failed > 0 ? 1 : 0);
 }
+#endif /* HOST_LIBC_PROGRAM */
