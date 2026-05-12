@@ -49,6 +49,14 @@ struct kstats;
 struct kevent;
 struct netconf_req;
 
+#ifndef XV6_SYS_kstats
+#define XV6_SYS_kstats 1360
+#endif
+
+#ifndef XV6_SYS_netconf
+#define XV6_SYS_netconf 1361
+#endif
+
 static inline int host_compat_errno_ret(long ret) {
     return ret < 0 ? -errno : (int)ret;
 }
@@ -224,13 +232,11 @@ static inline int losetup(int cmd, int loop_num, const char *path) {
 }
 
 static inline int kstats(struct kstats *ks) {
-    (void)ks;
-    return -ENOSYS;
+    return host_compat_errno_ret(syscall(XV6_SYS_kstats, ks));
 }
 
 static inline int netconf(const struct netconf_req *req) {
-    (void)req;
-    return -ENOSYS;
+    return host_compat_errno_ret(syscall(XV6_SYS_netconf, req));
 }
 
 static inline int kqueue(void) {

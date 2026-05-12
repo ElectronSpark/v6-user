@@ -50,8 +50,11 @@
 #define FUTEX_BITSET_MATCH_ANY 0xffffffffu
 #define TFD_NONBLOCK O_NONBLOCK
 #define TFD_CLOEXEC O_CLOEXEC
+#define TFD_TIMER_ABSTIME 1
 #define EPOLLIN 0x001
 #define EPOLLOUT 0x004
+#define EPOLLERR 0x008
+#define EPOLLHUP 0x010
 #define EPOLLET (1U << 31)
 #define EPOLLONESHOT (1U << 30)
 #define EPOLL_CTL_ADD 1
@@ -369,6 +372,11 @@ static int sendmsg_raw(int fd, struct msghdr *msg, int flags)
 static int recvmsg_raw(int fd, struct msghdr *msg, int flags)
 {
     return (int)raw_syscall3(SYS_recvmsg, fd, (int64)msg, flags);
+}
+
+static int write_raw(int fd, const void *buf, int count)
+{
+    return (int)raw_syscall3(SYS_write, fd, (int64)buf, count);
 }
 
 static int recvmmsg_raw(int fd, struct mmsghdr *msgvec, int vlen, int flags)
@@ -955,9 +963,25 @@ static void test_epoll_ctl_linux_item_semantics(void)
         fail(name, "pipe failed");
         return;
     }
+    if (epoll_create1_raw(0x4000) != -EINVAL) {
+        fail(name, "epoll_create1 accepted unknown flags");
+        goto out;
+    }
     epfd = epoll_create1_raw(EPOLL_CLOEXEC);
     if (epfd < 0) {
         fail(name, "epoll_create1 failed");
+        goto out;
+    }
+    if (epoll_pwait_raw(fds[0], &ev, 1, 0) != -EINVAL) {
+        fail(name, "epoll_wait on non-epoll fd did not return EINVAL");
+        goto out;
+    }
+    if (epoll_ctl_raw(fds[0], EPOLL_CTL_ADD, fds[1], &ev) != -EINVAL) {
+        fail(name, "epoll_ctl on non-epoll fd did not return EINVAL");
+        goto out;
+    }
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, epfd, &ev) != -EINVAL) {
+        fail(name, "epoll_ctl accepted self-registration");
         goto out;
     }
 
@@ -993,6 +1017,58 @@ static void test_epoll_ctl_linux_item_semantics(void)
     }
     if (epoll_ctl_raw(epfd, EPOLL_CTL_DEL, fds[0], 0) != -ENOENT) {
         fail(name, "second DEL did not return ENOENT");
+        goto out;
+    }
+    if (epoll_pwait_raw(epfd, &ev, 512, 0) != 0) {
+        fail(name, "large maxevents was rejected");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (epfd >= 0)
+        close(epfd);
+    if (fds[0] >= 0)
+        close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
+}
+
+static void test_epoll_always_reports_hup(void)
+{
+    const char *name = "epoll always reports hup";
+    int fds[2] = {-1, -1};
+    int epfd = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+
+    if (pipe(fds) < 0) {
+        fail(name, "pipe failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        fail(name, "epoll_create1 failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = 0;
+    ev.data = 0x4855504556454e54ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        fail(name, "epoll_ctl add zero mask failed");
+        goto out;
+    }
+
+    close(fds[1]);
+    fds[1] = -1;
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLHUP) || (out.events & EPOLLIN) ||
+        out.data != ev.data) {
+        fail(name, "HUP was not reported independently of requested mask");
         goto out;
     }
 
@@ -3637,7 +3713,7 @@ static void test_webkit_seqpacket_recvmmsg_epollout_wake(void)
     }
 
     for (;;) {
-        int ret = write(sv[0], &byte, 1);
+        int ret = write_raw(sv[0], &byte, 1);
         if (ret == 1) {
             seq++;
             if (seq > 20000) {
@@ -5843,6 +5919,57 @@ static void test_timerfd_poll(void)
     pass(name);
 }
 
+static void test_timerfd_abstime_past(void)
+{
+    const char *name = "timerfd abstime past immediate";
+    int fd = timerfd_create_raw(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    struct itimerspec its;
+    struct pollfd pfd;
+    uint64 expirations = 0;
+    struct timespec now;
+
+    if (fd < 0) {
+        fail(name, "timerfd_create failed");
+        return;
+    }
+    if (clock_gettime_raw(CLOCK_MONOTONIC, &now) < 0) {
+        close(fd);
+        fail(name, "clock_gettime failed");
+        return;
+    }
+
+    memset(&its, 0, sizeof(its));
+    its.it_value = now;
+    if (its.it_value.tv_nsec > 1000000)
+        its.it_value.tv_nsec -= 1000000;
+    else if (its.it_value.tv_sec > 0) {
+        its.it_value.tv_sec--;
+        its.it_value.tv_nsec += 999000000;
+    }
+
+    if (timerfd_settime_raw(fd, TFD_TIMER_ABSTIME, &its, 0) < 0) {
+        close(fd);
+        fail(name, "timerfd_settime abstime failed");
+        return;
+    }
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (poll_raw(&pfd, 1, 0) != 1 || !(pfd.revents & POLLIN)) {
+        close(fd);
+        fail(name, "past abstime did not become readable immediately");
+        return;
+    }
+    if (read(fd, &expirations, sizeof(expirations)) != (int)sizeof(expirations) ||
+        expirations == 0) {
+        close(fd);
+        fail(name, "timerfd read failed");
+        return;
+    }
+    close(fd);
+    pass(name);
+}
+
 static void test_futex_timeout(void)
 {
     const char *name = "futex timed waits";
@@ -6196,14 +6323,14 @@ static void test_oss_nonblock_write_backpressure(void)
         return;
     }
 
-    if (write(fd, fill, sizeof(fill)) != (int)sizeof(fill)) {
+    if (write_raw(fd, fill, sizeof(fill)) != (int)sizeof(fill)) {
         close(fd);
         fail(name, "failed to fill virtual PCM FIFO");
         return;
     }
 
     uint64 start = monotonic_ms();
-    int rc = write(fd, extra, sizeof(extra));
+    int rc = write_raw(fd, extra, sizeof(extra));
     uint64 elapsed = monotonic_ms() - start;
 
     ioctl(fd, SNDCTL_DSP_RESET, 0);
@@ -6496,6 +6623,7 @@ int main(int argc, char **argv)
         printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
         test_epoll_level_read_redelivery();
         test_epoll_ctl_linux_item_semantics();
+        test_epoll_always_reports_hup();
         test_epoll_oneshot_rearm();
         test_nested_epoll_level_read_redelivery();
         printf("webkitabitest: %d passed, %d skipped, %d failed\n",
@@ -6536,6 +6664,7 @@ int main(int argc, char **argv)
     test_socket_nonblock_connect_epoll();
     test_epoll_level_read_redelivery();
     test_epoll_ctl_linux_item_semantics();
+    test_epoll_always_reports_hup();
     test_epoll_oneshot_rearm();
     test_nested_epoll_level_read_redelivery();
     test_socket_sol_options();
@@ -6586,6 +6715,7 @@ int main(int argc, char **argv)
     test_waitpid_signal_status();
     test_fpu_signal_exit_owner_save();
     test_timerfd_poll();
+    test_timerfd_abstime_past();
     test_futex_timeout();
     test_futex_requeue_return_and_wake();
     test_random_devices();
