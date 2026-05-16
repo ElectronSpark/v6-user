@@ -29,6 +29,76 @@ static int submit_nop(int fd, uint32 ctx_id, uint64 *fence_out,
     return 0;
 }
 
+static int async_submit_test(void)
+{
+    int fd;
+    uint32 nop = VIRGL_CMD0(VIRGL_CCMD_NOP, 0, 0);
+    struct fb_gpu_virgl_ctx ctx = {0};
+    struct fb_gpu_virgl_submit submit = {0};
+    struct fb_gpu_virgl_fence fence = {0};
+    uint64 initial_signaled;
+    uint64 final_signaled;
+
+    fd = open("/dev/gpu0", O_RDWR);
+    if (fd < 0) {
+        printf("virgltest: open /dev/gpu0 failed\n");
+        return 1;
+    }
+
+    strcpy(ctx.debug_name, "virgltest-async");
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_CREATE, &ctx) < 0 || ctx.ctx_id == 0) {
+        printf("virgltest: async-submit ctx create failed\n");
+        close(fd);
+        return 1;
+    }
+
+    submit.ctx_id = ctx.ctx_id;
+    submit.flags = FB_GPU_VIRGL_SUBMIT_ASYNC;
+    submit.cmd_size = sizeof(nop);
+    submit.cmd = (uint64)&nop;
+    if (ioctl(fd, FB_GPU_VIRGL_SUBMIT, &submit) < 0 ||
+        submit.fence == 0) {
+        printf("virgltest: async-submit failed ctx=%u fence=%lu signaled=%lu\n",
+               ctx.ctx_id, submit.fence, submit.signaled);
+        (void)ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx);
+        close(fd);
+        return 1;
+    }
+
+    initial_signaled = submit.signaled;
+    fence.flags = FB_GPU_VIRGL_FENCE_WAIT;
+    fence.wait_for = submit.fence;
+    if (ioctl(fd, FB_GPU_VIRGL_FENCE, &fence) < 0 ||
+        fence.signaled < submit.fence) {
+        printf("virgltest: async-submit fence wait failed fence=%lu signaled=%lu\n",
+               submit.fence, fence.signaled);
+        (void)ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx);
+        close(fd);
+        return 1;
+    }
+    final_signaled = fence.signaled;
+
+    if (submit_nop(fd, ctx.ctx_id, NULL, NULL) < 0) {
+        printf("virgltest: sync submit after async failed ctx=%u\n", ctx.ctx_id);
+        (void)ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx);
+        close(fd);
+        return 1;
+    }
+
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx) < 0) {
+        printf("virgltest: async-submit ctx destroy failed ctx=%u\n",
+               ctx.ctx_id);
+        close(fd);
+        return 1;
+    }
+
+    printf("virgltest: async-submit queued ctx=%u fence=%lu initial_signaled=%lu final_signaled=%lu completed_inline=%d\n",
+           ctx.ctx_id, submit.fence, initial_signaled, final_signaled,
+           initial_signaled >= submit.fence);
+    close(fd);
+    return 0;
+}
+
 static int bad_submit_test(void)
 {
     int fd;
@@ -124,6 +194,105 @@ static int bad_submit_test(void)
     return 0;
 }
 
+static int expect_submit_fail(int fd, const char *name,
+                              struct fb_gpu_virgl_submit *submit)
+{
+    if (ioctl(fd, FB_GPU_VIRGL_SUBMIT, submit) >= 0) {
+        printf("virgltest: invalid-submit %s unexpectedly succeeded fence=%lu signaled=%lu\n",
+               name, submit->fence, submit->signaled);
+        return 1;
+    }
+    printf("virgltest: invalid-submit %s rejected\n", name);
+    return 0;
+}
+
+static int invalid_submit_test(void)
+{
+    int fd;
+    uint32 nop = VIRGL_CMD0(VIRGL_CCMD_NOP, 0, 0);
+    struct fb_gpu_virgl_ctx ctx = {0};
+    struct fb_gpu_virgl_ctx bad_ctx = {0};
+    struct fb_gpu_virgl_submit submit = {0};
+    uint64 fence = 0;
+    uint64 signaled = 0;
+    int ret = 1;
+
+    fd = open("/dev/gpu0", O_RDWR);
+    if (fd < 0) {
+        printf("virgltest: open /dev/gpu0 failed\n");
+        return 1;
+    }
+
+    bad_ctx.flags = 1;
+    strcpy(bad_ctx.debug_name, "virgltest-invalid");
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_CREATE, &bad_ctx) >= 0) {
+        printf("virgltest: invalid ctx flags unexpectedly succeeded ctx=%u\n",
+               bad_ctx.ctx_id);
+        (void)ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &bad_ctx);
+        goto out;
+    }
+    printf("virgltest: invalid ctx flags rejected\n");
+
+    strcpy(ctx.debug_name, "virgltest-invalid-ok");
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_CREATE, &ctx) < 0 || ctx.ctx_id == 0) {
+        printf("virgltest: invalid-submit ctx create failed\n");
+        goto out;
+    }
+
+    memset(&submit, 0, sizeof(submit));
+    submit.cmd = (uint64)&nop;
+    submit.cmd_size = sizeof(nop);
+    if (expect_submit_fail(fd, "zero_ctx", &submit) != 0)
+        goto out_ctx;
+
+    memset(&submit, 0, sizeof(submit));
+    submit.ctx_id = ctx.ctx_id;
+    submit.cmd_size = sizeof(nop);
+    if (expect_submit_fail(fd, "null_cmd", &submit) != 0)
+        goto out_ctx;
+
+    memset(&submit, 0, sizeof(submit));
+    submit.ctx_id = ctx.ctx_id;
+    submit.cmd = (uint64)&nop;
+    submit.cmd_size = 2;
+    if (expect_submit_fail(fd, "unaligned_size", &submit) != 0)
+        goto out_ctx;
+
+    memset(&submit, 0, sizeof(submit));
+    submit.ctx_id = ctx.ctx_id;
+    submit.cmd = (uint64)&nop;
+    submit.cmd_size = 262148;
+    if (expect_submit_fail(fd, "oversize", &submit) != 0)
+        goto out_ctx;
+
+    memset(&submit, 0, sizeof(submit));
+    submit.ctx_id = ctx.ctx_id + 1000;
+    submit.cmd = (uint64)&nop;
+    submit.cmd_size = sizeof(nop);
+    if (expect_submit_fail(fd, "foreign_ctx", &submit) != 0)
+        goto out_ctx;
+
+    if (submit_nop(fd, ctx.ctx_id, &fence, &signaled) < 0) {
+        printf("virgltest: valid submit failed after invalid-submit rejects ctx=%u\n",
+               ctx.ctx_id);
+        goto out_ctx;
+    }
+
+    printf("virgltest: invalid-submit rejected invalid ioctls ctx=%u fence=%lu signaled=%lu\n",
+           ctx.ctx_id, fence, signaled);
+    ret = 0;
+
+out_ctx:
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx) < 0) {
+        printf("virgltest: invalid-submit ctx destroy failed ctx=%u\n",
+               ctx.ctx_id);
+        ret = 1;
+    }
+out:
+    close(fd);
+    return ret;
+}
+
 int main(int argc, char **argv)
 {
     int fd;
@@ -142,6 +311,10 @@ int main(int argc, char **argv)
 
     if (argc > 1 && strcmp(argv[1], "--bad-submit") == 0)
         return bad_submit_test();
+    if (argc > 1 && strcmp(argv[1], "--async-submit") == 0)
+        return async_submit_test();
+    if (argc > 1 && strcmp(argv[1], "--invalid-submit") == 0)
+        return invalid_submit_test();
 
     fd = open("/dev/fb0", O_RDWR);
     if (fd < 0) {

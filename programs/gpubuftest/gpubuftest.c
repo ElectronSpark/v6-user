@@ -425,6 +425,33 @@ int main(int argc, char **argv)
             close(fd);
             return 1;
         }
+        struct pollfd closed_pfd = {
+            .fd = fence_export.fd,
+            .events = POLLIN | POLLRDNORM,
+        };
+        if (poll_raw(&closed_pfd, 1, 0) != 1 ||
+            (closed_pfd.revents & POLLNVAL) == 0) {
+            printf("gpubuftest: closed fence fd poll did not report POLLNVAL at loop %d revents=%x\n",
+                   i, closed_pfd.revents);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        struct fb_gpu_fence_query closed_fence_query = {
+            .fd = fence_export.fd,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_QUERY, &closed_fence_query) >= 0) {
+            printf("gpubuftest: closed fence fd query succeeded at loop %d\n",
+                   i);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        printf("gpubuftest: closed fence fd rejected at loop %d\n", i);
 
         struct fb_gpu_fence_export_fd future_fence_export = {
             .handle = create.handle,
@@ -455,6 +482,24 @@ int main(int argc, char **argv)
             close(fd);
             return 1;
         }
+        struct fb_gpu_fence_query future_nowait_query = {
+            .fd = future_fence_export.fd,
+        };
+        if (ioctl(fd, FB_GPU_FENCE_QUERY, &future_nowait_query) < 0 ||
+            future_nowait_query.fence != present.fence + 1000000 ||
+            future_nowait_query.signaled >= future_nowait_query.fence) {
+            printf("gpubuftest: pending fence zero-timeout query failed at loop %d fence=%lu signaled=%lu\n",
+                   i, future_nowait_query.fence,
+                   future_nowait_query.signaled);
+            close(future_fence_export.fd);
+            munmap((void *)import_fd.addr, (int)import_fd.size);
+            munmap((void *)import.addr, (int)import.size);
+            munmap((void *)create.addr, (int)create.size);
+            close(fd);
+            return 1;
+        }
+        printf("gpubuftest: pending fence query ok at loop %d fence=%lu signaled=%lu\n",
+               i, future_nowait_query.fence, future_nowait_query.signaled);
         struct fb_gpu_fence_query future_fence_query = {
             .fd = future_fence_export.fd,
             .flags = FB_GPU_FENCE_WAIT,

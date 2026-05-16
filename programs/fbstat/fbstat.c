@@ -229,6 +229,10 @@ int main(int argc, char *argv[])
     printf("dxg_d3dkmt %lu\n", stats.dxg_d3dkmt);
     printf("dxg_global_rx %lu\n", stats.dxg_global_rx);
     printf("dxg_vgpu_rx %lu\n", stats.dxg_vgpu_rx);
+    printf("display_presents %lu\n", stats.display_presents);
+    printf("display_completions %lu\n", stats.display_completions);
+    printf("display_last_present %lu\n", stats.display_last_present);
+    printf("display_last_complete %lu\n", stats.display_last_complete);
     close(fd);
     return 0;
 }

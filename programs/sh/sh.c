@@ -2101,11 +2101,17 @@ int main(int argc, char *argv[]) {
 
     // ---- sh -c "command" ----
     if (argc >= argi + 2 && strcmp(argv[argi], "-c") == 0) {
+        // glibc system() may invoke "sh -c -- command" so that command
+        // strings beginning with '-' are not parsed as shell options.
+        int cmd_argi = argi + 1;
+        if (cmd_argi < argc && strcmp(argv[cmd_argi], "--") == 0)
+            cmd_argi++;
+
         // Concatenate all remaining args with spaces (sh -c "cmd" arg0 arg1)
         char cmdbuf[512];
         int pos = 0;
-        for (int i = argi + 1; i < argc && pos < (int)sizeof(cmdbuf) - 2; i++) {
-            if (i > argi + 1 && pos < (int)sizeof(cmdbuf) - 1)
+        for (int i = cmd_argi; i < argc && pos < (int)sizeof(cmdbuf) - 2; i++) {
+            if (i > cmd_argi && pos < (int)sizeof(cmdbuf) - 1)
                 cmdbuf[pos++] = ' ';
             int alen = strlen(argv[i]);
             if (alen > (int)sizeof(cmdbuf) - pos - 1)
