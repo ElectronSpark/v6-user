@@ -4,6 +4,11 @@
 #include "user/user.h"
 
 #define DXGPROBE_DEFAULT_FENCE_WAIT_SECONDS 5
+#define DXGPROBE_TRACKER_STRESS_RESOURCES 96
+#define DXGPROBE_TRACKER_STRESS_GPUVAS 544
+#define DXGPROBE_TRACKER_STRESS_SYNCS 544
+#define DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE 0x10000
+#define DXGPROBE_WSL_REPLAY_COMMAND_SIZE 64
 
 static int g_paging_fence_wait_seconds = DXGPROBE_DEFAULT_FENCE_WAIT_SECONDS;
 
@@ -46,6 +51,92 @@ static int query_vidmem(int fd, struct d3dkmthandle adapter)
            info.budget, info.current_usage, info.current_reservation,
            info.available_for_reservation);
     return 0;
+}
+
+static int open_first_dxg_device(int *fd_out, struct d3dkmthandle *adapter_out,
+                                 struct d3dkmthandle *device_out)
+{
+    struct d3dkmt_enumadapters2 enum2;
+    struct d3dkmt_adapterinfo adapters[D3DKMT_ADAPTERS_MAX];
+    struct d3dkmt_openadapterfromluid open_luid;
+    struct d3dkmt_createdevice create_device;
+    int fd;
+
+    fd = open("/dev/dxg", O_RDWR);
+    if (fd < 0) {
+        printf("dxg_child: open /dev/dxg failed\n");
+        return -1;
+    }
+
+    memset(&enum2, 0, sizeof(enum2));
+    if (ioctl(fd, LX_DXENUMADAPTERS2, &enum2) < 0 ||
+        enum2.num_adapters == 0) {
+        printf("dxg_child: enum count failed count=%u\n",
+               enum2.num_adapters);
+        close(fd);
+        return -1;
+    }
+    if (enum2.num_adapters > D3DKMT_ADAPTERS_MAX)
+        enum2.num_adapters = D3DKMT_ADAPTERS_MAX;
+    memset(adapters, 0, sizeof(adapters));
+    enum2.adapters = (uint64)adapters;
+    if (ioctl(fd, LX_DXENUMADAPTERS2, &enum2) < 0 ||
+        adapters[0].adapter_handle.v == 0) {
+        printf("dxg_child: enum adapters failed count=%u handle=0x%x\n",
+               enum2.num_adapters, adapters[0].adapter_handle.v);
+        close(fd);
+        return -1;
+    }
+
+    memset(&open_luid, 0, sizeof(open_luid));
+    open_luid.adapter_luid = adapters[0].adapter_luid;
+    if (ioctl(fd, LX_DXOPENADAPTERFROMLUID, &open_luid) < 0 ||
+        open_luid.adapter_handle.v == 0) {
+        printf("dxg_child: open adapter failed\n");
+        close(fd);
+        return -1;
+    }
+
+    memset(&create_device, 0, sizeof(create_device));
+    create_device.adapter = open_luid.adapter_handle;
+    if (ioctl(fd, LX_DXCREATEDEVICE, &create_device) < 0 ||
+        create_device.device.v == 0) {
+        struct d3dkmt_closeadapter close_adapter;
+
+        printf("dxg_child: create device failed device=0x%x\n",
+               create_device.device.v);
+        memset(&close_adapter, 0, sizeof(close_adapter));
+        close_adapter.adapter_handle = open_luid.adapter_handle;
+        ioctl(fd, LX_DXCLOSEADAPTER, &close_adapter);
+        close(fd);
+        return -1;
+    }
+
+    *fd_out = fd;
+    *adapter_out = open_luid.adapter_handle;
+    *device_out = create_device.device;
+    return 0;
+}
+
+static void close_dxg_device(int fd, struct d3dkmthandle adapter,
+                             struct d3dkmthandle device)
+{
+    struct d3dkmt_destroydevice destroy_device;
+    struct d3dkmt_closeadapter close_adapter;
+
+    if (fd < 0)
+        return;
+    if (device.v != 0) {
+        memset(&destroy_device, 0, sizeof(destroy_device));
+        destroy_device.device = device;
+        ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device);
+    }
+    if (adapter.v != 0) {
+        memset(&close_adapter, 0, sizeof(close_adapter));
+        close_adapter.adapter_handle = adapter;
+        ioctl(fd, LX_DXCLOSEADAPTER, &close_adapter);
+    }
+    close(fd);
 }
 
 static void query_statistics(int fd, struct winluid adapter_luid)
@@ -468,14 +559,14 @@ static int probe_context_matrix(int fd, struct d3dkmthandle device,
 
     memset(&flags, 0, sizeof(flags));
     flags.hw_queue_supported = 1;
+    TRY_CONTEXT("dx12_hwqueue_private_e0_64", 0, 0,
+                _D3DKMT_CLIENTHINT_DX12, private_data, private64, 0);
+    TRY_CONTEXT("dx12_hwqueue_e0", 0, 0, _D3DKMT_CLIENTHINT_DX12, 0, 0, 0);
     TRY_CONTEXT("dx12_hwqueue_private_e1_full", 0, 1,
                 _D3DKMT_CLIENTHINT_DX12, private_data, private_size, 0);
     TRY_CONTEXT("dx12_hwqueue_private_e1_64", 0, 1,
                 _D3DKMT_CLIENTHINT_DX12, private_data, private64, 0);
-    TRY_CONTEXT("dx12_hwqueue_private_e0_64", 0, 0,
-                _D3DKMT_CLIENTHINT_DX12, private_data, private64, 0);
     TRY_CONTEXT("dx12_hwqueue_e1", 0, 1, _D3DKMT_CLIENTHINT_DX12, 0, 0, 0);
-    TRY_CONTEXT("dx12_hwqueue_e0", 0, 0, _D3DKMT_CLIENTHINT_DX12, 0, 0, 0);
     TRY_CONTEXT("dx10_hwqueue_e0", 0, 0, _D3DKMT_CLIENTHINT_DX10, 0, 0, 0);
     TRY_CONTEXT("opengl_hwqueue_e0", 0, 0, _D3DKMT_CLIENTHINT_OPENGL,
                 0, 0, 0);
@@ -952,6 +1043,56 @@ static void probe_existing_sysmem_unsupported(int fd,
                allocation_info.allocation.v, create_allocation.resource.v);
 }
 
+static void probe_createallocation_unwind(int fd,
+                                          struct d3dkmthandle device)
+{
+    struct d3dddi_allocationinfo2 *allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    void *page;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(dxg_existing_sysmem_buffer); i++)
+        dxg_existing_sysmem_buffer[i] = (unsigned char)(0xa5 ^ i);
+
+    page = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == (void *)-1) {
+        printf("createallocation_unwind skipped mmap_failed\n");
+        return;
+    }
+    memset(page, 0, 4096);
+    allocation_info = (struct d3dddi_allocationinfo2 *)page;
+    allocation_info->sysmem = (uint64)dxg_existing_sysmem_buffer;
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP;
+    standard_allocation.existing_heap_data.size =
+        sizeof(dxg_existing_sysmem_buffer);
+    create_allocation.device = device;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)allocation_info;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.flags.create_resource = 1;
+    create_allocation.flags.standard_allocation = 1;
+    create_allocation.flags.existing_sysmem = 1;
+
+    if (mprotect(page, 4096, PROT_READ) != 0) {
+        printf("createallocation_unwind skipped mprotect_failed\n");
+        munmap(page, 4096);
+        return;
+    }
+    if (ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation) < 0) {
+        printf("createallocation_unwind ok copyout_failed resource=0x%x\n",
+               create_allocation.resource.v);
+    } else {
+        printf("createallocation_unwind unexpected_success allocation=0x%x resource=0x%x\n",
+               allocation_info->allocation.v, create_allocation.resource.v);
+    }
+    if (mprotect(page, 4096, PROT_READ | PROT_WRITE) == 0)
+        munmap(page, 4096);
+}
+
 static void probe_lock2(int fd, struct d3dkmthandle device,
                         struct d3dkmthandle allocation)
 {
@@ -1260,61 +1401,356 @@ static void probe_sync_file_unsupported(int fd, struct d3dkmthandle device,
     }
 }
 
-static void probe_shared_handle_unsupported(int fd, struct d3dkmthandle device,
-                                            struct d3dkmthandle object)
+static int probe_shared_sync_nt(int fd, struct d3dkmthandle device)
 {
+    struct d3dkmt_createsynchronizationobject2 create_sync;
+    struct d3dkmt_destroysynchronizationobject destroy_sync;
     struct d3dkmt_shareobjects share_objects;
-    struct d3dkmt_opensyncobjectfromnthandle2 open_sync_nt;
-    struct d3dkmt_queryresourceinfofromnthandle query_resource_nt;
-    struct d3dkmt_openresourcefromnthandle open_resource_nt;
+    struct d3dkmt_opensyncobjectfromnthandle2 open_sync;
     struct d3dkmthandle objects[1];
     uint64 shared_handle = 0;
+    int ret = -1;
+
+    if (device.v == 0)
+        return -1;
+
+    memset(&create_sync, 0, sizeof(create_sync));
+    create_sync.device = device;
+    create_sync.info.type = _D3DDDI_MONITORED_FENCE;
+    create_sync.info.flags.shared = 1;
+    create_sync.info.flags.nt_security_sharing = 1;
+    create_sync.info.monitored_fence.initial_fence_value = 0;
+    create_sync.info.monitored_fence.engine_affinity = 0;
+    if (ioctl(fd, LX_DXCREATESYNCHRONIZATIONOBJECT, &create_sync) < 0 ||
+        create_sync.sync_object.v == 0 ||
+        create_sync.info.shared_handle.v == 0) {
+        printf("shared_sync_nt create_failed sync=0x%x global=0x%x flags=0x%x\n",
+               create_sync.sync_object.v, create_sync.info.shared_handle.v,
+               create_sync.info.flags.value);
+        return -1;
+    }
+    printf("shared_sync_object 0x%x global=0x%x flags=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+           create_sync.sync_object.v, create_sync.info.shared_handle.v,
+           create_sync.info.flags.value,
+           create_sync.info.monitored_fence.fence_cpu_virtual_address,
+           create_sync.info.monitored_fence.fence_gpu_virtual_address);
 
     memset(&share_objects, 0, sizeof(share_objects));
-    objects[0] = object;
+    objects[0] = create_sync.sync_object;
     share_objects.object_count = 1;
     share_objects.objects = (uint64)objects;
     share_objects.shared_handle = (uint64)&shared_handle;
-    if (ioctl(fd, LX_DXSHAREOBJECTS, &share_objects) < 0) {
-        printf("share_objects unsupported object=0x%x count=%u\n",
-               object.v, share_objects.object_count);
-    } else {
-        printf("share_objects ok handle=0x%lx\n", shared_handle);
+    if (ioctl(fd, LX_DXSHAREOBJECTS, &share_objects) < 0 ||
+        shared_handle == 0) {
+        printf("share_sync_nt failed sync=0x%x fd=%lu\n",
+               create_sync.sync_object.v, shared_handle);
+        goto out_destroy_original;
+    }
+    printf("share_sync_nt ok sync=0x%x fd=%lu\n",
+           create_sync.sync_object.v, shared_handle);
+
+    memset(&open_sync, 0, sizeof(open_sync));
+    open_sync.device = device;
+    open_sync.nt_handle = shared_handle;
+    open_sync.flags = create_sync.info.flags;
+    open_sync.monitored_fence.engine_affinity = 0;
+    if (ioctl(fd, LX_DXOPENSYNCOBJECTFROMNTHANDLE2, &open_sync) < 0 ||
+        open_sync.sync_object.v == 0 ||
+        open_sync.monitored_fence.fence_value_cpu_va == 0 ||
+        open_sync.monitored_fence.fence_value_gpu_va == 0) {
+        printf("open_sync_nt failed fd=%lu sync=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+               shared_handle, open_sync.sync_object.v,
+               open_sync.monitored_fence.fence_value_cpu_va,
+               open_sync.monitored_fence.fence_value_gpu_va);
+        goto out_close_fd;
+    }
+    printf("open_sync_nt ok sync=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+           open_sync.sync_object.v, open_sync.monitored_fence.fence_value_cpu_va,
+           open_sync.monitored_fence.fence_value_gpu_va);
+
+    memset(&destroy_sync, 0, sizeof(destroy_sync));
+    destroy_sync.sync_object = open_sync.sync_object;
+    if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync) < 0)
+        printf("open_sync_nt destroy_failed sync=0x%x\n",
+               open_sync.sync_object.v);
+    {
+        int pid = fork();
+        int status = 1;
+
+        if (pid < 0) {
+            printf("open_sync_nt_child fork_failed fd=%lu\n",
+                   shared_handle);
+            goto out_close_fd;
+        }
+        if (pid == 0) {
+            struct d3dkmthandle child_adapter;
+            struct d3dkmthandle child_device;
+            struct d3dkmt_opensyncobjectfromnthandle2 child_open;
+            int child_fd = -1;
+            int child_ret = 1;
+
+            memset(&child_adapter, 0, sizeof(child_adapter));
+            memset(&child_device, 0, sizeof(child_device));
+            if (open_first_dxg_device(&child_fd, &child_adapter,
+                                      &child_device) == 0) {
+                memset(&child_open, 0, sizeof(child_open));
+                child_open.device = child_device;
+                child_open.nt_handle = shared_handle;
+                child_open.flags = create_sync.info.flags;
+                if (ioctl(child_fd, LX_DXOPENSYNCOBJECTFROMNTHANDLE2,
+                          &child_open) == 0 &&
+                    child_open.sync_object.v != 0 &&
+                    child_open.monitored_fence.fence_value_cpu_va != 0 &&
+                    child_open.monitored_fence.fence_value_gpu_va != 0) {
+                    printf("open_sync_nt_child ok sync=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+                           child_open.sync_object.v,
+                           child_open.monitored_fence.fence_value_cpu_va,
+                           child_open.monitored_fence.fence_value_gpu_va);
+                    memset(&destroy_sync, 0, sizeof(destroy_sync));
+                    destroy_sync.sync_object = child_open.sync_object;
+                    if (ioctl(child_fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                              &destroy_sync) < 0)
+                        printf("open_sync_nt_child destroy_failed sync=0x%x\n",
+                               child_open.sync_object.v);
+                    child_ret = 0;
+                } else {
+                    printf("open_sync_nt_child failed fd=%lu sync=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+                           shared_handle, child_open.sync_object.v,
+                           child_open.monitored_fence.fence_value_cpu_va,
+                           child_open.monitored_fence.fence_value_gpu_va);
+                }
+                close_dxg_device(child_fd, child_adapter, child_device);
+            }
+            exit(child_ret);
+        }
+        wait(&status);
+        if (status != 0) {
+            printf("open_sync_nt_child failed status=%d\n", status);
+            goto out_close_fd;
+        }
+    }
+    ret = 0;
+
+out_close_fd:
+    close((int)shared_handle);
+out_destroy_original:
+    memset(&destroy_sync, 0, sizeof(destroy_sync));
+    destroy_sync.sync_object = create_sync.sync_object;
+    if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync) < 0)
+        printf("shared_sync_nt destroy_failed sync=0x%x\n",
+               create_sync.sync_object.v);
+    return ret;
+}
+
+static void *probe_alloc_buffer(uint32 size)
+{
+    void *buf;
+
+    if (size == 0)
+        return 0;
+    buf = malloc(size);
+    if (buf != 0)
+        memset(buf, 0, size);
+    return buf;
+}
+
+static int probe_open_resource_nt_once(int fd, struct d3dkmthandle device,
+                                       uint64 shared_handle, const char *tag)
+{
+    struct d3dkmt_queryresourceinfofromnthandle query;
+    struct d3dkmt_openresourcefromnthandle open_resource;
+    struct d3dkmt_destroyallocation2 destroy;
+    struct d3dddi_openallocationinfo2 *open_alloc = 0;
+    void *runtime_data = 0;
+    void *resource_data = 0;
+    void *total_data = 0;
+    uint32 allocation_count;
+    int ret = -1;
+
+    memset(&query, 0, sizeof(query));
+    query.device = device;
+    query.nt_handle = shared_handle;
+    if (ioctl(fd, LX_DXQUERYRESOURCEINFOFROMNTHANDLE, &query) < 0) {
+        printf("%s query_resource_nt failed fd=%lu\n", tag, shared_handle);
+        return -1;
+    }
+    printf("%s query_resource_nt ok allocations=%u runtime=%u resource_priv=%u total_priv=%u\n",
+           tag, query.allocation_count, query.private_runtime_data_size,
+           query.resource_priv_drv_data_size,
+           query.total_priv_drv_data_size);
+
+    allocation_count = query.allocation_count;
+    if (allocation_count == 0 || allocation_count > 64) {
+        printf("%s open_resource_nt skipped invalid allocation_count=%u\n",
+               tag, allocation_count);
+        return -1;
     }
 
-    memset(&open_sync_nt, 0, sizeof(open_sync_nt));
-    open_sync_nt.device = device;
-    open_sync_nt.nt_handle = shared_handle;
-    if (ioctl(fd, LX_DXOPENSYNCOBJECTFROMNTHANDLE2, &open_sync_nt) < 0) {
-        printf("open_sync_nt unsupported device=0x%x handle=0x%lx\n",
-               device.v, open_sync_nt.nt_handle);
-    } else {
-        printf("open_sync_nt ok sync=0x%x\n", open_sync_nt.sync_object.v);
+    open_alloc = malloc(allocation_count * sizeof(open_alloc[0]));
+    runtime_data = probe_alloc_buffer(query.private_runtime_data_size);
+    resource_data = probe_alloc_buffer(query.resource_priv_drv_data_size);
+    total_data = probe_alloc_buffer(query.total_priv_drv_data_size);
+    if (open_alloc == 0 ||
+        (query.private_runtime_data_size != 0 && runtime_data == 0) ||
+        (query.resource_priv_drv_data_size != 0 && resource_data == 0) ||
+        (query.total_priv_drv_data_size != 0 && total_data == 0)) {
+        printf("%s open_resource_nt skipped alloc failure count=%u\n",
+               tag, allocation_count);
+        goto out;
+    }
+    memset(open_alloc, 0, allocation_count * sizeof(open_alloc[0]));
+
+    memset(&open_resource, 0, sizeof(open_resource));
+    open_resource.device = device;
+    open_resource.nt_handle = shared_handle;
+    open_resource.allocation_count = allocation_count;
+    open_resource.open_alloc_info = (uint64)open_alloc;
+    open_resource.private_runtime_data_size =
+        (int32)query.private_runtime_data_size;
+    open_resource.private_runtime_data = (uint64)runtime_data;
+    open_resource.resource_priv_drv_data_size =
+        query.resource_priv_drv_data_size;
+    open_resource.resource_priv_drv_data = (uint64)resource_data;
+    open_resource.total_priv_drv_data_size =
+        query.total_priv_drv_data_size;
+    open_resource.total_priv_drv_data = (uint64)total_data;
+    if (ioctl(fd, LX_DXOPENRESOURCEFROMNTHANDLE, &open_resource) < 0 ||
+        open_resource.resource.v == 0) {
+        printf("%s open_resource_nt failed fd=%lu resource=0x%x allocations=%u\n",
+               tag, shared_handle, open_resource.resource.v,
+               allocation_count);
+        goto out;
+    }
+    printf("%s open_resource_nt ok resource=0x%x allocations=%u first=0x%x priv0=%u\n",
+           tag, open_resource.resource.v, allocation_count,
+           open_alloc[0].allocation.v, open_alloc[0].priv_drv_data_size);
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.device = device;
+    destroy.resource = open_resource.resource;
+    destroy.flags.assume_not_in_use = 1;
+    if (ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy) < 0)
+        printf("%s open_resource_nt destroy_failed resource=0x%x\n",
+               tag, open_resource.resource.v);
+    ret = 0;
+
+out:
+    if (open_alloc)
+        free(open_alloc);
+    if (runtime_data)
+        free(runtime_data);
+    if (resource_data)
+        free(resource_data);
+    if (total_data)
+        free(total_data);
+    return ret;
+}
+
+static void probe_shared_resource_nt(int fd, struct d3dkmthandle device,
+                                     struct d3dkmthandle resource)
+{
+    struct d3dkmt_shareobjects share_objects;
+    struct d3dkmthandle objects[1];
+    uint64 shared_handle = 0;
+
+    if (device.v == 0 || resource.v == 0)
+        return;
+
+    memset(&share_objects, 0, sizeof(share_objects));
+    objects[0] = resource;
+    share_objects.object_count = 1;
+    share_objects.objects = (uint64)objects;
+    share_objects.shared_handle = (uint64)&shared_handle;
+    if (ioctl(fd, LX_DXSHAREOBJECTS, &share_objects) < 0 ||
+        shared_handle == 0) {
+        printf("share_resource_nt failed resource=0x%x handle=0x%lx\n",
+               resource.v, shared_handle);
+        return;
+    }
+    printf("share_resource_nt ok resource=0x%x fd=%lu\n",
+           resource.v, shared_handle);
+
+    probe_open_resource_nt_once(fd, device, shared_handle, "");
+    {
+        int pid = fork();
+        int status = 1;
+
+        if (pid < 0) {
+            printf("open_resource_nt_child fork_failed fd=%lu\n",
+                   shared_handle);
+        } else if (pid == 0) {
+            struct d3dkmthandle child_adapter;
+            struct d3dkmthandle child_device;
+            int child_fd = -1;
+            int child_ret = 1;
+
+            memset(&child_adapter, 0, sizeof(child_adapter));
+            memset(&child_device, 0, sizeof(child_device));
+            if (open_first_dxg_device(&child_fd, &child_adapter,
+                                      &child_device) == 0) {
+                if (probe_open_resource_nt_once(child_fd, child_device,
+                                                shared_handle,
+                                                "child") == 0)
+                    child_ret = 0;
+                close_dxg_device(child_fd, child_adapter, child_device);
+            }
+            exit(child_ret);
+        } else {
+            wait(&status);
+            if (status != 0)
+                printf("open_resource_nt_child failed status=%d\n", status);
+        }
+    }
+    close((int)shared_handle);
+}
+
+static void probe_shared_standard_allocation(int fd,
+                                             struct d3dkmthandle device)
+{
+    struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    struct d3dkmt_destroyallocation2 destroy_allocation;
+
+    if (device.v == 0)
+        return;
+
+    memset(&allocation_info, 0, sizeof(allocation_info));
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    create_allocation.device = device;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)&allocation_info;
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size = 0x10000;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.flags.create_resource = 1;
+    create_allocation.flags.create_shared = 1;
+    create_allocation.flags.nt_security_sharing = 1;
+    create_allocation.flags.cross_adapter = 1;
+    create_allocation.flags.standard_allocation = 1;
+
+    if (ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation) < 0 ||
+        allocation_info.allocation.v == 0 ||
+        create_allocation.resource.v == 0) {
+        printf("shared_allocation_probe create_failed allocation=0x%x resource=0x%x global=0x%x\n",
+               allocation_info.allocation.v, create_allocation.resource.v,
+               create_allocation.global_share.v);
+        return;
     }
 
-    memset(&query_resource_nt, 0, sizeof(query_resource_nt));
-    query_resource_nt.device = device;
-    query_resource_nt.nt_handle = shared_handle;
-    if (ioctl(fd, LX_DXQUERYRESOURCEINFOFROMNTHANDLE,
-              &query_resource_nt) < 0) {
-        printf("query_resource_nt unsupported device=0x%x handle=0x%lx\n",
-               device.v, query_resource_nt.nt_handle);
-    } else {
-        printf("query_resource_nt ok allocations=%u total_priv=%u\n",
-               query_resource_nt.allocation_count,
-               query_resource_nt.total_priv_drv_data_size);
-    }
+    printf("shared_allocation_handle 0x%x resource=0x%x global=0x%x flags=0x%x\n",
+           allocation_info.allocation.v, create_allocation.resource.v,
+           create_allocation.global_share.v, create_allocation.flags.value);
+    probe_shared_resource_nt(fd, device, create_allocation.resource);
 
-    memset(&open_resource_nt, 0, sizeof(open_resource_nt));
-    open_resource_nt.device = device;
-    open_resource_nt.nt_handle = shared_handle;
-    if (ioctl(fd, LX_DXOPENRESOURCEFROMNTHANDLE, &open_resource_nt) < 0) {
-        printf("open_resource_nt unsupported device=0x%x handle=0x%lx\n",
-               device.v, open_resource_nt.nt_handle);
-    } else {
-        printf("open_resource_nt ok resource=0x%x allocations=%u\n",
-               open_resource_nt.resource.v, open_resource_nt.allocation_count);
-    }
+    memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+    destroy_allocation.device = device;
+    destroy_allocation.resource = create_allocation.resource;
+    destroy_allocation.flags.assume_not_in_use = 1;
+    if (ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy_allocation) < 0)
+        printf("shared_allocation_probe destroy_failed resource=0x%x\n",
+               create_allocation.resource.v);
 }
 
 static void probe_misc_unsupported(int fd, struct d3dkmthandle adapter,
@@ -1628,6 +2064,7 @@ static int probe_device_context(int fd, struct d3dkmthandle adapter,
 
     memset(&context_handle, 0, sizeof(context_handle));
     memset(&locked_allocation, 0, sizeof(locked_allocation));
+    memset(&create_sync, 0, sizeof(create_sync));
 
     memset(&create_device, 0, sizeof(create_device));
     create_device.adapter = adapter;
@@ -1654,6 +2091,8 @@ static int probe_device_context(int fd, struct d3dkmthandle adapter,
     if (try_submit)
         probe_private_allocation_create(fd, create_device.device);
     probe_existing_sysmem_unsupported(fd, create_device.device);
+    probe_createallocation_unwind(fd, create_device.device);
+    probe_shared_standard_allocation(fd, create_device.device);
 
     if (stage != DXGPROBE_STAGE_SYNC_ONLY) {
         memset(&create_paging_queue, 0, sizeof(create_paging_queue));
@@ -1852,8 +2291,8 @@ sync_probe:
         printf("sync_object 0x%x\n", create_sync.sync_object.v);
         probe_share_object_with_host(fd, create_device.device,
                                      create_sync.sync_object);
-        probe_shared_handle_unsupported(fd, create_device.device,
-                                        create_sync.sync_object);
+        if (probe_shared_sync_nt(fd, create_device.device) < 0)
+            ret = -1;
         probe_sync_file_unsupported(fd, create_device.device,
                                     create_sync.sync_object);
         probe_cpu_sync(fd, create_device.device, create_sync.sync_object,
@@ -2016,6 +2455,508 @@ cleanup:
     return ret;
 }
 
+static int probe_tracker_stress(int fd, struct d3dkmthandle adapter)
+{
+    struct d3dkmt_createdevice create_device;
+    struct d3dkmt_destroydevice destroy_device;
+    struct d3dkmt_destroyallocation2 destroy_allocation;
+    struct d3dkmt_freegpuvirtualaddress free_gpuva;
+    struct d3dkmthandle *syncs;
+    struct d3dkmthandle *allocations;
+    struct d3dkmthandle *resources;
+    uint64 *gpuvas;
+    uint64 *gpuva_sizes;
+    uint created_syncs = 0;
+    uint created_resources = 0;
+    uint reserved_gpuvas = 0;
+    int ret = 0;
+
+    syncs = malloc(sizeof(syncs[0]) * DXGPROBE_TRACKER_STRESS_SYNCS);
+    allocations = malloc(sizeof(allocations[0]) *
+                         DXGPROBE_TRACKER_STRESS_RESOURCES);
+    resources = malloc(sizeof(resources[0]) *
+                       DXGPROBE_TRACKER_STRESS_RESOURCES);
+    gpuvas = malloc(sizeof(gpuvas[0]) * DXGPROBE_TRACKER_STRESS_GPUVAS);
+    gpuva_sizes = malloc(sizeof(gpuva_sizes[0]) *
+                         DXGPROBE_TRACKER_STRESS_GPUVAS);
+    if (syncs == 0 || allocations == 0 || resources == 0 ||
+        gpuvas == 0 || gpuva_sizes == 0) {
+        printf("tracker_stress allocation_failed\n");
+        ret = -1;
+        goto out_free;
+    }
+    memset(syncs, 0, sizeof(syncs[0]) * DXGPROBE_TRACKER_STRESS_SYNCS);
+    memset(allocations, 0, sizeof(allocations[0]) *
+           DXGPROBE_TRACKER_STRESS_RESOURCES);
+    memset(resources, 0, sizeof(resources[0]) *
+           DXGPROBE_TRACKER_STRESS_RESOURCES);
+    memset(gpuvas, 0, sizeof(gpuvas[0]) * DXGPROBE_TRACKER_STRESS_GPUVAS);
+    memset(gpuva_sizes, 0, sizeof(gpuva_sizes[0]) *
+           DXGPROBE_TRACKER_STRESS_GPUVAS);
+
+    memset(&create_device, 0, sizeof(create_device));
+    create_device.adapter = adapter;
+    if (ioctl(fd, LX_DXCREATEDEVICE, &create_device) < 0 ||
+        create_device.device.v == 0) {
+        printf("tracker_stress create_device_failed device=0x%x\n",
+               create_device.device.v);
+        ret = -1;
+        goto out_free;
+    }
+
+    for (uint i = 0; i < DXGPROBE_TRACKER_STRESS_SYNCS; i++) {
+        struct d3dkmt_createsynchronizationobject2 create_sync;
+
+        memset(&create_sync, 0, sizeof(create_sync));
+        create_sync.device = create_device.device;
+        create_sync.info.type = _D3DDDI_MONITORED_FENCE;
+        create_sync.info.monitored_fence.initial_fence_value = 0;
+        create_sync.info.monitored_fence.engine_affinity = 0;
+        if (ioctl(fd, LX_DXCREATESYNCHRONIZATIONOBJECT,
+                  &create_sync) < 0 ||
+            create_sync.sync_object.v == 0) {
+            printf("tracker_stress create_sync_failed index=%u sync=0x%x\n",
+                   i, create_sync.sync_object.v);
+            ret = -1;
+            goto cleanup;
+        }
+        syncs[i] = create_sync.sync_object;
+        created_syncs++;
+    }
+
+    for (uint i = 0; i < DXGPROBE_TRACKER_STRESS_RESOURCES; i++) {
+        struct d3dddi_allocationinfo2 allocation_info;
+        struct d3dkmt_createallocation create_allocation;
+        struct d3dkmt_createstandardallocation standard_allocation;
+
+        memset(&allocation_info, 0, sizeof(allocation_info));
+        memset(&create_allocation, 0, sizeof(create_allocation));
+        memset(&standard_allocation, 0, sizeof(standard_allocation));
+        standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+        standard_allocation.existing_heap_data.size = 0x10000;
+        create_allocation.device = create_device.device;
+        create_allocation.alloc_count = 1;
+        create_allocation.allocation_info = (uint64)&allocation_info;
+        create_allocation.standard_allocation = (uint64)&standard_allocation;
+        create_allocation.flags.create_resource = 1;
+        create_allocation.flags.standard_allocation = 1;
+        if (ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation) < 0 ||
+            allocation_info.allocation.v == 0) {
+            printf("tracker_stress create_resource_failed index=%u allocation=0x%x resource=0x%x\n",
+                   i, allocation_info.allocation.v,
+                   create_allocation.resource.v);
+            ret = -1;
+            goto cleanup;
+        }
+        allocations[i] = allocation_info.allocation;
+        resources[i] = create_allocation.resource;
+        created_resources++;
+    }
+
+    for (uint i = 0; i < DXGPROBE_TRACKER_STRESS_GPUVAS; i++) {
+        struct d3dddi_reservegpuvirtualaddress reserve_gpuva;
+
+        memset(&reserve_gpuva, 0, sizeof(reserve_gpuva));
+        reserve_gpuva.adapter = adapter;
+        reserve_gpuva.size = 0x10000;
+        reserve_gpuva.reservation_type = _D3DDDIGPUVA_RESERVE_NO_ACCESS;
+        if (ioctl(fd, LX_DXRESERVEGPUVIRTUALADDRESS, &reserve_gpuva) < 0 ||
+            reserve_gpuva.virtual_address == 0) {
+            printf("tracker_stress reserve_gpuva_failed index=%u va=0x%lx\n",
+                   i, reserve_gpuva.virtual_address);
+            ret = -1;
+            goto cleanup;
+        }
+        gpuvas[i] = reserve_gpuva.virtual_address;
+        gpuva_sizes[i] = reserve_gpuva.size;
+        reserved_gpuvas++;
+    }
+
+cleanup:
+    while (reserved_gpuvas > 0) {
+        uint i = --reserved_gpuvas;
+
+        memset(&free_gpuva, 0, sizeof(free_gpuva));
+        free_gpuva.adapter = adapter;
+        free_gpuva.base_address = gpuvas[i];
+        free_gpuva.size = gpuva_sizes[i];
+        if (ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS, &free_gpuva) < 0) {
+            printf("tracker_stress free_gpuva_failed index=%u va=0x%lx\n",
+                   i, gpuvas[i]);
+            ret = -1;
+        }
+    }
+    while (created_resources > 0) {
+        uint i = --created_resources;
+
+        memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+        destroy_allocation.device = create_device.device;
+        destroy_allocation.resource = resources[i];
+        destroy_allocation.flags.assume_not_in_use = 1;
+        if (resources[i].v == 0) {
+            destroy_allocation.allocations = (uint64)&allocations[i];
+            destroy_allocation.alloc_count = 1;
+        }
+        if (ioctl(fd, LX_DXDESTROYALLOCATION2,
+                  &destroy_allocation) < 0) {
+            printf("tracker_stress destroy_resource_failed index=%u allocation=0x%x resource=0x%x\n",
+                   i, allocations[i].v, resources[i].v);
+            ret = -1;
+        }
+    }
+    while (created_syncs > 0) {
+        uint i = --created_syncs;
+        struct d3dkmt_destroysynchronizationobject destroy_sync;
+
+        memset(&destroy_sync, 0, sizeof(destroy_sync));
+        destroy_sync.sync_object = syncs[i];
+        if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                  &destroy_sync) < 0) {
+            printf("tracker_stress destroy_sync_failed index=%u sync=0x%x\n",
+                   i, syncs[i].v);
+            ret = -1;
+        }
+    }
+
+    memset(&destroy_device, 0, sizeof(destroy_device));
+    destroy_device.device = create_device.device;
+    if (ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device) < 0) {
+        printf("tracker_stress destroy_device_failed device=0x%x\n",
+               create_device.device.v);
+        ret = -1;
+    }
+    if (ret == 0)
+        printf("tracker_stress ok resources=%u gpuvas=%u syncs=%u\n",
+               DXGPROBE_TRACKER_STRESS_RESOURCES,
+               DXGPROBE_TRACKER_STRESS_GPUVAS,
+               DXGPROBE_TRACKER_STRESS_SYNCS);
+
+out_free:
+    if (syncs != 0)
+        free(syncs);
+    if (allocations != 0)
+        free(allocations);
+    if (resources != 0)
+        free(resources);
+    if (gpuvas != 0)
+        free(gpuvas);
+    if (gpuva_sizes != 0)
+        free(gpuva_sizes);
+    return ret;
+}
+
+static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
+{
+    static unsigned char context_private_data[] = {
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x1c, 0x0c, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    struct d3dkmt_createdevice create_device;
+    struct d3dkmt_destroydevice destroy_device;
+    struct d3dkmt_createpagingqueue create_paging_queue;
+    struct d3dddi_destroypagingqueue destroy_paging_queue;
+    struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    struct d3dkmt_destroyallocation2 destroy_allocation;
+    struct d3dddi_makeresident make_resident;
+    struct d3dkmt_evict evict;
+    struct d3dddi_mapgpuvirtualaddress map_gpuva;
+    struct d3dkmt_freegpuvirtualaddress free_gpuva;
+    struct d3dkmt_lock2 lock;
+    struct d3dkmt_unlock2 unlock;
+    struct d3dddi_createcontextflags context_flags;
+    struct d3dddi_createhwqueueflags hwqueue_flags;
+    struct d3dkmt_createhwqueue create_hwqueue;
+    struct d3dkmt_destroyhwqueue destroy_hwqueue;
+    struct d3dkmt_submitcommand submit_context;
+    struct d3dkmt_submitcommandtohwqueue submit_hwqueue;
+    struct dxg_submit_priv_data submit_private;
+    struct d3dkmthandle allocation_list[1];
+    struct d3dkmthandle context_handle;
+    uint32 priority_list[1];
+    uint32 submit_private_size = 0;
+    int device_created = 0;
+    int paging_queue_created = 0;
+    int allocation_created = 0;
+    int allocation_resident = 0;
+    int gpuva_mapped = 0;
+    int allocation_locked = 0;
+    int context_created = 0;
+    int hwqueue_created = 0;
+    int ret = -1;
+
+    memset(&context_handle, 0, sizeof(context_handle));
+    memset(&create_device, 0, sizeof(create_device));
+    create_device.adapter = adapter;
+    if (ioctl(fd, LX_DXCREATEDEVICE, &create_device) < 0 ||
+        create_device.device.v == 0) {
+        printf("wsl_trace_replay create_device_failed device=0x%x\n",
+               create_device.device.v);
+        goto cleanup;
+    }
+    device_created = 1;
+    printf("wsl_trace_replay device=0x%x command_buffer=0x%lx command_size=%u\n",
+           create_device.device.v, create_device.command_buffer,
+           create_device.command_buffer_size);
+
+    memset(&create_paging_queue, 0, sizeof(create_paging_queue));
+    create_paging_queue.device = create_device.device;
+    create_paging_queue.priority = _D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    if (ioctl(fd, LX_DXCREATEPAGINGQUEUE, &create_paging_queue) < 0 ||
+        create_paging_queue.paging_queue.v == 0) {
+        printf("wsl_trace_replay create_paging_queue_failed queue=0x%x sync=0x%x\n",
+               create_paging_queue.paging_queue.v,
+               create_paging_queue.sync_object.v);
+        goto cleanup;
+    }
+    paging_queue_created = 1;
+    printf("wsl_trace_replay paging_queue=0x%x sync=0x%x fence_cpu=0x%lx\n",
+           create_paging_queue.paging_queue.v,
+           create_paging_queue.sync_object.v,
+           create_paging_queue.fence_cpu_virtual_address);
+
+    memset(&allocation_info, 0, sizeof(allocation_info));
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size =
+        DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE;
+    create_allocation.device = create_device.device;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)&allocation_info;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.flags.create_resource = 1;
+    create_allocation.flags.standard_allocation = 1;
+    if (ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation) < 0 ||
+        allocation_info.allocation.v == 0) {
+        printf("wsl_trace_replay create_allocation_failed allocation=0x%x resource=0x%x\n",
+               allocation_info.allocation.v, create_allocation.resource.v);
+        goto cleanup;
+    }
+    allocation_created = 1;
+    printf("wsl_trace_replay allocation=0x%x resource=0x%x\n",
+           allocation_info.allocation.v, create_allocation.resource.v);
+
+    allocation_list[0] = allocation_info.allocation;
+    priority_list[0] = 0;
+    memset(&make_resident, 0, sizeof(make_resident));
+    make_resident.paging_queue = create_paging_queue.paging_queue;
+    make_resident.alloc_count = 1;
+    make_resident.allocation_list = (uint64)allocation_list;
+    make_resident.priority_list = (uint64)priority_list;
+    if (ioctl(fd, LX_DXMAKERESIDENT, &make_resident) < 0) {
+        printf("wsl_trace_replay make_resident_failed fence=%lu trim=%lu\n",
+               make_resident.paging_fence_value,
+               make_resident.num_bytes_to_trim);
+        goto cleanup;
+    }
+    allocation_resident = 1;
+    printf("wsl_trace_replay resident fence=%lu trim=%lu\n",
+           make_resident.paging_fence_value, make_resident.num_bytes_to_trim);
+    (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
+                            make_resident.paging_fence_value,
+                            "wsl_replay_make_resident");
+
+    memset(&map_gpuva, 0, sizeof(map_gpuva));
+    map_gpuva.paging_queue = create_paging_queue.paging_queue;
+    map_gpuva.maximum_address = ~0ULL;
+    map_gpuva.allocation = allocation_info.allocation;
+    map_gpuva.size_in_pages = DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE >> 12;
+    map_gpuva.protection.write = 1;
+    if (ioctl(fd, LX_DXMAPGPUVIRTUALADDRESS, &map_gpuva) < 0 ||
+        map_gpuva.virtual_address == 0) {
+        printf("wsl_trace_replay map_gpuva_failed va=0x%lx fence=%lu\n",
+               map_gpuva.virtual_address, map_gpuva.paging_fence_value);
+        goto cleanup;
+    }
+    gpuva_mapped = 1;
+    printf("wsl_trace_replay gpuva=0x%lx pages=0x%lx fence=%lu\n",
+           map_gpuva.virtual_address, map_gpuva.size_in_pages,
+           map_gpuva.paging_fence_value);
+    (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
+                            map_gpuva.paging_fence_value,
+                            "wsl_replay_map_gpuva");
+
+    memset(&lock, 0, sizeof(lock));
+    lock.device = create_device.device;
+    lock.allocation = allocation_info.allocation;
+    if (ioctl(fd, LX_DXLOCK2, &lock) < 0 || lock.data == 0) {
+        printf("wsl_trace_replay lock2_failed allocation=0x%x data=0x%lx\n",
+               allocation_info.allocation.v, lock.data);
+        goto cleanup;
+    }
+    allocation_locked = 1;
+    memset((void *)lock.data, 0, DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
+    printf("wsl_trace_replay lock2 data=0x%lx command_len=%u\n",
+           lock.data, DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
+
+    memset(&context_flags, 0, sizeof(context_flags));
+    context_flags.hw_queue_supported = 1;
+    if (try_create_context(fd, create_device.device,
+                           "wsl_replay_dx12_hwqueue_private_e0", 0, 0,
+                           _D3DKMT_CLIENTHINT_DX12, context_flags,
+                           context_private_data,
+                           sizeof(context_private_data),
+                           &context_handle) < 0 &&
+        try_create_context(fd, create_device.device,
+                           "wsl_replay_dx12_hwqueue_empty_e0", 0, 0,
+                           _D3DKMT_CLIENTHINT_DX12, context_flags,
+                           0, 0, &context_handle) < 0 &&
+        try_create_context(fd, create_device.device,
+                           "wsl_replay_dx12_hwqueue_empty_e1", 0, 1,
+                           _D3DKMT_CLIENTHINT_DX12, context_flags,
+                           0, 0, &context_handle) < 0) {
+        printf("wsl_trace_replay create_context_failed\n");
+        goto cleanup;
+    }
+    context_created = 1;
+
+    memset(&submit_context, 0, sizeof(submit_context));
+    submit_context.broadcast_context_count = 1;
+    submit_context.broadcast_context[0] = context_handle;
+    if (ioctl(fd, LX_DXSUBMITCOMMAND, &submit_context) < 0) {
+        printf("wsl_trace_replay submit_context_empty_failed context=0x%x\n",
+               context_handle.v);
+    } else {
+        printf("wsl_trace_replay submit_context_empty ok context=0x%x\n",
+               context_handle.v);
+        ret = 0;
+    }
+
+    memset(&hwqueue_flags, 0, sizeof(hwqueue_flags));
+    memset(&create_hwqueue, 0, sizeof(create_hwqueue));
+    create_hwqueue.context = context_handle;
+    create_hwqueue.flags = hwqueue_flags;
+    if (ioctl(fd, LX_DXCREATEHWQUEUE, &create_hwqueue) < 0 ||
+        create_hwqueue.queue.v == 0) {
+        printf("wsl_trace_replay create_hwqueue_failed context=0x%x queue=0x%x fence=0x%x\n",
+               context_handle.v, create_hwqueue.queue.v,
+               create_hwqueue.queue_progress_fence.v);
+        goto cleanup;
+    }
+    hwqueue_created = 1;
+    printf("wsl_trace_replay hwqueue=0x%x progress_fence=0x%x fence_cpu=0x%lx fence_gpu=0x%lx\n",
+           create_hwqueue.queue.v, create_hwqueue.queue_progress_fence.v,
+           create_hwqueue.queue_progress_fence_cpu_va,
+           create_hwqueue.queue_progress_fence_gpu_va);
+
+    make_submit_private(&submit_private, &submit_private_size,
+                        map_gpuva.virtual_address,
+                        DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
+    memset(&submit_hwqueue, 0, sizeof(submit_hwqueue));
+    submit_hwqueue.hwqueue = create_hwqueue.queue;
+    submit_hwqueue.hwqueue_progress_fence_id = 1;
+    submit_hwqueue.command_buffer = map_gpuva.virtual_address;
+    submit_hwqueue.command_length = DXGPROBE_WSL_REPLAY_COMMAND_SIZE;
+    submit_hwqueue.priv_drv_data = (uint64)&submit_private;
+    submit_hwqueue.priv_drv_data_size = submit_private_size;
+    submit_hwqueue.num_primaries = 1;
+    submit_hwqueue.written_primaries = (uint64)allocation_list;
+    if (ioctl(fd, LX_DXSUBMITCOMMANDTOHWQUEUE, &submit_hwqueue) < 0) {
+        printf("wsl_trace_replay submit_hwqueue_failed queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
+               create_hwqueue.queue.v,
+               submit_hwqueue.hwqueue_progress_fence_id,
+               submit_hwqueue.command_buffer,
+               submit_hwqueue.command_length,
+               submit_hwqueue.priv_drv_data_size);
+        goto cleanup;
+    }
+    printf("wsl_trace_replay submit_hwqueue ok queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
+           create_hwqueue.queue.v,
+           submit_hwqueue.hwqueue_progress_fence_id,
+           submit_hwqueue.command_buffer,
+           submit_hwqueue.command_length,
+           submit_hwqueue.priv_drv_data_size);
+    ret = 0;
+
+cleanup:
+    if (allocation_locked) {
+        memset(&unlock, 0, sizeof(unlock));
+        unlock.device = create_device.device;
+        unlock.allocation = allocation_info.allocation;
+        if (ioctl(fd, LX_DXUNLOCK2, &unlock) < 0) {
+            printf("wsl_trace_replay unlock2_failed allocation=0x%x\n",
+                   allocation_info.allocation.v);
+            ret = -1;
+        }
+    }
+    if (hwqueue_created) {
+        memset(&destroy_hwqueue, 0, sizeof(destroy_hwqueue));
+        destroy_hwqueue.queue = create_hwqueue.queue;
+        if (ioctl(fd, LX_DXDESTROYHWQUEUE, &destroy_hwqueue) < 0) {
+            printf("wsl_trace_replay destroy_hwqueue_failed queue=0x%x\n",
+                   create_hwqueue.queue.v);
+            ret = -1;
+        }
+    }
+    if (context_created && destroy_context_handle(fd, context_handle) < 0)
+        ret = -1;
+    if (gpuva_mapped) {
+        memset(&free_gpuva, 0, sizeof(free_gpuva));
+        free_gpuva.adapter = adapter;
+        free_gpuva.base_address = map_gpuva.virtual_address;
+        free_gpuva.size = map_gpuva.size_in_pages << 12;
+        if (ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS, &free_gpuva) < 0) {
+            printf("wsl_trace_replay free_gpuva_failed va=0x%lx size=%lu\n",
+                   free_gpuva.base_address, free_gpuva.size);
+            ret = -1;
+        }
+    }
+    if (allocation_resident) {
+        memset(&evict, 0, sizeof(evict));
+        evict.device = create_device.device;
+        evict.alloc_count = 1;
+        evict.allocations = (uint64)allocation_list;
+        if (ioctl(fd, LX_DXEVICT, &evict) < 0) {
+            printf("wsl_trace_replay evict_failed trim=%lu\n",
+                   evict.num_bytes_to_trim);
+            ret = -1;
+        }
+    }
+    if (allocation_created) {
+        memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+        destroy_allocation.device = create_device.device;
+        destroy_allocation.resource = create_allocation.resource;
+        destroy_allocation.flags.assume_not_in_use = 1;
+        if (create_allocation.resource.v == 0) {
+            destroy_allocation.allocations = (uint64)allocation_list;
+            destroy_allocation.alloc_count = 1;
+        }
+        if (ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy_allocation) < 0) {
+            printf("wsl_trace_replay destroy_allocation_failed allocation=0x%x resource=0x%x\n",
+                   allocation_info.allocation.v,
+                   create_allocation.resource.v);
+            ret = -1;
+        }
+    }
+    if (paging_queue_created) {
+        memset(&destroy_paging_queue, 0, sizeof(destroy_paging_queue));
+        destroy_paging_queue.paging_queue = create_paging_queue.paging_queue;
+        if (ioctl(fd, LX_DXDESTROYPAGINGQUEUE,
+                  &destroy_paging_queue) < 0) {
+            printf("wsl_trace_replay destroy_paging_queue_failed queue=0x%x\n",
+                   create_paging_queue.paging_queue.v);
+            ret = -1;
+        }
+    }
+    if (device_created) {
+        memset(&destroy_device, 0, sizeof(destroy_device));
+        destroy_device.device = create_device.device;
+        if (ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device) < 0) {
+            printf("wsl_trace_replay destroy_device_failed device=0x%x\n",
+                   create_device.device.v);
+            ret = -1;
+        }
+    }
+    if (ret == 0)
+        printf("wsl_trace_replay ok\n");
+    return ret;
+}
+
 int main(int argc, char **argv)
 {
     struct d3dkmt_enumadapters2 enum2;
@@ -2031,6 +2972,8 @@ int main(int argc, char **argv)
     int try_submit = 0;
     int try_wait = 0;
     int owner_isolation = 0;
+    int tracker_stress = 0;
+    int wsl_trace_replay = 0;
     enum dxgprobe_stage stage = DXGPROBE_STAGE_FULL;
 
     for (int i = 1; i < argc; i++) {
@@ -2052,6 +2995,10 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--owner-isolation") == 0)
             owner_isolation = 1;
+        else if (strcmp(argv[i], "--tracker-stress") == 0)
+            tracker_stress = 1;
+        else if (strcmp(argv[i], "--wsl-trace-replay") == 0)
+            wsl_trace_replay = 1;
         else if (strcmp(argv[i], "--adapter-only") == 0)
             stage = DXGPROBE_STAGE_ADAPTER_ONLY;
         else if (strcmp(argv[i], "--device-only") == 0)
@@ -2155,6 +3102,16 @@ int main(int argc, char **argv)
     query_features(fd, open_luid.adapter_handle);
     query_adapter_dxcore_raw(fd, open_luid.adapter_handle);
     probe_flush_heap_transitions(fd, open_luid.adapter_handle);
+    if (tracker_stress) {
+        if (probe_tracker_stress(fd, open_luid.adapter_handle) < 0)
+            ret = 1;
+        goto close_adapter;
+    }
+    if (wsl_trace_replay) {
+        if (probe_wsl_trace_replay(fd, open_luid.adapter_handle) < 0)
+            ret = 1;
+        goto close_adapter;
+    }
     if (owner_isolation) {
         if (probe_owner_isolation(fd, open_luid.adapter_handle) < 0)
             ret = 1;
