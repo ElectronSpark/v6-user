@@ -21,6 +21,54 @@ static int get_cap(int fd, uint64 cap, uint64 *value)
     return 0;
 }
 
+static int get_obj_props(int fd, uint32 obj_id, uint32 obj_type,
+                         uint32 *props, uint64 *values, uint32 *count)
+{
+    struct drm_mode_obj_get_properties_compat req;
+
+    memset(&req, 0, sizeof(req));
+    req.obj_id = obj_id;
+    req.obj_type = obj_type;
+    req.props_ptr = (uint64)props;
+    req.prop_values_ptr = (uint64)values;
+    req.count_props = *count;
+    if (ioctl(fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &req) < 0)
+        return -1;
+    *count = req.count_props;
+    return 0;
+}
+
+static uint32 find_prop(int fd, const uint32 *props, uint32 count,
+                        const char *name, uint32 required_flags)
+{
+    struct drm_mode_get_property_compat prop;
+
+    for (uint32 i = 0; i < count; i++) {
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = props[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) < 0)
+            return 0;
+        if (strcmp(prop.name, name) == 0 &&
+            (prop.flags & required_flags) == required_flags)
+            return props[i];
+    }
+    return 0;
+}
+
+static uint32 find_obj_prop(int fd, uint32 obj_id, uint32 obj_type,
+                            const char *name, uint32 required_flags)
+{
+    uint32 props[16];
+    uint64 values[16];
+    uint32 count = 16;
+
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    if (get_obj_props(fd, obj_id, obj_type, props, values, &count) < 0)
+        return 0;
+    return find_prop(fd, props, count, name, required_flags);
+}
+
 static int check_common(int fd, const char *node)
 {
     char name[32];
@@ -49,6 +97,10 @@ static int check_common(int fd, const char *node)
     client_cap.value = 1;
     if (ioctl(fd, DRM_IOCTL_SET_CLIENT_CAP, &client_cap) < 0)
         return fail("SET_CLIENT_CAP failed");
+    client_cap.capability = DRM_CLIENT_CAP_ATOMIC;
+    client_cap.value = 1;
+    if (ioctl(fd, DRM_IOCTL_SET_CLIENT_CAP, &client_cap) < 0)
+        return fail("SET_CLIENT_CAP atomic failed");
 
     if (get_cap(fd, DRM_CAP_DUMB_BUFFER, &value) < 0 || value != 1)
         return fail("DUMB_BUFFER cap failed");
@@ -84,6 +136,12 @@ static int check_primary(int fd)
     uint32 formats[4];
     uint32 props[4];
     uint64 prop_values[4];
+    uint32 obj_props[16];
+    uint64 obj_values[16];
+    uint32 obj_count;
+    uint32 active_prop;
+    uint32 fb_prop;
+    uint32 plane_type_prop;
     uint32 mode_blob = 0;
     uint32 crtc_prop = 0;
 
@@ -210,6 +268,34 @@ static int check_primary(int fd)
         formats[1] != DRM_FORMAT_ARGB8888)
         return fail("GETPLANE failed");
 
+    memset(obj_props, 0, sizeof(obj_props));
+    memset(obj_values, 0, sizeof(obj_values));
+    obj_count = 16;
+    if (get_obj_props(fd, ids[0], DRM_MODE_OBJECT_CRTC, obj_props,
+                      obj_values, &obj_count) < 0 || obj_count < 2)
+        return fail("CRTC OBJ_GETPROPERTIES failed");
+    active_prop = find_prop(fd, obj_props, obj_count, "ACTIVE",
+                            DRM_MODE_PROP_RANGE);
+    mode_blob = find_prop(fd, obj_props, obj_count, "MODE_ID",
+                          DRM_MODE_PROP_BLOB);
+    if (active_prop == 0 || mode_blob == 0)
+        return fail("CRTC object properties missing");
+
+    memset(obj_props, 0, sizeof(obj_props));
+    memset(obj_values, 0, sizeof(obj_values));
+    obj_count = 16;
+    if (get_obj_props(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE, obj_props,
+                      obj_values, &obj_count) < 0 || obj_count < 8)
+        return fail("plane OBJ_GETPROPERTIES failed");
+    plane_type_prop = find_prop(fd, obj_props, obj_count, "type",
+                                DRM_MODE_PROP_ENUM);
+    fb_prop = find_prop(fd, obj_props, obj_count, "FB_ID",
+                        DRM_MODE_PROP_OBJECT);
+    crtc_prop = find_prop(fd, obj_props, obj_count, "CRTC_ID",
+                          DRM_MODE_PROP_OBJECT);
+    if (plane_type_prop == 0 || fb_prop == 0 || crtc_prop == 0)
+        return fail("plane object properties missing");
+
     if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) < 0)
         return fail("primary DROP_MASTER failed");
 
@@ -261,9 +347,26 @@ static int check_kms_fb(int fd)
     struct drm_mode_crtc_page_flip_compat flip;
     struct drm_event_vblank_compat event;
     struct drm_mode_atomic_compat atomic;
+    struct drm_mode_get_plane_res_compat plane_res;
+    struct drm_mode_get_plane_compat plane;
     struct drm_mode_destroy_dumb_compat destroy;
     union drm_wait_vblank_compat vblank;
+    uint32 plane_ids[2];
+    uint32 objs[2];
+    uint32 counts[2];
+    uint32 props[16];
+    uint64 values[16];
+    uint32 active_prop;
+    uint32 mode_prop;
+    uint32 plane_crtc_prop;
+    uint32 plane_fb_prop;
+    uint32 src_w_prop;
+    uint32 src_h_prop;
+    uint32 crtc_w_prop;
+    uint32 crtc_h_prop;
+    uint32 out_fence_prop;
     uint32 fb_id = 0;
+    int32 out_fence = -2;
 
     memset(&create, 0, sizeof(create));
     create.width = 80;
@@ -337,6 +440,84 @@ static int check_kms_fb(int fd)
     atomic.count_objs = 1;
     if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0)
         return fail("invalid ATOMIC accepted");
+
+    memset(plane_ids, 0, sizeof(plane_ids));
+    memset(&plane_res, 0, sizeof(plane_res));
+    plane_res.plane_id_ptr = (uint64)plane_ids;
+    plane_res.count_planes = 2;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res) < 0 ||
+        plane_ids[0] == 0)
+        return fail("atomic plane lookup failed");
+    active_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC, "ACTIVE",
+                                DRM_MODE_PROP_RANGE);
+    mode_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC, "MODE_ID",
+                              DRM_MODE_PROP_BLOB);
+    out_fence_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC,
+                                   "OUT_FENCE_PTR", DRM_MODE_PROP_RANGE);
+    plane_crtc_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                                    "CRTC_ID", DRM_MODE_PROP_OBJECT);
+    plane_fb_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                                  "FB_ID", DRM_MODE_PROP_OBJECT);
+    src_w_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                               "SRC_W", DRM_MODE_PROP_RANGE);
+    src_h_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                               "SRC_H", DRM_MODE_PROP_RANGE);
+    crtc_w_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                                "CRTC_W", DRM_MODE_PROP_RANGE);
+    crtc_h_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
+                                "CRTC_H", DRM_MODE_PROP_RANGE);
+    if (active_prop == 0 || mode_prop == 0 || out_fence_prop == 0 ||
+        plane_crtc_prop == 0 || plane_fb_prop == 0 ||
+        src_w_prop == 0 || src_h_prop == 0 ||
+        crtc_w_prop == 0 || crtc_h_prop == 0)
+        return fail("atomic properties missing");
+
+    objs[0] = 1;
+    counts[0] = 3;
+    props[0] = active_prop;
+    values[0] = 1;
+    props[1] = mode_prop;
+    values[1] = 5;
+    props[2] = out_fence_prop;
+    values[2] = (uint64)&out_fence;
+    objs[1] = plane_ids[0];
+    counts[1] = 6;
+    props[3] = plane_crtc_prop;
+    values[3] = 1;
+    props[4] = plane_fb_prop;
+    values[4] = fb_id;
+    props[5] = src_w_prop;
+    values[5] = (uint64)create.width << 16;
+    props[6] = src_h_prop;
+    values[6] = (uint64)create.height << 16;
+    props[7] = crtc_w_prop;
+    values[7] = create.width;
+    props[8] = crtc_h_prop;
+    values[8] = create.height;
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
+    atomic.count_objs = 2;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 ||
+        out_fence != -1)
+        return fail("property ATOMIC commit failed");
+    memset(&plane, 0, sizeof(plane));
+    plane.plane_id = plane_ids[0];
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANE, &plane) < 0 ||
+        plane.fb_id != fb_id)
+        return fail("atomic plane state mismatch");
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = DRM_MODE_ATOMIC_NONBLOCK;
+    atomic.count_objs = 2;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0)
+        return fail("nonblock ATOMIC unexpectedly accepted");
 
     if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) < 0)
         return fail("RMFB failed");
