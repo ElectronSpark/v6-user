@@ -170,6 +170,17 @@ main(void)
     int fd;
     int ret;
 
+    ret = nouveau_device_open(NULL, &dev);
+    if (ret == 0) {
+        ret = check_present_nouveau(dev->fd, dev);
+        nouveau_device_del(&dev);
+        if (ret != 0)
+            return ret;
+        printf("nouveauabitest: discovery open ok\n");
+        return 0;
+    }
+    printf("nouveauabitest: discovery open fail-closed ret=%d\n", ret);
+
     fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
     if (fd < 0)
         return fail("open renderD128 failed");
