@@ -71,6 +71,8 @@ static int check_primary(int fd)
     struct drm_client_compat client;
     struct drm_stats_compat stats;
     struct drm_mode_card_res_compat res;
+    struct drm_mode_crtc_compat crtc;
+    struct drm_mode_get_encoder_compat enc;
     struct drm_mode_get_connector_compat conn;
     struct drm_mode_get_property_compat prop;
     struct drm_mode_get_blob_compat blob;
@@ -110,6 +112,27 @@ static int check_primary(int fd)
         res.count_crtcs != 1 || res.count_connectors != 1 ||
         res.count_encoders != 1 || ids[1] == 0)
         return fail("GETRESOURCES failed");
+
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = ids[0];
+    if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0 ||
+        crtc.mode_valid != 1 ||
+        crtc.mode.hdisplay == 0 || crtc.mode.vdisplay == 0)
+        return fail("GETCRTC failed");
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = 0xfeedface;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) >= 0)
+        return fail("invalid GETCRTC accepted");
+
+    memset(&enc, 0, sizeof(enc));
+    enc.encoder_id = ids[2];
+    if (ioctl(fd, DRM_IOCTL_MODE_GETENCODER, &enc) < 0 ||
+        enc.crtc_id != ids[0] || enc.possible_crtcs == 0)
+        return fail("GETENCODER failed");
+    memset(&enc, 0, sizeof(enc));
+    enc.encoder_id = 0xfeedface;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETENCODER, &enc) >= 0)
+        return fail("invalid GETENCODER accepted");
 
     memset(&conn, 0, sizeof(conn));
     memset(modes, 0, sizeof(modes));
@@ -234,9 +257,12 @@ static int check_kms_fb(int fd)
 {
     struct drm_mode_create_dumb_compat create;
     struct drm_mode_fb_cmd2_compat fb;
+    struct drm_mode_crtc_compat crtc;
     struct drm_mode_crtc_page_flip_compat flip;
+    struct drm_event_vblank_compat event;
     struct drm_mode_atomic_compat atomic;
     struct drm_mode_destroy_dumb_compat destroy;
+    union drm_wait_vblank_compat vblank;
     uint32 fb_id = 0;
 
     memset(&create, 0, sizeof(create));
@@ -261,16 +287,56 @@ static int check_kms_fb(int fd)
     }
     fb_id = fb.fb_id;
 
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = 1;
+    crtc.fb_id = fb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
+        return fail("SETCRTC failed");
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = 0xfeedface;
+    crtc.fb_id = fb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) >= 0)
+        return fail("invalid SETCRTC accepted");
+
+    memset(&vblank, 0, sizeof(vblank));
+    vblank.request.sequence = 41;
+    if (ioctl(fd, DRM_IOCTL_WAIT_VBLANK, &vblank) < 0 ||
+        vblank.reply.sequence != 42)
+        return fail("WAIT_VBLANK failed");
+
     memset(&flip, 0, sizeof(flip));
     flip.crtc_id = 1;
     flip.fb_id = fb_id;
+    flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
+    flip.user_data = 0x44524d464c49504fULL;
     if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) < 0)
         return fail("PAGE_FLIP failed");
+    memset(&event, 0, sizeof(event));
+    if (read(fd, &event, sizeof(event)) != sizeof(event) ||
+        event.base.type != DRM_EVENT_FLIP_COMPLETE ||
+        event.base.length != sizeof(event) ||
+        event.user_data != flip.user_data ||
+        event.crtc_id != 1 || event.sequence == 0)
+        return fail("PAGE_FLIP event read failed");
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("empty PAGE_FLIP event queue accepted");
+    memset(&flip, 0, sizeof(flip));
+    flip.crtc_id = 1;
+    flip.fb_id = 0xfeedface;
+    if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) >= 0)
+        return fail("invalid PAGE_FLIP accepted");
 
     memset(&atomic, 0, sizeof(atomic));
     atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
     if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0)
         return fail("ATOMIC test-only failed");
+    memset(&atomic, 0, sizeof(atomic));
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0)
+        return fail("ATOMIC commit failed");
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.count_objs = 1;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0)
+        return fail("invalid ATOMIC accepted");
 
     if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) < 0)
         return fail("RMFB failed");
