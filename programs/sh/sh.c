@@ -28,8 +28,6 @@
 #include <stdio.h>
 #include <curses.h>
 #include <pwd.h>
-extern char **environ;
-static int exec(const char *path, char **argv) { return execve(path, argv, environ); }
 static int getdents(int fd, void *dirp, int count) {
     return (int)syscall(SYS_getdents64, fd, dirp, (size_t)count);
 }
@@ -115,7 +113,7 @@ struct linux_dirent64 {
 #define LIST 4
 #define BACK 5
 
-#define MAXARGS 10
+#define MAXARGS 32
 
 struct cmd {
     int type;
@@ -228,7 +226,7 @@ static int itoa_local(int val, char *buf, int bufsz) {
 // Line editing state
 // =====================================================================
 
-#define LINE_BUF_SIZE 256
+#define LINE_BUF_SIZE 1024
 #define HISTORY_SIZE 32
 
 static char line_buf[LINE_BUF_SIZE];
@@ -288,6 +286,55 @@ struct env_var {
 static struct env_var env_vars[MAX_ENV_VARS];
 
 static int env_set(const char *name, const char *value);
+
+static int env_name_start(int c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+static int env_name_char(int c) {
+    return env_name_start(c) || (c >= '0' && c <= '9');
+}
+
+static int env_assignment_name_len(const char *word) {
+    int i;
+
+    if (word == 0 || !env_name_start((unsigned char)word[0]))
+        return 0;
+    for (i = 1; word[i] && word[i] != '='; i++) {
+        if (!env_name_char((unsigned char)word[i]))
+            return 0;
+    }
+    if (word[i] != '=')
+        return 0;
+    return i;
+}
+
+static int is_env_assignment_word(const char *word) {
+    return env_assignment_name_len(word) > 0;
+}
+
+static int assignment_matches_name(const char *assignment, const char *name) {
+    int alen = env_assignment_name_len(assignment);
+    int nlen;
+
+    if (alen == 0)
+        return 0;
+    nlen = strlen(name);
+    return alen == nlen && strncmp_local(assignment, name, alen) == 0;
+}
+
+static int env_set_assignment(const char *assignment) {
+    char name[MAX_ENV_NAME];
+    int nlen = env_assignment_name_len(assignment);
+
+    if (nlen == 0)
+        return -1;
+    if (nlen >= MAX_ENV_NAME)
+        nlen = MAX_ENV_NAME - 1;
+    memcpy(name, assignment, nlen);
+    name[nlen] = 0;
+    return env_set(name, assignment + env_assignment_name_len(assignment) + 1);
+}
 
 static void env_init(void) {
     for (int i = 0; i < MAX_ENV_VARS; i++)
@@ -466,14 +513,23 @@ static void env_list(void) {
 // Expand $VAR, ${VAR}, $$, $? in a string.
 // Returns pointer to a static buffer.
 static char expand_buf[LINE_BUF_SIZE * 2];
+static int expand_truncated;
 
 static char *expand_env_vars(const char *input) {
     char *out = expand_buf;
     char *out_end = expand_buf + sizeof(expand_buf) - 1;
     const char *p = input;
 
+    expand_truncated = 0;
     while (*p && out < out_end) {
-        if (*p == '$') {
+        if (*p == '\'') {
+            *out++ = *p++;
+            while (*p && out < out_end) {
+                *out++ = *p;
+                if (*p++ == '\'')
+                    break;
+            }
+        } else if (*p == '$') {
             p++;
             if (*p == '{') {
                 // ${VAR}
@@ -532,6 +588,8 @@ static char *expand_env_vars(const char *input) {
             *out++ = *p++;
         }
     }
+    if (*p)
+        expand_truncated = 1;
     *out = 0;
     return expand_buf;
 }
@@ -1541,15 +1599,51 @@ static void builtin_history(void) {
     }
 }
 
-#ifndef USE_NCURSES_SHELL
-static char **build_exec_envp(void) {
+static void copy_assignment_env(char *dst, const char *assignment) {
+    int nlen = env_assignment_name_len(assignment);
+    int vlen;
+
+    if (nlen >= MAX_ENV_NAME)
+        nlen = MAX_ENV_NAME - 1;
+    vlen = strlen(assignment + env_assignment_name_len(assignment) + 1);
+    if (vlen >= MAX_ENV_VALUE)
+        vlen = MAX_ENV_VALUE - 1;
+    memcpy(dst, assignment, nlen);
+    dst[nlen] = '=';
+    memcpy(dst + nlen + 1, assignment + env_assignment_name_len(assignment) + 1, vlen);
+    dst[nlen + 1 + vlen] = 0;
+}
+
+static int assignment_has_later_override(char **assignv, int assignc, int idx) {
+    for (int j = idx + 1; j < assignc; j++) {
+        int nlen = env_assignment_name_len(assignv[idx]);
+        if (nlen == env_assignment_name_len(assignv[j]) &&
+            strncmp_local(assignv[idx], assignv[j], nlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static char **build_exec_envp_with_assignments(char **assignv, int assignc) {
     static char env_storage[MAX_ENV_VARS][MAX_ENV_NAME + MAX_ENV_VALUE + 2];
     static char *envp[MAX_ENV_VARS + 1];
     int out = 0;
 
     for (int i = 0; i < MAX_ENV_VARS && out < MAX_ENV_VARS; i++) {
+        int match = -1;
+
         if (!env_vars[i].used)
             continue;
+        for (int j = 0; j < assignc; j++) {
+            if (assignment_matches_name(assignv[j], env_vars[i].name))
+                match = j;
+        }
+        if (match >= 0) {
+            copy_assignment_env(env_storage[out], assignv[match]);
+            envp[out] = env_storage[out];
+            out++;
+            continue;
+        }
         int nlen = strlen(env_vars[i].name);
         int vlen = strlen(env_vars[i].value);
         if (nlen >= MAX_ENV_NAME)
@@ -1564,17 +1658,53 @@ static char **build_exec_envp(void) {
         envp[out] = env_storage[out];
         out++;
     }
+    for (int j = 0; j < assignc && out < MAX_ENV_VARS; j++) {
+        int exists = 0;
+
+        if (!is_env_assignment_word(assignv[j]) ||
+            assignment_has_later_override(assignv, assignc, j))
+            continue;
+        for (int i = 0; i < MAX_ENV_VARS; i++) {
+            if (env_vars[i].used && assignment_matches_name(assignv[j], env_vars[i].name)) {
+                exists = 1;
+                break;
+            }
+        }
+        if (exists)
+            continue;
+        copy_assignment_env(env_storage[out], assignv[j]);
+        envp[out] = env_storage[out];
+        out++;
+    }
     envp[out] = 0;
     return envp;
 }
-#endif
+
+static char **build_exec_envp(void) {
+    return build_exec_envp_with_assignments(0, 0);
+}
 
 static int shell_exec(char *path, char **argv) {
 #ifdef USE_NCURSES_SHELL
-    return exec(path, argv);
+    return execve(path, argv, build_exec_envp());
 #else
     return exec_with_env(path, argv, build_exec_envp());
 #endif
+}
+
+static int shell_exec_with_assignments(char *path, char **argv,
+                                       char **assignv, int assignc) {
+#ifdef USE_NCURSES_SHELL
+    return execve(path, argv, build_exec_envp_with_assignments(assignv, assignc));
+#else
+    return exec_with_env(path, argv, build_exec_envp_with_assignments(assignv, assignc));
+#endif
+}
+
+static int shell_exec_env(char *path, char **argv, char **assignv, int assignc) {
+    if (assignc == 0)
+        return shell_exec(path, argv);
+    return shell_exec_with_assignments(path, argv, assignv, assignc);
 }
 
 static int shell_fork(void) {
@@ -1589,17 +1719,17 @@ static int shell_fork(void) {
 // PATH-based exec
 // =====================================================================
 
-static void exec_with_path(char *cmd, char **argv) {
+static void exec_with_path_env(char *cmd, char **argv, char **assignv, int assignc) {
     // If contains '/', use directly
     for (char *p = cmd; *p; p++) {
         if (*p == '/') {
-            shell_exec(cmd, argv);
+            shell_exec_env(cmd, argv, assignv, assignc);
             return;
         }
     }
 
     // Try as-is (current dir)
-    shell_exec(cmd, argv);
+    shell_exec_env(cmd, argv, assignv, assignc);
 
     // Search PATH
     char *path = env_get("PATH");
@@ -1625,7 +1755,7 @@ static void exec_with_path(char *cmd, char **argv) {
             if (fullpath[dlen - 1] != '/')
                 fullpath[dlen++] = '/';
             strcpy(fullpath + dlen, cmd);
-            shell_exec(fullpath, argv);
+            shell_exec_env(fullpath, argv, assignv, assignc);
         }
         if (*p == ':')
             p++;
@@ -1677,38 +1807,50 @@ void runcmd(struct cmd *cmd) {
         panic("runcmd");
         break;
 
-    case EXEC:
+    case EXEC: {
         ecmd = (struct execcmd *)cmd;
         if (ecmd->argv[0] == 0)
             exit(1);
+        int assignc = 0;
+        while (ecmd->argv[assignc] && is_env_assignment_word(ecmd->argv[assignc]))
+            assignc++;
+        if (ecmd->argv[assignc] == 0) {
+            for (int i = 0; i < assignc; i++)
+                env_set_assignment(ecmd->argv[i]);
+            exit(0);
+        }
+        char **exec_argv = &ecmd->argv[assignc];
+
         // waitgdb: pause for debugger, then exec the real command
         // waitgdb -e <cmd>: also stop at entry point after exec
-        if (strcmp(ecmd->argv[0], "waitgdb") == 0) {
+        if (strcmp(exec_argv[0], "waitgdb") == 0) {
             int stop_entry = 0;
             int cmd_idx = 1;
-            if (ecmd->argv[1] && strcmp(ecmd->argv[1], "-e") == 0) {
+            if (exec_argv[1] && strcmp(exec_argv[1], "-e") == 0) {
                 stop_entry = 1;
                 cmd_idx = 2;
             }
-            if (ecmd->argv[cmd_idx] == 0) {
+            if (exec_argv[cmd_idx] == 0) {
                 errprintf("usage: waitgdb [-e] <command> [args...]\n");
                 exit(1);
             }
-            if (refuse_gui_only_without_session(ecmd->argv[cmd_idx]))
+            if (refuse_gui_only_without_session(exec_argv[cmd_idx]))
                 exit(126);
             if (stop_entry)
                 waitgdb_stopentry();
             else
                 waitgdb();
-            exec_with_path(ecmd->argv[cmd_idx], &ecmd->argv[cmd_idx]);
-            errprintf("waitgdb: exec %s failed\n", ecmd->argv[cmd_idx]);
+            exec_with_path_env(exec_argv[cmd_idx], &exec_argv[cmd_idx],
+                               ecmd->argv, assignc);
+            errprintf("waitgdb: exec %s failed\n", exec_argv[cmd_idx]);
             exit(127);
         }
-        if (refuse_gui_only_without_session(ecmd->argv[0]))
+        if (refuse_gui_only_without_session(exec_argv[0]))
             exit(126);
-        exec_with_path(ecmd->argv[0], ecmd->argv);
-        errprintf("exec %s failed\n", ecmd->argv[0]);
+        exec_with_path_env(exec_argv[0], exec_argv, ecmd->argv, assignc);
+        errprintf("exec %s failed\n", exec_argv[0]);
         exit(127);
+    }
 
     case REDIR:
         rcmd = (struct redircmd *)cmd;
@@ -1804,16 +1946,67 @@ static int line_has_control_operator(const char *s) {
     return 0;
 }
 
+static int run_assignment_only_line(char *buf) {
+    char tmp[LINE_BUF_SIZE];
+    int len = strlen(buf);
+    char *p;
+    int seen = 0;
+
+    if (len >= (int)sizeof(tmp))
+        len = sizeof(tmp) - 1;
+    memcpy(tmp, buf, len);
+    tmp[len] = 0;
+
+    p = tmp;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == '\n')
+            p++;
+        if (*p == 0)
+            break;
+        char *word = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n')
+            p++;
+        char saved = *p;
+        *p = 0;
+        if (!is_env_assignment_word(word))
+            return 0;
+        seen = 1;
+        *p = saved;
+    }
+    if (!seen)
+        return 0;
+
+    p = tmp;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == '\n')
+            p++;
+        if (*p == 0)
+            break;
+        char *word = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n')
+            p++;
+        char saved = *p;
+        *p = 0;
+        if (env_set_assignment(word) < 0)
+            errprintf("sh: bad assignment: %s\n", word);
+        *p = saved;
+    }
+    return 1;
+}
+
 static int run_line(char *buf, int interactive) {
-    static char expanded_buf[512];
+    static char expanded_buf[LINE_BUF_SIZE * 2];
     int simple_builtin_line;
 
     int len = strlen(buf);
     // Ensure the line ends with '\n' (parsecmd and builtins expect it)
     if (len > 0 && buf[len - 1] != '\n') {
-        if (len < 255) {
+        if (len < LINE_BUF_SIZE - 1) {
             buf[len] = '\n';
             buf[len + 1] = 0;
+        } else {
+            errprintf("sh: command line too long\n");
+            return -1;
         }
     }
 
@@ -1828,11 +2021,18 @@ static int run_line(char *buf, int interactive) {
 
     simple_builtin_line = !line_has_control_operator(buf);
 
+    if (simple_builtin_line && run_assignment_only_line(buf))
+        return 0;
+
     // ---- Built-in: cd ----
     if (simple_builtin_line && buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ') {
         buf[strlen(buf) - 1] = 0; // chop \n
         char *path = buf + 3;
         char *expanded = expand_env_vars(path);
+        if (expand_truncated) {
+            errprintf("sh: expanded command too long\n");
+            return -1;
+        }
         if (chdir(expanded) < 0)
             errprintf("cannot cd %s\n", expanded);
         else
@@ -1905,6 +2105,10 @@ static int run_line(char *buf, int interactive) {
     if (simple_builtin_line && strncmp_local(buf, "echo ", 5) == 0) {
         buf[strlen(buf) - 1] = 0;
         char *expanded = expand_env_vars(buf + 5);
+        if (expand_truncated) {
+            errprintf("sh: expanded command too long\n");
+            return -1;
+        }
         printf("%s\n", expanded);
         return 0;
     }
@@ -1917,9 +2121,11 @@ static int run_line(char *buf, int interactive) {
     // ---- External command ----
     // Expand env vars
     char *expanded = expand_env_vars(buf);
+    if (expand_truncated) {
+        errprintf("sh: expanded command too long\n");
+        return -1;
+    }
     int elen = strlen(expanded);
-    if (elen >= (int)sizeof(expanded_buf))
-        elen = sizeof(expanded_buf) - 1;
     memcpy(expanded_buf, expanded, elen);
     expanded_buf[elen] = 0;
 
@@ -2040,7 +2246,7 @@ static int run_script(const char *path) {
         *eol = '\0';
 
         // Copy to a mutable buffer for run_line
-        char linebuf[256];
+        char linebuf[LINE_BUF_SIZE];
         int llen = strlen(line);
         if (llen >= (int)sizeof(linebuf))
             llen = sizeof(linebuf) - 1;
@@ -2066,7 +2272,7 @@ static int run_script(const char *path) {
 // =====================================================================
 
 int main(int argc, char *argv[]) {
-    static char buf[256];
+    static char buf[LINE_BUF_SIZE];
     int fd;
 
     // Ensure three file descriptors are open.
@@ -2108,7 +2314,7 @@ int main(int argc, char *argv[]) {
             cmd_argi++;
 
         // Concatenate all remaining args with spaces (sh -c "cmd" arg0 arg1)
-        char cmdbuf[512];
+        char cmdbuf[LINE_BUF_SIZE];
         int pos = 0;
         for (int i = cmd_argi; i < argc && pos < (int)sizeof(cmdbuf) - 2; i++) {
             if (i > cmd_argi && pos < (int)sizeof(cmdbuf) - 1)
