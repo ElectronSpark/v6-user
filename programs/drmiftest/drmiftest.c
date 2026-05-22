@@ -72,11 +72,18 @@ static int check_primary(int fd)
     struct drm_stats_compat stats;
     struct drm_mode_card_res_compat res;
     struct drm_mode_get_connector_compat conn;
+    struct drm_mode_get_property_compat prop;
+    struct drm_mode_get_blob_compat blob;
     struct drm_mode_get_plane_res_compat plane_res;
     struct drm_mode_get_plane_compat plane;
     struct drm_mode_modeinfo_compat modes[2];
+    struct drm_mode_modeinfo_compat blob_mode;
     uint32 plane_ids[2];
     uint32 formats[4];
+    uint32 props[4];
+    uint64 prop_values[4];
+    uint32 mode_blob = 0;
+    uint32 crtc_prop = 0;
 
     memset(&magic, 0, sizeof(magic));
     if (ioctl(fd, DRM_IOCTL_GET_MAGIC, &magic) < 0 || magic.magic == 0)
@@ -106,13 +113,59 @@ static int check_primary(int fd)
 
     memset(&conn, 0, sizeof(conn));
     memset(modes, 0, sizeof(modes));
+    memset(props, 0, sizeof(props));
+    memset(prop_values, 0, sizeof(prop_values));
     conn.connector_id = ids[1];
     conn.modes_ptr = (uint64)modes;
+    conn.props_ptr = (uint64)props;
+    conn.prop_values_ptr = (uint64)prop_values;
     conn.count_modes = 2;
+    conn.count_props = 4;
     if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0 ||
         conn.count_modes == 0 || conn.connection != 1 ||
-        modes[0].hdisplay == 0 || modes[0].vdisplay == 0)
+        modes[0].hdisplay == 0 || modes[0].vdisplay == 0 ||
+        conn.count_props < 2)
         return fail("GETCONNECTOR failed");
+
+    for (uint32 i = 0; i < conn.count_props && i < 4; i++) {
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = props[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) < 0)
+            return fail("GETPROPERTY failed");
+        if (strcmp(prop.name, "CRTC_ID") == 0) {
+            if ((prop.flags & DRM_MODE_PROP_OBJECT) == 0 ||
+                prop_values[i] != ids[0])
+                return fail("CRTC_ID property mismatch");
+            crtc_prop = props[i];
+        } else if (strcmp(prop.name, "MODE_ID") == 0) {
+            if ((prop.flags & DRM_MODE_PROP_BLOB) == 0 ||
+                prop_values[i] == 0)
+                return fail("MODE_ID property mismatch");
+            mode_blob = (uint32)prop_values[i];
+        }
+    }
+    if (crtc_prop == 0 || mode_blob == 0)
+        return fail("connector properties missing");
+
+    memset(&blob, 0, sizeof(blob));
+    memset(&blob_mode, 0, sizeof(blob_mode));
+    blob.blob_id = mode_blob;
+    blob.length = sizeof(blob_mode);
+    blob.data = (uint64)&blob_mode;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0 ||
+        blob.length != sizeof(blob_mode) ||
+        blob_mode.hdisplay != modes[0].hdisplay ||
+        blob_mode.vdisplay != modes[0].vdisplay)
+        return fail("GETPROPBLOB failed");
+
+    memset(&prop, 0, sizeof(prop));
+    prop.prop_id = 0xfeedface;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) >= 0)
+        return fail("invalid GETPROPERTY accepted");
+    memset(&blob, 0, sizeof(blob));
+    blob.blob_id = 0xfeedface;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) >= 0)
+        return fail("invalid GETPROPBLOB accepted");
 
     memset(plane_ids, 0, sizeof(plane_ids));
     memset(&plane_res, 0, sizeof(plane_res));
