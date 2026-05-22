@@ -189,7 +189,7 @@ target_include_directories(userlib PUBLIC ${USER_LIB_DIR})
 # XV6_SKIP_PROGRAMS lists programs that need ports (libpng, ncurses, ...)
 # not available in this minimal sub-repo. They are skipped silently.
 # ==============================================================================
-set(XV6_SKIP_PROGRAMS pngtest timerdemo CACHE STRING
+set(XV6_SKIP_PROGRAMS nouveauabitest pngtest timerdemo CACHE STRING
     "Programs to skip (require ports not available standalone)")
 if(ARCH STREQUAL "x86_64")
     list(APPEND XV6_SKIP_PROGRAMS sh)
