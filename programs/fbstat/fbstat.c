@@ -1,5 +1,6 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/dev/fb.h"
+#include "kernel/inc/uabi/drm.h"
 #include "kernel/inc/uabi/fcntl.h"
 #include "user/user.h"
 
@@ -175,6 +176,95 @@ static int set_mode(const char *mode)
     return print_mode();
 }
 
+static int drm_cap_value(int fd, uint64 cap, uint64 *value)
+{
+    struct drm_get_cap_compat req;
+
+    memset(&req, 0, sizeof(req));
+    req.capability = cap;
+    if (ioctl(fd, DRM_IOCTL_GET_CAP, &req) < 0)
+        return -1;
+    *value = req.value;
+    return 0;
+}
+
+static void print_drm_node_diag(const char *path, const char *node)
+{
+    char name[32];
+    char desc[96];
+    char unique[96];
+    struct drm_version_compat ver;
+    struct drm_unique_compat uniq;
+    struct drm_client_compat client;
+    struct drm_auth_compat magic;
+    uint64 dumb = 0;
+    uint64 prime = 0;
+    uint64 syncobj = 0;
+    uint64 timeline = 0;
+    int fd;
+    int auth_after = -1;
+    int master_after = 0;
+
+    fd = open(path, O_RDWR);
+    if (fd < 0) {
+        printf("drm_node %s path=%s open=failed\n", node, path);
+        return;
+    }
+
+    memset(name, 0, sizeof(name));
+    memset(desc, 0, sizeof(desc));
+    memset(unique, 0, sizeof(unique));
+    memset(&ver, 0, sizeof(ver));
+    ver.name_len = sizeof(name);
+    ver.name = (uint64)name;
+    ver.desc_len = sizeof(desc);
+    ver.desc = (uint64)desc;
+    if (ioctl(fd, DRM_IOCTL_VERSION, &ver) < 0)
+        strcpy(name, "unknown");
+
+    memset(&uniq, 0, sizeof(uniq));
+    uniq.unique_len = sizeof(unique);
+    uniq.unique = (uint64)unique;
+    if (ioctl(fd, DRM_IOCTL_GET_UNIQUE, &uniq) < 0)
+        strcpy(unique, "unknown");
+
+    memset(&client, 0, sizeof(client));
+    if (ioctl(fd, DRM_IOCTL_GET_CLIENT, &client) < 0)
+        memset(&client, 0, sizeof(client));
+
+    (void)drm_cap_value(fd, DRM_CAP_DUMB_BUFFER, &dumb);
+    (void)drm_cap_value(fd, DRM_CAP_PRIME, &prime);
+    (void)drm_cap_value(fd, DRM_CAP_SYNCOBJ, &syncobj);
+    (void)drm_cap_value(fd, DRM_CAP_SYNCOBJ_TIMELINE, &timeline);
+
+    printf("drm_node %s path=%s driver=%s unique=%s auth=%d magic=%lu iocs=%lu\n",
+           node, path, name, unique, client.auth, client.magic, client.iocs);
+    printf("drm_caps %s dumb=%lu prime=0x%lx syncobj=%lu timeline=%lu\n",
+           node, dumb, prime, syncobj, timeline);
+
+    memset(&magic, 0, sizeof(magic));
+    if (strcmp(node, "primary") == 0 &&
+        ioctl(fd, DRM_IOCTL_GET_MAGIC, &magic) == 0 &&
+        ioctl(fd, DRM_IOCTL_AUTH_MAGIC, &magic) == 0 &&
+        ioctl(fd, DRM_IOCTL_SET_MASTER, 0) == 0) {
+        memset(&client, 0, sizeof(client));
+        if (ioctl(fd, DRM_IOCTL_GET_CLIENT, &client) == 0)
+            auth_after = client.auth;
+        master_after = 1;
+        (void)ioctl(fd, DRM_IOCTL_DROP_MASTER, 0);
+    } else if (strcmp(node, "render") == 0) {
+        int magic_rejected = ioctl(fd, DRM_IOCTL_GET_MAGIC, &magic) < 0;
+        int master_rejected = ioctl(fd, DRM_IOCTL_SET_MASTER, 0) < 0;
+        printf("drm_node_policy render magic_rejected=%d master_rejected=%d\n",
+               magic_rejected, master_rejected);
+    }
+
+    if (strcmp(node, "primary") == 0)
+        printf("drm_node_state primary auth_after=%d master_after=%d\n",
+               auth_after, master_after);
+    close(fd);
+}
+
 int main(int argc, char *argv[])
 {
     static const struct named_bit present_provenance_bits[] = {
@@ -280,6 +370,8 @@ int main(int argc, char *argv[])
         printf("dxg_global_status %u\n", backend.dxg_global_status);
         printf("dxg_vgpu_status %u\n", backend.dxg_vgpu_status);
     }
+    print_drm_node_diag("/dev/dri/card0", "primary");
+    print_drm_node_diag("/dev/dri/renderD128", "render");
     printf("full_blits %lu\n", stats.full_blits);
     printf("partial_blits %lu\n", stats.partial_blits);
     printf("clipped_blits %lu\n", stats.clipped_blits);
