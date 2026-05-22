@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -42,8 +43,11 @@ static int
 check_present_nouveau(int fd, struct nouveau_device *dev)
 {
     struct nouveau_client *client = NULL;
+    struct nouveau_object *chan = NULL;
+    struct nouveau_pushbuf *push = NULL;
     struct nouveau_bo *bo = NULL;
     struct nouveau_bo *prime_bo = NULL;
+    struct nve0_fifo fifo;
     uint64_t vendor = 0;
     uint64_t device = 0;
     uint64_t chipset = 0;
@@ -75,9 +79,34 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
     if (ret != 0 || client == NULL)
         return fail("nouveau_client_new failed");
 
+    memset(&fifo, 0, sizeof(fifo));
+    fifo.engine = NVE0_FIFO_ENGINE_GR;
+    ret = nouveau_object_new(&dev->object, 0, NOUVEAU_FIFO_CHANNEL_CLASS,
+                             &fifo, sizeof(fifo), &chan);
+    if (ret != 0 || chan == NULL) {
+        nouveau_client_del(&client);
+        return fail("nouveau channel object creation failed");
+    }
+
+    ret = nouveau_pushbuf_new(client, chan, 1, 64, false, &push);
+    if (ret != 0 || push == NULL) {
+        nouveau_object_del(&chan);
+        nouveau_client_del(&client);
+        return fail("nouveau no-op pushbuf creation failed");
+    }
+    ret = nouveau_pushbuf_kick(push, chan);
+    if (ret != 0) {
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
+        nouveau_client_del(&client);
+        return fail("nouveau no-op pushbuf kick failed");
+    }
+
     ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP |
                               NOUVEAU_BO_COHERENT, 4096, 4096, NULL, &bo);
     if (ret != 0 || bo == NULL || bo->handle == 0 || bo->size < 4096) {
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
         nouveau_client_del(&client);
         return fail("nouveau_bo_new failed");
     }
@@ -85,6 +114,8 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
     ret = nouveau_bo_wait(bo, NOUVEAU_BO_RDWR | NOUVEAU_BO_NOBLOCK, client);
     if (ret != 0) {
         nouveau_bo_ref(NULL, &bo);
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
         nouveau_client_del(&client);
         return fail("nouveau_bo_wait failed");
     }
@@ -92,6 +123,8 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
     ret = nouveau_bo_map(bo, NOUVEAU_BO_RDWR, client);
     if (ret != 0 || bo->map == MAP_FAILED || bo->map == NULL) {
         nouveau_bo_ref(NULL, &bo);
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
         nouveau_client_del(&client);
         return fail("nouveau_bo_map failed");
     }
@@ -100,6 +133,8 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
     ret = nouveau_bo_set_prime(bo, &prime_fd);
     if (ret != 0 || prime_fd < 0) {
         nouveau_bo_ref(NULL, &bo);
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
         nouveau_client_del(&client);
         return fail("nouveau_bo_set_prime failed");
     }
@@ -109,12 +144,16 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
     prime_fd = -1;
     if (ret != 0 || prime_bo == NULL) {
         nouveau_bo_ref(NULL, &bo);
+        nouveau_pushbuf_del(&push);
+        nouveau_object_del(&chan);
         nouveau_client_del(&client);
         return fail("nouveau_bo_prime_handle_ref failed");
     }
 
     nouveau_bo_ref(NULL, &prime_bo);
     nouveau_bo_ref(NULL, &bo);
+    nouveau_pushbuf_del(&push);
+    nouveau_object_del(&chan);
     nouveau_client_del(&client);
     printf("nouveauabitest: present ok vendor=0x%" PRIx64
            " device=0x%" PRIx64 " chipset=0x%" PRIx64
