@@ -407,6 +407,16 @@ static int check_nouveau(int fd)
 {
     struct drm_nouveau_getparam_compat getp;
     struct drm_nouveau_channel_alloc_compat chan;
+    struct drm_nouveau_gem_new_compat gem_new;
+    struct drm_nouveau_gem_info_compat gem_info;
+    struct drm_nouveau_gem_cpu_prep_compat prep;
+    struct drm_nouveau_gem_cpu_fini_compat fini;
+    struct drm_nouveau_gem_pushbuf_compat push;
+    struct drm_nouveau_vm_init_compat vm_init;
+    struct drm_nouveau_vm_bind_compat bind;
+    struct drm_nouveau_exec_compat exec;
+    struct drm_nouveau_channel_free_compat chan_free;
+    struct drm_gem_close_compat close_req;
     uint64 device;
 
     memset(&getp, 0, sizeof(getp));
@@ -428,9 +438,60 @@ static int check_nouveau(int fd)
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_GETPARAM, &getp) < 0 || getp.value != 1)
         return fail("Nouveau BO usage getparam failed");
 
+    memset(&vm_init, 0, sizeof(vm_init));
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_VM_INIT, &vm_init) < 0)
+        return fail("Nouveau VM init failed");
+    memset(&bind, 0, sizeof(bind));
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_VM_BIND, &bind) < 0)
+        return fail("Nouveau no-op VM bind failed");
+
     memset(&chan, 0, sizeof(chan));
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_CHANNEL_ALLOC, &chan) < 0)
         return fail("Nouveau channel alloc failed");
+
+    memset(&gem_new, 0, sizeof(gem_new));
+    gem_new.info.size = 4096;
+    gem_new.info.domain = NOUVEAU_GEM_DOMAIN_GART |
+                          NOUVEAU_GEM_DOMAIN_MAPPABLE |
+                          NOUVEAU_GEM_DOMAIN_COHERENT;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GEM_NEW, &gem_new) < 0 ||
+        gem_new.info.handle == 0 || gem_new.info.map_handle == 0)
+        return fail("Nouveau GEM new failed");
+
+    memset(&gem_info, 0, sizeof(gem_info));
+    gem_info.handle = gem_new.info.handle;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GEM_INFO, &gem_info) < 0 ||
+        gem_info.size < 4096 || gem_info.map_handle != gem_new.info.map_handle)
+        return fail("Nouveau GEM info failed");
+
+    memset(&prep, 0, sizeof(prep));
+    prep.handle = gem_new.info.handle;
+    prep.flags = NOUVEAU_GEM_CPU_PREP_WRITE;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GEM_CPU_PREP, &prep) < 0)
+        return fail("Nouveau GEM CPU prep failed");
+    memset(&fini, 0, sizeof(fini));
+    fini.handle = gem_new.info.handle;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GEM_CPU_FINI, &fini) < 0)
+        return fail("Nouveau GEM CPU fini failed");
+
+    memset(&push, 0, sizeof(push));
+    push.channel = 0;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GEM_PUSHBUF, &push) < 0)
+        return fail("Nouveau no-op pushbuf failed");
+    memset(&exec, 0, sizeof(exec));
+    exec.channel = 0;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_EXEC, &exec) < 0)
+        return fail("Nouveau no-op exec failed");
+
+    memset(&close_req, 0, sizeof(close_req));
+    close_req.handle = gem_new.info.handle;
+    if (ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close_req) < 0)
+        return fail("Nouveau GEM close failed");
+    memset(&chan_free, 0, sizeof(chan_free));
+    chan_free.channel = 0;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_CHANNEL_FREE, &chan_free) < 0)
+        return fail("Nouveau channel free failed");
+
     printf("drmiftest: nouveau probe ok device=0x%lx channel=%d domains=0x%x\n",
            device, chan.channel, chan.pushbuf_domains);
     return 0;
