@@ -3573,6 +3573,9 @@ struct dxg_object_table_status {
     uint32 reuse_delayed;
     uint32 reuse_allowed;
     uint32 min_free;
+    uint32 free_count;
+    uint32 free_head;
+    uint32 free_tail;
 };
 
 struct dxg_local_adapter_status {
@@ -5496,7 +5499,10 @@ static int read_object_table_status(struct dxg_object_table_status *out)
                              &out->reuse_delayed) < 0 ||
         dxg_parse_uint_after(line, "reuse_allowed:",
                              &out->reuse_allowed) < 0 ||
-        dxg_parse_uint_after(line, "min_free:", &out->min_free) < 0)
+        dxg_parse_uint_after(line, "min_free:", &out->min_free) < 0 ||
+        dxg_parse_uint_after(line, "free_count:", &out->free_count) < 0 ||
+        dxg_parse_uint_after(line, "free_head:", &out->free_head) < 0 ||
+        dxg_parse_uint_after(line, "free_tail:", &out->free_tail) < 0)
         goto out_free;
     ret = 0;
 
@@ -9696,10 +9702,11 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
            stale_gpuva_rc, (uint32)(stale_gpuva_rc < 0),
            stale_device_final_rc, (uint32)(stale_device_final_rc < 0),
            expected_denials, denied_delta);
-    printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u reuse_delayed:%u reuse_allowed:%u min_free:%u\n",
+    printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u reuse_delayed:%u reuse_allowed:%u min_free:%u free_count:%u free_head:%u free_tail:%u\n",
            before.denied, after.denied, after.max, after.generation,
            after.drops, after.reuse_delayed, after.reuse_allowed,
-           after.min_free);
+           after.min_free, after.free_count, after.free_head,
+           after.free_tail);
     return 0;
 
 cleanup_device:
