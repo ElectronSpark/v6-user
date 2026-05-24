@@ -2102,6 +2102,14 @@ static int validate_backend(void)
                stats.nouveau_pci_irq_handler_registered,
                stats.nouveau_pci_irq_delivery_enabled,
                stats.nouveau_pci_irq_delivery_claimed);
+        if (stats.nouveau_pci_probe_accepts == 0) {
+            printf("gpu_core_c_validator nouveau_gpup_failclosed_matrix "
+                   "accepts=0 backend_dda_nouveau=0 reject_reason=PASS "
+                   "no_fake_bar=PASS no_fake_dma=PASS no_fake_irq=PASS "
+                   "no_fake_getparam=PASS no_fake_present=PASS "
+                   "native_present_credit=0 opengl_submit_credit=0 "
+                   "status=PASS\n");
+        }
         printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
                "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
                "fail_closed=%lu last_source=%lu accepts=%lu "

@@ -815,6 +815,50 @@ int main(int argc, char *argv[])
            stats.nouveau_getparam_last_source,
            stats.nouveau_pci_probe_accepts,
            stats.nouveau_pci_native_present_credit);
+    if (have_backend && stats.nouveau_pci_probe_accepts == 0) {
+        int no_fake_bar =
+            stats.nouveau_pci_bar0_len == 0 &&
+            stats.nouveau_pci_bar1_len == 0 &&
+            stats.nouveau_pci_bar0_claimed == 0 &&
+            stats.nouveau_pci_bar1_claimed == 0;
+        int no_fake_dma =
+            stats.nouveau_pci_dma_mask_configured == 0 &&
+            stats.nouveau_pci_coherent_dma_mask_configured == 0;
+        int no_fake_irq =
+            stats.nouveau_pci_irq_vector_valid == 0 &&
+            stats.nouveau_pci_irq_handler_registered == 0 &&
+            stats.nouveau_pci_irq_delivery_enabled == 0 &&
+            stats.nouveau_pci_irq_delivery_claimed == 0;
+        int no_fake_getparams =
+            stats.nouveau_getparams == 0 &&
+            stats.nouveau_getparam_dda_facts == 0 &&
+            stats.nouveau_getparam_synthetic_facts == 0 &&
+            stats.nouveau_getparam_last_source ==
+                FB_GPU_NOUVEAU_GETPARAM_SOURCE_NONE;
+        int no_fake_present =
+            stats.nouveau_pci_native_present_credit == 0 &&
+            stats.dxg_present_dda_nouveau_present == 0 &&
+            stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+            stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+            (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) == 0;
+        int rejected =
+            stats.nouveau_pci_probe_reject_dxg_present != 0 ||
+            stats.nouveau_pci_probe_reject_no_bars != 0;
+
+        printf("nouveau_gpup_failclosed_matrix "
+               "accepts=0 backend_dda_nouveau=0 reject_reason=%s "
+               "no_fake_bar=%s no_fake_dma=%s no_fake_irq=%s "
+               "no_fake_getparam=%s no_fake_present=%s "
+               "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+               rejected ? "PASS" : "MISSING",
+               no_fake_bar ? "PASS" : "FAIL",
+               no_fake_dma ? "PASS" : "FAIL",
+               no_fake_irq ? "PASS" : "FAIL",
+               no_fake_getparams ? "PASS" : "FAIL",
+               no_fake_present ? "PASS" : "FAIL",
+               (rejected && no_fake_bar && no_fake_dma && no_fake_irq &&
+                no_fake_getparams && no_fake_present) ? "PASS" : "FAIL");
+    }
     printf("kms_framebuffers %lu\n", stats.kms_framebuffers);
     printf("kms_page_flips %lu\n", stats.kms_page_flips);
     printf("kms_page_flip_target_rejects %lu\n",
