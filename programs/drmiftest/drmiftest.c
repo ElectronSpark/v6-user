@@ -3712,6 +3712,9 @@ static int check_nouveau(int fd)
 {
     struct drm_nouveau_getparam_compat getp;
     struct drm_nouveau_channel_alloc_compat chan;
+    struct drm_nouveau_notifierobj_alloc_compat notifier;
+    struct drm_nouveau_grobj_alloc_compat grobj;
+    struct drm_nouveau_gpuobj_free_compat gpuobj_free;
     struct drm_nouveau_gem_new_compat gem_new;
     struct drm_nouveau_gem_info_compat gem_info;
     struct drm_nouveau_gem_cpu_prep_compat prep;
@@ -3783,6 +3786,39 @@ static int check_nouveau(int fd)
     memset(&chan, 0, sizeof(chan));
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_CHANNEL_ALLOC, &chan) < 0)
         return fail("Nouveau channel alloc failed");
+    if (chan.channel != 0 ||
+        (chan.pushbuf_domains & NOUVEAU_GEM_DOMAIN_GART) == 0)
+        return fail("Nouveau channel metadata mismatch");
+
+    memset(&notifier, 0, sizeof(notifier));
+    notifier.channel = chan.channel;
+    notifier.handle = 0x2000;
+    notifier.size = 4096;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_NOTIFIEROBJ_ALLOC, &notifier) < 0 ||
+        notifier.offset == 0)
+        return fail("Nouveau notifier alloc failed");
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_NOTIFIEROBJ_ALLOC, &notifier) >= 0)
+        return fail("Nouveau duplicate notifier unexpectedly succeeded");
+
+    memset(&grobj, 0, sizeof(grobj));
+    grobj.channel = chan.channel;
+    grobj.handle = 0x3000;
+    grobj.class = 0x906e;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GROBJ_ALLOC, &grobj) < 0)
+        return fail("Nouveau GROBJ alloc failed");
+    memset(&grobj, 0, sizeof(grobj));
+    grobj.channel = chan.channel;
+    grobj.handle = 0x3001;
+    grobj.class = 0xdead;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GROBJ_ALLOC, &grobj) >= 0)
+        return fail("Nouveau unsupported GROBJ unexpectedly succeeded");
+    memset(&gpuobj_free, 0, sizeof(gpuobj_free));
+    gpuobj_free.channel = chan.channel;
+    gpuobj_free.handle = 0x3000;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GPUOBJ_FREE, &gpuobj_free) < 0)
+        return fail("Nouveau GROBJ free failed");
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GPUOBJ_FREE, &gpuobj_free) >= 0)
+        return fail("Nouveau duplicate GROBJ free unexpectedly succeeded");
 
     memset(&gem_new, 0, sizeof(gem_new));
     gem_new.info.size = 4096;
@@ -3967,11 +4003,19 @@ static int check_nouveau(int fd)
     close_req.handle = gem_new.info.handle;
     if (ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close_req) < 0)
         return fail("Nouveau GEM close failed");
+    memset(&gpuobj_free, 0, sizeof(gpuobj_free));
+    gpuobj_free.channel = chan.channel;
+    gpuobj_free.handle = notifier.handle;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_GPUOBJ_FREE, &gpuobj_free) < 0)
+        return fail("Nouveau notifier free failed");
     memset(&chan_free, 0, sizeof(chan_free));
     chan_free.channel = 0;
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_CHANNEL_FREE, &chan_free) < 0)
         return fail("Nouveau channel free failed");
 
+    printf("drmiftest: nouveau_channel_object_matrix channel=PASS "
+           "notifier=PASS grobj=PASS duplicate_reject=PASS "
+           "unsupported_class_reject=PASS free=PASS status=PASS\n");
     printf("drmiftest: nouveau probe ok device=0x%lx channel=%d domains=0x%x fb=%lu gart=%lu exec_push_max=%lu\n",
            device, chan.channel, chan.pushbuf_domains, fb_size, gart_size,
            exec_push_max);

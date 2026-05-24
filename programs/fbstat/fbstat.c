@@ -674,12 +674,21 @@ int main(int argc, char *argv[])
            stats.nouveau_getparam_dda_facts);
     printf("nouveau_getparam_synthetic_facts %lu\n",
            stats.nouveau_getparam_synthetic_facts);
+    printf("nouveau_getparam_driver_caps %lu\n",
+           stats.nouveau_getparam_driver_caps);
     printf("nouveau_getparam_fail_closed %lu\n",
            stats.nouveau_getparam_fail_closed);
     printf("nouveau_getparam_last_source %lu\n",
            stats.nouveau_getparam_last_source);
     printf("nouveau_channel_allocs %lu\n", stats.nouveau_channel_allocs);
     printf("nouveau_channel_frees %lu\n", stats.nouveau_channel_frees);
+    printf("nouveau_channel_active %lu\n", stats.nouveau_channel_active);
+    printf("nouveau_notifier_allocs %lu\n", stats.nouveau_notifier_allocs);
+    printf("nouveau_grobj_allocs %lu\n", stats.nouveau_grobj_allocs);
+    printf("nouveau_gpuobj_frees %lu\n", stats.nouveau_gpuobj_frees);
+    printf("nouveau_object_rejects %lu\n", stats.nouveau_object_rejects);
+    printf("nouveau_close_object_reclaims %lu\n",
+           stats.nouveau_close_object_reclaims);
     printf("nouveau_gem_news %lu\n", stats.nouveau_gem_news);
     printf("nouveau_gem_infos %lu\n", stats.nouveau_gem_infos);
     printf("nouveau_cpu_preps %lu\n", stats.nouveau_cpu_preps);
@@ -806,11 +815,13 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_native_present_credit);
     printf("nouveau_getparam_provenance_matrix stats "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
+           "driver_caps=%lu "
            "fail_closed=%lu last_source=%lu accepts=%lu "
            "native_present_credit=%lu\n",
            stats.nouveau_getparams,
            stats.nouveau_getparam_dda_facts,
            stats.nouveau_getparam_synthetic_facts,
+           stats.nouveau_getparam_driver_caps,
            stats.nouveau_getparam_fail_closed,
            stats.nouveau_getparam_last_source,
            stats.nouveau_pci_probe_accepts,
@@ -833,6 +844,7 @@ int main(int argc, char *argv[])
             stats.nouveau_getparams == 0 &&
             stats.nouveau_getparam_dda_facts == 0 &&
             stats.nouveau_getparam_synthetic_facts == 0 &&
+            stats.nouveau_getparam_driver_caps == 0 &&
             stats.nouveau_getparam_last_source ==
                 FB_GPU_NOUVEAU_GETPARAM_SOURCE_NONE;
         int no_fake_present =
@@ -857,8 +869,43 @@ int main(int argc, char *argv[])
                no_fake_getparams ? "PASS" : "FAIL",
                no_fake_present ? "PASS" : "FAIL",
                (rejected && no_fake_bar && no_fake_dma && no_fake_irq &&
-                no_fake_getparams && no_fake_present) ? "PASS" : "FAIL");
+               no_fake_getparams && no_fake_present) ? "PASS" : "FAIL");
     }
+    if (stats.nouveau_pci_probe_accepts != 0) {
+        int balanced =
+            stats.nouveau_getparams ==
+            stats.nouveau_getparam_dda_facts +
+                stats.nouveau_getparam_driver_caps +
+                stats.nouveau_getparam_synthetic_facts;
+        int no_synthetic = stats.nouveau_getparam_synthetic_facts == 0;
+        printf("nouveau_getparam_ddafacts_matrix stats accepts=%lu "
+               "dda_facts=%lu driver_caps=%lu synthetic_facts=%lu "
+               "balanced=%s no_synthetic_hw=%s "
+               "native_present_credit=%lu status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               stats.nouveau_getparam_dda_facts,
+               stats.nouveau_getparam_driver_caps,
+               stats.nouveau_getparam_synthetic_facts,
+               balanced ? "PASS" : "FAIL",
+               no_synthetic ? "PASS" : "FAIL",
+               stats.nouveau_pci_native_present_credit,
+               balanced && no_synthetic &&
+                       stats.nouveau_pci_native_present_credit == 0 ?
+                   "PASS" : "FAIL");
+    }
+    printf("nouveau_channel_object_matrix stats "
+           "channel_allocs=%lu channel_frees=%lu active=%lu "
+           "notifier_allocs=%lu grobj_allocs=%lu gpuobj_frees=%lu "
+           "object_rejects=%lu close_reclaims=%lu status=%s\n",
+           stats.nouveau_channel_allocs,
+           stats.nouveau_channel_frees,
+           stats.nouveau_channel_active,
+           stats.nouveau_notifier_allocs,
+           stats.nouveau_grobj_allocs,
+           stats.nouveau_gpuobj_frees,
+           stats.nouveau_object_rejects,
+           stats.nouveau_close_object_reclaims,
+           stats.nouveau_channel_active == 0 ? "PASS" : "PENDING");
     printf("kms_framebuffers %lu\n", stats.kms_framebuffers);
     printf("kms_page_flips %lu\n", stats.kms_page_flips);
     printf("kms_page_flip_target_rejects %lu\n",

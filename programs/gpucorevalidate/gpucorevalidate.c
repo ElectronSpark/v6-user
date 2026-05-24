@@ -1930,15 +1930,29 @@ static int validate_backend(void)
            stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
+           "driver_caps=%lu "
            "fail_closed=%lu last_source=%lu accepts=%lu "
            "native_present_credit=%lu status=PENDING\n",
            stats.nouveau_getparams,
            stats.nouveau_getparam_dda_facts,
            stats.nouveau_getparam_synthetic_facts,
+           stats.nouveau_getparam_driver_caps,
            stats.nouveau_getparam_fail_closed,
            stats.nouveau_getparam_last_source,
            stats.nouveau_pci_probe_accepts,
            stats.nouveau_pci_native_present_credit);
+    printf("gpu_core_c_validator nouveau_channel_object_matrix "
+           "channel_allocs=%lu channel_frees=%lu active=%lu "
+           "notifier_allocs=%lu grobj_allocs=%lu gpuobj_frees=%lu "
+           "object_rejects=%lu close_reclaims=%lu status=PENDING\n",
+           stats.nouveau_channel_allocs,
+           stats.nouveau_channel_frees,
+           stats.nouveau_channel_active,
+           stats.nouveau_notifier_allocs,
+           stats.nouveau_grobj_allocs,
+           stats.nouveau_gpuobj_frees,
+           stats.nouveau_object_rejects,
+           stats.nouveau_close_object_reclaims);
 
     if (backend.backend != FB_GPU_BACKEND_HYPERV_DXG) {
         note_fail("backend", "not_hyperv_dxg");
@@ -2016,8 +2030,13 @@ static int validate_backend(void)
         }
         if (stats.nouveau_getparams !=
             stats.nouveau_getparam_dda_facts +
+                stats.nouveau_getparam_driver_caps +
                 stats.nouveau_getparam_synthetic_facts) {
             note_fail("backend", "nouveau_getparam_provenance_unbalanced");
+            ok = 0;
+        }
+        if (stats.nouveau_getparam_synthetic_facts != 0) {
+            note_fail("backend", "nouveau_getparam_synthetic_hardware_facts");
             ok = 0;
         }
         if (stats.nouveau_getparams != 0 &&
@@ -2057,6 +2076,7 @@ static int validate_backend(void)
         }
         if (stats.nouveau_getparam_dda_facts != 0 ||
             stats.nouveau_getparam_synthetic_facts != 0 ||
+            stats.nouveau_getparam_driver_caps != 0 ||
             stats.nouveau_getparams != 0 ||
             stats.nouveau_getparam_last_source !=
                 FB_GPU_NOUVEAU_GETPARAM_SOURCE_NONE) {
@@ -2080,6 +2100,10 @@ static int validate_backend(void)
     }
     if (stats.nouveau_pci_native_present_credit != 0) {
         note_fail("backend", "nouveau_pci_fabricated_native_present");
+        ok = 0;
+    }
+    if (stats.nouveau_channel_active != 0) {
+        note_fail("backend", "nouveau_channel_lifetime_leak");
         ok = 0;
     }
     if (stats.dxg_present_dda_nouveau_import_path_present != 0 ||
@@ -2112,15 +2136,37 @@ static int validate_backend(void)
         }
         printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
                "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
+               "driver_caps=%lu "
                "fail_closed=%lu last_source=%lu accepts=%lu "
                "synthetic_not_dda=PASS native_present_credit=0 "
                "status=PASS\n",
                stats.nouveau_getparams,
                stats.nouveau_getparam_dda_facts,
                stats.nouveau_getparam_synthetic_facts,
+               stats.nouveau_getparam_driver_caps,
                stats.nouveau_getparam_fail_closed,
                stats.nouveau_getparam_last_source,
                stats.nouveau_pci_probe_accepts);
+        if (stats.nouveau_pci_probe_accepts != 0) {
+            printf("gpu_core_c_validator nouveau_getparam_ddafacts_matrix "
+                   "dda_facts=%lu driver_caps=%lu synthetic_facts=0 "
+                   "balanced=PASS no_synthetic_hw=PASS "
+                   "native_present_credit=0 status=PASS\n",
+                   stats.nouveau_getparam_dda_facts,
+                   stats.nouveau_getparam_driver_caps);
+        }
+        printf("gpu_core_c_validator nouveau_channel_object_matrix "
+               "channel_allocs=%lu channel_frees=%lu active=0 "
+               "notifier_allocs=%lu grobj_allocs=%lu gpuobj_frees=%lu "
+               "object_rejects=%lu close_reclaims=%lu "
+               "lifetime=PASS status=PASS\n",
+               stats.nouveau_channel_allocs,
+               stats.nouveau_channel_frees,
+               stats.nouveau_notifier_allocs,
+               stats.nouveau_grobj_allocs,
+               stats.nouveau_gpuobj_frees,
+               stats.nouveau_object_rejects,
+               stats.nouveau_close_object_reclaims);
     }
     if (ok)
         printf("gpu_core_c_validator step=backend status=PASS\n");
