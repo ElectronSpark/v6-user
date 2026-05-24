@@ -9755,6 +9755,20 @@ static void probe_gpu_sync(int fd, struct d3dkmthandle device,
                context.v, objects[0].v, wait_legacy.fence.fence_value);
     }
 
+    memset(&wait_legacy, 0, sizeof(wait_legacy));
+    wait_legacy.context = context;
+    wait_legacy.object_count = 2;
+    wait_legacy.object_array[0] = objects[0];
+    wait_legacy.object_array[1] = objects[0];
+    wait_legacy.fence.fence_value = signal_legacy.fence.fence_value;
+    {
+        int legacy_multi_rc =
+            ioctl(fd, LX_DXWAITFORSYNCHRONIZATIONOBJECT, &wait_legacy);
+        printf("sync_legacy_wait_multi_matrix rc=%d expected=%d status=%s\n",
+               legacy_multi_rc, -EINVAL,
+               legacy_multi_rc == -EINVAL ? "PASS" : "FAIL");
+    }
+
     fence_values[0] = 2;
 
     memset(&signal_gpu, 0, sizeof(signal_gpu));
