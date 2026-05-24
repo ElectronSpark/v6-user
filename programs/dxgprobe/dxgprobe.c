@@ -3815,6 +3815,14 @@ struct dxg_local_adapter_status {
     uint32 min_free;
 };
 
+struct dxg_process_lifetime_status {
+    uint32 object_refs_last;
+    uint32 mem_refs_last;
+    uint32 object_releases;
+    uint32 mem_releases;
+    uint32 mem_frees;
+};
+
 struct dxg_shared_resource_diag {
     uint32 metadata_seen;
     uint32 metadata_runtime_size;
@@ -5762,6 +5770,39 @@ static int read_local_adapter_status(struct dxg_local_adapter_status *out)
         dxg_parse_uint_after(line, "reuse_allowed:",
                              &out->reuse_allowed) < 0 ||
         dxg_parse_uint_after(line, "min_free:", &out->min_free) < 0)
+        goto out_free;
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_process_lifetime_status(
+    struct dxg_process_lifetime_status *out)
+{
+    char *buf;
+    char *line;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    line = dxg_find_text(buf, "d3dkmt_process_lifetime=");
+    if (line == 0)
+        goto out_free;
+    memset(out, 0, sizeof(*out));
+    if (dxg_parse_uint_after(line, "object_refs_last:",
+                             &out->object_refs_last) < 0 ||
+        dxg_parse_uint_after(line, "mem_refs_last:",
+                             &out->mem_refs_last) < 0 ||
+        dxg_parse_uint_after(line, "object_releases:",
+                             &out->object_releases) < 0 ||
+        dxg_parse_uint_after(line, "mem_releases:",
+                             &out->mem_releases) < 0 ||
+        dxg_parse_uint_after(line, "mem_frees:", &out->mem_frees) < 0)
         goto out_free;
     ret = 0;
 
@@ -9626,6 +9667,75 @@ static int expect_stale_ioctl_rejected(const char *label, int rc)
     return 0;
 }
 
+static int probe_process_memory_lifetime_validate(void)
+{
+    struct dxg_process_lifetime_status before;
+    struct dxg_process_lifetime_status after;
+    int pid;
+    int status = 1;
+    int child_status = 1;
+    int process_release_delta;
+    int mem_release_delta;
+    int mem_free_delta;
+
+    if (read_process_lifetime_status(&before) < 0) {
+        printf("dxg_process_mem_lifetime_matrix status=FAIL reason=read_before\n");
+        return -1;
+    }
+    pid = fork();
+    if (pid < 0) {
+        printf("dxg_process_mem_lifetime_matrix status=FAIL reason=fork\n");
+        return -1;
+    }
+    if (pid == 0) {
+        struct d3dkmt_adapterinfo adapters[D3DKMT_ADAPTERS_MAX];
+        uint32 count = 0;
+        int child_fd = open("/dev/dxg", O_RDWR);
+
+        if (child_fd < 0) {
+            printf("dxg_process_mem_lifetime_child open_failed\n");
+            exit(1);
+        }
+        if (enum_dxg_adapters2_list(child_fd, adapters, &count,
+                                    "process_mem_lifetime_child") < 0) {
+            close(child_fd);
+            exit(1);
+        }
+        close(child_fd);
+        exit(0);
+    }
+    wait(&status);
+    if (status == 0)
+        child_status = 0;
+    if (read_process_lifetime_status(&after) < 0) {
+        printf("dxg_process_mem_lifetime_matrix child_status=%d status=FAIL reason=read_after\n",
+               child_status);
+        return -1;
+    }
+
+    process_release_delta =
+        (int)(after.object_releases - before.object_releases);
+    mem_release_delta = (int)(after.mem_releases - before.mem_releases);
+    mem_free_delta = (int)(after.mem_frees - before.mem_frees);
+    printf("dxg_process_mem_lifetime_matrix "
+           "child_status=%d object_release_delta=%d mem_release_delta=%d "
+           "mem_free_delta=%d before_object_releases=%u "
+           "after_object_releases=%u before_mem_releases=%u "
+           "after_mem_releases=%u before_mem_frees=%u after_mem_frees=%u "
+           "object_refs_last=%u mem_refs_last=%u status=%s\n",
+           child_status, process_release_delta, mem_release_delta,
+           mem_free_delta, before.object_releases, after.object_releases,
+           before.mem_releases, after.mem_releases, before.mem_frees,
+           after.mem_frees, after.object_refs_last, after.mem_refs_last,
+           child_status == 0 && process_release_delta > 0 &&
+               mem_release_delta > 0 && mem_free_delta > 0 ?
+                   "PASS" : "FAIL");
+    if (child_status != 0 || process_release_delta <= 0 ||
+        mem_release_delta <= 0 || mem_free_delta <= 0)
+        return -1;
+    return 0;
+}
+
 static int probe_local_adapter_reuse_validate(int fd, struct winluid luid)
 {
     struct dxg_local_adapter_status before;
@@ -11384,6 +11494,8 @@ int main(int argc, char **argv)
         if (probe_handle_lifetime_validate(fd,
                                            open_luid.adapter_handle,
                                            enum2_selected_luid) < 0)
+            ret = 1;
+        if (probe_process_memory_lifetime_validate() < 0)
             ret = 1;
         goto close_adapter;
     }
