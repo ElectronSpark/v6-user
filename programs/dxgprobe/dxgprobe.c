@@ -9736,6 +9736,93 @@ static int probe_process_memory_lifetime_validate(void)
     return 0;
 }
 
+static int probe_process_adapter_child_validate(struct winluid luid)
+{
+    struct dxg_local_adapter_status adapter_status;
+    struct d3dkmt_openadapterfromluid open_luid;
+    struct d3dkmt_closeadapter close_adapter;
+    struct d3dkmt_createdevice create_device;
+    struct d3dkmt_createdevice raw_create_device;
+    struct d3dkmt_destroydevice destroy_device;
+    int fd;
+    int open_rc;
+    int raw_create_rc = -1;
+    int create_rc = -1;
+    int close_rc = -1;
+    int stale_destroy_rc = -1;
+    int pass;
+
+    fd = open("/dev/dxg", O_RDWR);
+    if (fd < 0) {
+        printf("dxgprocess_adapter_matrix status=FAIL reason=open\n");
+        return -1;
+    }
+    memset(&open_luid, 0, sizeof(open_luid));
+    memset(&adapter_status, 0, sizeof(adapter_status));
+    open_luid.adapter_luid = luid;
+    open_rc = ioctl(fd, LX_DXOPENADAPTERFROMLUID, &open_luid);
+    if (open_rc < 0 || open_luid.adapter_handle.v == 0 ||
+        read_local_adapter_status(&adapter_status) < 0 ||
+        adapter_status.host == 0) {
+        printf("dxgprocess_adapter_matrix open_rc=%d local=0x%x host=0x%x status=FAIL reason=openadapter\n",
+               open_rc, open_luid.adapter_handle.v,
+               adapter_status.host);
+        close(fd);
+        return -1;
+    }
+
+    memset(&raw_create_device, 0, sizeof(raw_create_device));
+    raw_create_device.adapter.v = adapter_status.host;
+    raw_create_rc = ioctl(fd, LX_DXCREATEDEVICE, &raw_create_device);
+    if (raw_create_rc == 0 && raw_create_device.device.v != 0) {
+        memset(&destroy_device, 0, sizeof(destroy_device));
+        destroy_device.device = raw_create_device.device;
+        (void)ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device);
+    }
+
+    memset(&create_device, 0, sizeof(create_device));
+    create_device.adapter = open_luid.adapter_handle;
+    create_rc = ioctl(fd, LX_DXCREATEDEVICE, &create_device);
+
+    memset(&close_adapter, 0, sizeof(close_adapter));
+    close_adapter.adapter_handle = open_luid.adapter_handle;
+    close_rc = ioctl(fd, LX_DXCLOSEADAPTER, &close_adapter);
+
+    memset(&destroy_device, 0, sizeof(destroy_device));
+    destroy_device.device = create_device.device;
+    stale_destroy_rc = ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device);
+    pass = raw_create_rc < 0 && create_rc == 0 &&
+           create_device.device.v != 0 && close_rc == 0 &&
+           stale_destroy_rc < 0;
+    printf("dxgprocess_adapter_matrix "
+           "open_rc=%d local=0x%x host=0x%x raw_host_create_rc=%d "
+           "local_create_rc=%d device=0x%x close_adapter_rc=%d "
+           "child_destroy_after_final_close_rc=%d status=%s\n",
+           open_rc, open_luid.adapter_handle.v, adapter_status.host,
+           raw_create_rc, create_rc, create_device.device.v, close_rc,
+           stale_destroy_rc, pass ? "PASS" : "FAIL");
+    close(fd);
+    return pass ? 0 : -1;
+}
+
+static int probe_process_adapter_validate(struct winluid luid)
+{
+    int pid;
+    int status = 1;
+
+    pid = fork();
+    if (pid < 0) {
+        printf("dxgprocess_adapter_parent_matrix child_status=1 status=FAIL reason=fork\n");
+        return -1;
+    }
+    if (pid == 0)
+        exit(probe_process_adapter_child_validate(luid) == 0 ? 0 : 1);
+    wait(&status);
+    printf("dxgprocess_adapter_parent_matrix child_status=%d status=%s\n",
+           status, status == 0 ? "PASS" : "FAIL");
+    return status == 0 ? 0 : -1;
+}
+
 static int probe_local_adapter_reuse_validate(int fd, struct winluid luid)
 {
     struct dxg_local_adapter_status before;
@@ -11496,6 +11583,8 @@ int main(int argc, char **argv)
                                            enum2_selected_luid) < 0)
             ret = 1;
         if (probe_process_memory_lifetime_validate() < 0)
+            ret = 1;
+        if (probe_process_adapter_validate(enum2_selected_luid) < 0)
             ret = 1;
         goto close_adapter;
     }
