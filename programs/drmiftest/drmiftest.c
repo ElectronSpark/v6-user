@@ -4012,6 +4012,10 @@ static int check_nouveau(int fd)
     exec.push_ptr = (uint64)exec_push;
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_EXEC, &exec) >= 0)
         return fail("Nouveau non-empty exec unexpectedly succeeded");
+    printf("drmiftest: nouveau_submit_failclosed_matrix "
+           "nonempty_pushbuf_reject=PASS nonempty_exec_reject=PASS "
+           "nonempty_vm_bind_reject=PASS fence_only_submit=PASS "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
 
     memset(&prime, 0, sizeof(prime));
     prime.handle = gem_new.info.handle;

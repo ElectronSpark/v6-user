@@ -708,6 +708,12 @@ int main(int argc, char *argv[])
     printf("nouveau_vm_bind_noops %lu\n", stats.nouveau_vm_bind_noops);
     printf("nouveau_pushbuf_noops %lu\n", stats.nouveau_pushbuf_noops);
     printf("nouveau_exec_noops %lu\n", stats.nouveau_exec_noops);
+    printf("nouveau_nonempty_pushbuf_rejects %lu\n",
+           stats.nouveau_nonempty_pushbuf_rejects);
+    printf("nouveau_nonempty_exec_rejects %lu\n",
+           stats.nouveau_nonempty_exec_rejects);
+    printf("nouveau_nonempty_vm_bind_rejects %lu\n",
+           stats.nouveau_nonempty_vm_bind_rejects);
     printf("nouveau_unsupported %lu\n", stats.nouveau_unsupported);
     printf("nouveau_pci_registered %lu\n", stats.nouveau_pci_registered);
     printf("nouveau_pci_probes %lu\n", stats.nouveau_pci_probes);
@@ -928,6 +934,19 @@ int main(int argc, char *argv[])
            stats.nouveau_nvif_del_rejects,
            stats.nouveau_nvif_unsupported,
            stats.nouveau_nvif_sclass_count == 0 ? "PASS" : "FAIL");
+    printf("nouveau_submit_failclosed_matrix stats "
+           "pushbuf_noops=%lu exec_noops=%lu vm_bind_noops=%lu "
+           "nonempty_pushbuf_rejects=%lu nonempty_exec_rejects=%lu "
+           "nonempty_vm_bind_rejects=%lu native_present_credit=%lu "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.nouveau_pushbuf_noops,
+           stats.nouveau_exec_noops,
+           stats.nouveau_vm_bind_noops,
+           stats.nouveau_nonempty_pushbuf_rejects,
+           stats.nouveau_nonempty_exec_rejects,
+           stats.nouveau_nonempty_vm_bind_rejects,
+           stats.nouveau_pci_native_present_credit,
+           stats.nouveau_pci_native_present_credit == 0 ? "PASS" : "FAIL");
     printf("kms_framebuffers %lu\n", stats.kms_framebuffers);
     printf("kms_page_flips %lu\n", stats.kms_page_flips);
     printf("kms_page_flip_target_rejects %lu\n",

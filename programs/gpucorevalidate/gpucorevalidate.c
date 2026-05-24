@@ -1963,6 +1963,18 @@ static int validate_backend(void)
            stats.nouveau_nvif_new_rejects,
            stats.nouveau_nvif_del_rejects,
            stats.nouveau_nvif_unsupported);
+    printf("gpu_core_c_validator nouveau_submit_failclosed_matrix "
+           "pushbuf_noops=%lu exec_noops=%lu vm_bind_noops=%lu "
+           "nonempty_pushbuf_rejects=%lu nonempty_exec_rejects=%lu "
+           "nonempty_vm_bind_rejects=%lu native_present_credit=%lu "
+           "opengl_submit_credit=0 status=PENDING\n",
+           stats.nouveau_pushbuf_noops,
+           stats.nouveau_exec_noops,
+           stats.nouveau_vm_bind_noops,
+           stats.nouveau_nonempty_pushbuf_rejects,
+           stats.nouveau_nonempty_exec_rejects,
+           stats.nouveau_nonempty_vm_bind_rejects,
+           stats.nouveau_pci_native_present_credit);
 
     if (backend.backend != FB_GPU_BACKEND_HYPERV_DXG) {
         note_fail("backend", "not_hyperv_dxg");
@@ -2190,6 +2202,17 @@ static int validate_backend(void)
                stats.nouveau_nvif_new_rejects,
                stats.nouveau_nvif_del_rejects,
                stats.nouveau_nvif_unsupported);
+        printf("gpu_core_c_validator nouveau_submit_failclosed_matrix "
+               "pushbuf_noops=%lu exec_noops=%lu vm_bind_noops=%lu "
+               "nonempty_pushbuf_rejects=%lu nonempty_exec_rejects=%lu "
+               "nonempty_vm_bind_rejects=%lu native_present_credit=0 "
+               "opengl_submit_credit=0 status=PASS\n",
+               stats.nouveau_pushbuf_noops,
+               stats.nouveau_exec_noops,
+               stats.nouveau_vm_bind_noops,
+               stats.nouveau_nonempty_pushbuf_rejects,
+               stats.nouveau_nonempty_exec_rejects,
+               stats.nouveau_nonempty_vm_bind_rejects);
     }
     if (ok)
         printf("gpu_core_c_validator step=backend status=PASS\n");
