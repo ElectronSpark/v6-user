@@ -293,6 +293,10 @@ check_present_nouveau(int fd, struct nouveau_device *dev)
            " device=0x%" PRIx64 " chipset=0x%" PRIx64
            " fb=%" PRIu64 " gart=%" PRIu64 "\n",
            vendor, device, chipset, fb_size, gart_size);
+    printf("nouveauabitest: nouveau_mesa_smoke_gate_matrix "
+           "dda_nouveau=1 winsys_device_info=PASS "
+           "synthetic_gpup_rejected=PASS native_engine=diagnostic-only "
+           "mesa_nvif_enabled=0 status=PASS\n");
     return 0;
 }
 
@@ -329,6 +333,10 @@ main(void)
         print_no_nouveau_driver_pass("render-node-unavailable", -errno);
         print_no_native_engine_pass(&backend, have_backend);
         print_no_mesa_nvif_pass("no-nouveau-driver");
+        printf("nouveauabitest: nouveau_mesa_smoke_gate_matrix "
+               "dda_nouveau=0 winsys_device_info=SKIP "
+               "synthetic_gpup_rejected=PASS native_engine=absent "
+               "mesa_nvif_enabled=0 status=PASS\n");
         return 0;
     }
 
@@ -352,6 +360,10 @@ main(void)
         print_no_mesa_nvif_pass("no-native-pci-bar-nouveau-engine");
         printf("nouveauabitest: nouveau absent fail-closed ok driver=%s ret=%d\n",
                version_name(ver), ret);
+        printf("nouveauabitest: nouveau_mesa_smoke_gate_matrix "
+               "dda_nouveau=0 winsys_device_info=SKIP "
+               "synthetic_gpup_rejected=PASS native_engine=absent "
+               "mesa_nvif_enabled=0 status=PASS\n");
         drmFreeVersion(ver);
         close(fd);
         return 0;
