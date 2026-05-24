@@ -33,11 +33,26 @@ static uint32 g_requested_adapter_index = D3DKMT_ADAPTERS_MAX;
 static int g_requested_adapter_luid_set;
 static struct winluid g_requested_adapter_luid;
 
+struct dxg_sharedhandle_copyout_diag {
+    uint32 seen;
+    uint32 failures;
+    uint32 kind;
+    uint32 process;
+    uint32 object;
+    uint32 nt;
+    uint32 fd;
+    uint32 reclaimed;
+    uint32 refs_after;
+    int32 ret;
+};
+
 static void *probe_alloc_buffer(uint32 size);
 static char *dxg_find_text(char *s, const char *needle);
 static int dxg_parse_uint_after(char *line, const char *name, uint32 *out);
 static int dxg_parse_hex_after(char *line, const char *name, uint32 *out);
 static char *read_dxg_status_buffer(void);
+static int read_dxg_sharedhandle_copyout_diag(
+    struct dxg_sharedhandle_copyout_diag *out);
 
 struct dxg_existing_sysmem_target_status {
     uint32 pfnmap_pages;
@@ -3066,10 +3081,14 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     struct d3dkmt_createsynchronizationobject2 create_sync;
     struct d3dkmt_destroysynchronizationobject destroy_sync;
     struct d3dkmt_shareobjects share_objects;
+    struct d3dkmt_shareobjects fault_share_objects;
     struct d3dkmthandle objects[1];
     struct d3dkmt_queryresourceinfofromnthandle query;
     struct d3dkmt_openresourcefromnthandle open_resource;
     struct d3dkmt_opensyncobjectfromnthandle2 open_sync;
+    struct dxg_sharedhandle_copyout_diag copyout_before;
+    struct dxg_sharedhandle_copyout_diag resource_copyout_diag;
+    struct dxg_sharedhandle_copyout_diag sync_copyout_diag;
     uint64 resource_fd = 0;
     uint64 sync_fd = 0;
     uint64 returned_resource_fd = 0;
@@ -3083,9 +3102,15 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     int resource_fd_open = 0;
     int sync_fd_open = 0;
     int resource_create_rc;
+    int resource_copyout_fault_rc = -2;
+    int resource_copyout_diag_rc = -1;
     int resource_share_rc = -1;
     int sync_create_rc;
+    int sync_copyout_fault_rc = -2;
+    int sync_copyout_diag_rc = -1;
     int sync_share_rc = -1;
+    uint32 resource_copyout_failures_before = 0;
+    uint32 sync_copyout_failures_before = 0;
     int resource_missing_query_rc = -1;
     int resource_missing_open_rc = -1;
     int resource_wrong_kind_query_rc = -1;
@@ -3103,6 +3128,8 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     int destroy_sync_rc = -2;
     int resource_negative_pass;
     int sync_negative_pass;
+    int resource_copyout_pass = 0;
+    int sync_copyout_pass = 0;
     int opensync_negative_pass;
     const char *resource_reason = "ok";
     const char *sync_reason = "ok";
@@ -3117,6 +3144,10 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     memset(&create_sync, 0, sizeof(create_sync));
     memset(&destroy_sync, 0, sizeof(destroy_sync));
     memset(&share_objects, 0, sizeof(share_objects));
+    memset(&fault_share_objects, 0, sizeof(fault_share_objects));
+    memset(&copyout_before, 0, sizeof(copyout_before));
+    memset(&resource_copyout_diag, 0, sizeof(resource_copyout_diag));
+    memset(&sync_copyout_diag, 0, sizeof(sync_copyout_diag));
     memset(&child_sync_result, 0, sizeof(child_sync_result));
     child_sync_result.own_rc = -2;
     child_sync_result.inherited_rc = -2;
@@ -3143,6 +3174,17 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     resource_create_rc = ioctl(fd, LX_DXCREATEALLOCATION,
                                &create_allocation);
     if (resource_create_rc == 0 && create_allocation.resource.v != 0) {
+        if (read_dxg_sharedhandle_copyout_diag(&copyout_before) == 0)
+            resource_copyout_failures_before = copyout_before.failures;
+        memset(&fault_share_objects, 0, sizeof(fault_share_objects));
+        objects[0] = create_allocation.resource;
+        fault_share_objects.object_count = 1;
+        fault_share_objects.objects = (uint64)objects;
+        fault_share_objects.shared_handle = 1;
+        resource_copyout_fault_rc =
+            ioctl(fd, LX_DXSHAREOBJECTS, &fault_share_objects);
+        resource_copyout_diag_rc =
+            read_dxg_sharedhandle_copyout_diag(&resource_copyout_diag);
         memset(&share_objects, 0, sizeof(share_objects));
         objects[0] = create_allocation.resource;
         share_objects.object_count = 1;
@@ -3161,6 +3203,17 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
     sync_create_rc = ioctl(fd, LX_DXCREATESYNCHRONIZATIONOBJECT,
                            &create_sync);
     if (sync_create_rc == 0 && create_sync.sync_object.v != 0) {
+        if (read_dxg_sharedhandle_copyout_diag(&copyout_before) == 0)
+            sync_copyout_failures_before = copyout_before.failures;
+        memset(&fault_share_objects, 0, sizeof(fault_share_objects));
+        objects[0] = create_sync.sync_object;
+        fault_share_objects.object_count = 1;
+        fault_share_objects.objects = (uint64)objects;
+        fault_share_objects.shared_handle = 1;
+        sync_copyout_fault_rc =
+            ioctl(fd, LX_DXSHAREOBJECTS, &fault_share_objects);
+        sync_copyout_diag_rc =
+            read_dxg_sharedhandle_copyout_diag(&sync_copyout_diag);
         memset(&share_objects, 0, sizeof(share_objects));
         objects[0] = create_sync.sync_object;
         share_objects.object_count = 1;
@@ -3479,6 +3532,17 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
         resource_reason = "stale_resource_query_accepted";
     else if (resource_stale_open_rc >= 0)
         resource_reason = "stale_resource_open_accepted";
+    resource_copyout_pass =
+        resource_create_rc == 0 &&
+        resource_copyout_fault_rc < 0 &&
+        resource_copyout_diag_rc == 0 &&
+        resource_copyout_diag.seen &&
+        resource_copyout_diag.failures > resource_copyout_failures_before &&
+        resource_copyout_diag.kind == 2 &&
+        resource_copyout_diag.reclaimed == 1 &&
+        resource_copyout_diag.refs_after == 0 &&
+        resource_share_rc == 0 &&
+        resource_fd_valid;
 
     sync_negative_pass = sync_create_rc == 0 &&
                          sync_share_rc == 0 &&
@@ -3507,6 +3571,17 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
         sync_reason = "child_parent_device_sync_open_accepted";
     else if (sync_child_status != 0)
         sync_reason = "child_parent_device_probe_failed";
+    sync_copyout_pass =
+        sync_create_rc == 0 &&
+        sync_copyout_fault_rc < 0 &&
+        sync_copyout_diag_rc == 0 &&
+        sync_copyout_diag.seen &&
+        sync_copyout_diag.failures > sync_copyout_failures_before &&
+        sync_copyout_diag.kind == 1 &&
+        sync_copyout_diag.reclaimed == 1 &&
+        sync_copyout_diag.refs_after == 0 &&
+        sync_share_rc == 0 &&
+        sync_fd_valid;
 
     opensync_negative_pass = sync_create_rc == 0 &&
                              sync_share_rc == 0 &&
@@ -3530,8 +3605,25 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
         }
     }
 
-    pass = resource_negative_pass && sync_negative_pass;
+    pass = resource_negative_pass && sync_negative_pass &&
+           resource_copyout_pass && sync_copyout_pass;
 
+    printf("ntshare_copyout_cleanup_matrix kind=resource create_rc=%d fault_share_rc=%d failures=%u->%u diag_rc=%d fd=%u reclaimed=%u refs_after=%u valid_share_after_fault=%u returned_fd_valid=%u ret=%d present_attempted=0 native_present_claim=0 status=%s\n",
+           resource_create_rc, resource_copyout_fault_rc,
+           resource_copyout_failures_before,
+           resource_copyout_diag.failures, resource_copyout_diag_rc,
+           resource_copyout_diag.fd, resource_copyout_diag.reclaimed,
+           resource_copyout_diag.refs_after, resource_share_rc == 0,
+           resource_fd_valid, resource_copyout_diag.ret,
+           resource_copyout_pass ? "PASS" : "FAIL");
+    printf("ntshare_copyout_cleanup_matrix kind=sync create_rc=%d fault_share_rc=%d failures=%u->%u diag_rc=%d fd=%u reclaimed=%u refs_after=%u valid_share_after_fault=%u returned_fd_valid=%u ret=%d present_attempted=0 native_present_claim=0 status=%s\n",
+           sync_create_rc, sync_copyout_fault_rc,
+           sync_copyout_failures_before,
+           sync_copyout_diag.failures, sync_copyout_diag_rc,
+           sync_copyout_diag.fd, sync_copyout_diag.reclaimed,
+           sync_copyout_diag.refs_after, sync_share_rc == 0,
+           sync_fd_valid, sync_copyout_diag.ret,
+           sync_copyout_pass ? "PASS" : "FAIL");
     printf("resource_import_negative_matrix create_rc=%d share_rc=%d resource=0x%x allocation=0x%x returned_resource_fd=%lu resource_returned_fd_valid=%u resource_fd=%lu resource_fd_valid=%u resource_fd_open_before_close=%u resource_fd_open_after_close=%u stale_resource_fd=%lu stale_resource_fd_valid=%u stale_resource_fd_expected_closed=1 missing_query_rc=%d missing_open_rc=%d wrong_fd_kind=sync_fd wrong_kind_query_rc=%d wrong_kind_open_rc=%d stale_query_rc=%d stale_open_rc=%d expected_failures=missing_fd,wrong_kind_fd,stale_fd present_attempted=0 native_present_claim=0 reason=%s status=%s\n",
            resource_create_rc, resource_share_rc,
            create_allocation.resource.v, allocation_info.allocation.v,
@@ -5784,6 +5876,42 @@ static int dxg_parse_hex_after(char *line, const char *name, uint32 *out)
         return -1;
     *out = (uint32)value;
     return 0;
+}
+
+static int read_dxg_sharedhandle_copyout_diag(
+    struct dxg_sharedhandle_copyout_diag *out)
+{
+    char *buf;
+    char *line;
+    uint32 ret_value = 0;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    line = dxg_find_text(buf, "dxg_sharedhandle_copyout=");
+    if (line == 0)
+        goto out_free;
+    out->seen = 1;
+    if (dxg_parse_uint_after(line, "failures:", &out->failures) < 0 ||
+        dxg_parse_uint_after(line, "kind:", &out->kind) < 0 ||
+        dxg_parse_uint_after(line, "proc:", &out->process) < 0 ||
+        dxg_parse_uint_after(line, "object:", &out->object) < 0 ||
+        dxg_parse_uint_after(line, "nt:", &out->nt) < 0 ||
+        dxg_parse_uint_after(line, "fd:", &out->fd) < 0 ||
+        dxg_parse_uint_after(line, "reclaimed:", &out->reclaimed) < 0 ||
+        dxg_parse_uint_after(line, "refs_after:", &out->refs_after) < 0 ||
+        dxg_parse_uint_after(line, "ret:", &ret_value) < 0)
+        goto out_free;
+    out->ret = (int32)ret_value;
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
 }
 
 static int read_dxg_shared_resource_diag(struct dxg_shared_resource_diag *out)
