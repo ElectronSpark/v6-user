@@ -144,6 +144,25 @@ struct dxg_create_publication_status {
 static int read_create_publication_status(
     struct dxg_create_publication_status *out);
 
+struct dxg_cpu_event_signal_status {
+    uint32 attempts;
+    uint32 successes;
+    int32 ret;
+    uint32 cmd;
+    uint32 flags;
+    uint32 objects;
+    uint32 contexts;
+    uint64 user_fd;
+    uint64 event_id;
+    uint32 len;
+    uint32 active;
+    uint32 allocs;
+    uint32 removes;
+};
+
+static int read_cpu_event_signal_status(
+    struct dxg_cpu_event_signal_status *out);
+
 static int parse_u32_option_value(const char *value, uint32 *out)
 {
     uint64 parsed = 0;
@@ -210,6 +229,31 @@ static int parse_u64_option_value(const char *value, uint64 *out)
     }
     *out = parsed;
     return 0;
+}
+
+static int dxgprobe_eventfd(uint64 initval)
+{
+#ifdef HOST_LIBC_PROGRAM
+#ifdef SYS_eventfd2
+    int rc = (int)syscall(SYS_eventfd2, initval, 0);
+    if (rc < 0)
+        return -errno;
+    return rc;
+#else
+    (void)initval;
+    return -ENOSYS;
+#endif
+#elif defined(__x86_64__)
+    int64 ret;
+    asm volatile("syscall"
+                 : "=a"(ret)
+                 : "a"(284), "D"((int64)initval), "S"(0)
+                 : "rcx", "r11", "memory");
+    return (int)ret;
+#else
+    (void)initval;
+    return -ENOSYS;
+#endif
 }
 
 static int parse_adapter_luid_option_value(const char *value,
@@ -2842,6 +2886,44 @@ static int read_create_publication_status(
                          &out->createhwqueue_unwind_queue);
     dxg_parse_uint_after(createhwqueue_unwind, "fence:",
                          &out->createhwqueue_unwind_fence);
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_cpu_event_signal_status(
+    struct dxg_cpu_event_signal_status *out)
+{
+    char *buf;
+    char *line;
+    uint32 tmp = 0;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    line = dxg_find_text(buf, "dxg_synccpuevent_signal=");
+    if (line == 0)
+        goto out_free;
+    dxg_parse_uint_after(line, "attempts:", &out->attempts);
+    dxg_parse_uint_after(line, "successes:", &out->successes);
+    if (dxg_parse_uint_after(line, "ret:", &tmp) == 0)
+        out->ret = (int32)tmp;
+    dxg_parse_uint_after(line, "cmd:", &out->cmd);
+    dxg_parse_uint_after(line, "flags:", &out->flags);
+    dxg_parse_uint_after(line, "objects:", &out->objects);
+    dxg_parse_uint_after(line, "contexts:", &out->contexts);
+    dxg_parse_u64_after(line, "user_fd:", &out->user_fd);
+    dxg_parse_u64_after(line, "event:", &out->event_id);
+    dxg_parse_uint_after(line, "len:", &out->len);
+    dxg_parse_uint_after(line, "active:", &out->active);
+    dxg_parse_uint_after(line, "allocs:", &out->allocs);
+    dxg_parse_uint_after(line, "removes:", &out->removes);
     ret = 0;
 
 out_free:
@@ -10083,6 +10165,7 @@ static void probe_gpu_sync(int fd, struct d3dkmthandle device,
     struct d3dkmt_destroysynchronizationobject destroy_sync;
     struct d3dkmt_signalsynchronizationobject2 signal_legacy;
     struct d3dkmt_waitforsynchronizationobject2 wait_legacy;
+    struct d3dkmt_signalsynchronizationobjectfromcpu signal_cpu;
     struct d3dkmt_signalsynchronizationobjectfromgpu signal_gpu;
     struct d3dkmt_signalsynchronizationobjectfromgpu2 signal_gpu2;
     struct d3dkmt_waitforsynchronizationobjectfromgpu wait_gpu;
@@ -10120,6 +10203,45 @@ static void probe_gpu_sync(int fd, struct d3dkmthandle device,
         printf("sync_legacy_signal ok context=0x%x sync=0x%x fence=%lu\n",
                context.v, objects[0].v, signal_legacy.fence.fence_value);
     }
+    {
+        struct dxg_cpu_event_signal_status before;
+        struct dxg_cpu_event_signal_status after;
+        int efd = dxgprobe_eventfd(0);
+        int cpu_rc = -ENOSYS;
+        int before_rc = read_cpu_event_signal_status(&before);
+        int after_rc = -1;
+        int pass = 0;
+
+        memset(&after, 0, sizeof(after));
+        memset(&signal_legacy, 0, sizeof(signal_legacy));
+        signal_legacy.context = context;
+        signal_legacy.flags.enqueue_cpu_event = 1;
+        if (efd >= 0) {
+            signal_legacy.cpu_event_handle = (uint64)efd;
+            cpu_rc = ioctl(fd, LX_DXSIGNALSYNCHRONIZATIONOBJECT,
+                           &signal_legacy);
+            after_rc = read_cpu_event_signal_status(&after);
+            close(efd);
+        }
+        pass = efd >= 0 && before_rc == 0 && after_rc == 0 &&
+               cpu_rc == 0 && after.attempts > before.attempts &&
+               after.successes > before.successes &&
+               after.ret == 0 && after.event_id != 0 &&
+               after.user_fd == (uint64)efd &&
+               after.objects == 0 && after.contexts == 1 &&
+               (after.flags & 0x2) != 0 &&
+               after.allocs > before.allocs;
+        printf("sync_signal_cpu_event_matrix rc=%d efd=%d "
+               "attempts=%u->%u successes=%u->%u event=%lu "
+               "objects=%u contexts=%u flags=0x%x len=%u "
+               "host_events=%u/%u/%u->%u/%u/%u status=%s\n",
+               cpu_rc, efd, before.attempts, after.attempts,
+               before.successes, after.successes, after.event_id,
+               after.objects, after.contexts, after.flags, after.len,
+               before.active, before.allocs, before.removes,
+               after.active, after.allocs, after.removes,
+               pass ? "PASS" : "FAIL");
+    }
 
     memset(&wait_legacy, 0, sizeof(wait_legacy));
     wait_legacy.context = context;
@@ -10150,6 +10272,20 @@ static void probe_gpu_sync(int fd, struct d3dkmthandle device,
     }
 
     fence_values[0] = 2;
+    memset(&signal_cpu, 0, sizeof(signal_cpu));
+    signal_cpu.device = device;
+    signal_cpu.object_count = 1;
+    signal_cpu.objects = (uint64)objects;
+    signal_cpu.fence_values = (uint64)fence_values;
+    signal_cpu.flags.enqueue_cpu_event = 1;
+    {
+        int cpu_event_fromcpu_rc =
+            ioctl(fd, LX_DXSIGNALSYNCHRONIZATIONOBJECTFROMCPU,
+                  &signal_cpu);
+        printf("sync_fromcpu_cpu_event_failclosed_matrix rc=%d expected=%d status=%s\n",
+               cpu_event_fromcpu_rc, -EINVAL,
+               cpu_event_fromcpu_rc == -EINVAL ? "PASS" : "FAIL");
+    }
 
     memset(&signal_gpu, 0, sizeof(signal_gpu));
     signal_gpu.context = context;
@@ -10179,6 +10315,46 @@ static void probe_gpu_sync(int fd, struct d3dkmthandle device,
     } else {
         printf("sync_gpu2_signal ok context=0x%x sync=0x%x fence=%lu\n",
                context.v, objects[0].v, fence_values[0]);
+    }
+    {
+        struct dxg_cpu_event_signal_status before;
+        struct dxg_cpu_event_signal_status after;
+        int efd = dxgprobe_eventfd(0);
+        int cpu_rc = -ENOSYS;
+        int before_rc = read_cpu_event_signal_status(&before);
+        int after_rc = -1;
+        int pass = 0;
+
+        memset(&after, 0, sizeof(after));
+        memset(&signal_gpu2, 0, sizeof(signal_gpu2));
+        signal_gpu2.context_count = 1;
+        signal_gpu2.contexts = (uint64)contexts;
+        signal_gpu2.flags.enqueue_cpu_event = 1;
+        if (efd >= 0) {
+            signal_gpu2.cpu_event_handle = (uint64)efd;
+            cpu_rc = ioctl(fd, LX_DXSIGNALSYNCHRONIZATIONOBJECTFROMGPU2,
+                           &signal_gpu2);
+            after_rc = read_cpu_event_signal_status(&after);
+            close(efd);
+        }
+        pass = efd >= 0 && before_rc == 0 && after_rc == 0 &&
+               cpu_rc == 0 && after.attempts > before.attempts &&
+               after.successes > before.successes &&
+               after.ret == 0 && after.event_id != 0 &&
+               after.user_fd == (uint64)efd &&
+               after.objects == 0 && after.contexts == 1 &&
+               (after.flags & 0x2) != 0 &&
+               after.allocs > before.allocs;
+        printf("sync_gpu2_cpu_event_matrix rc=%d efd=%d "
+               "attempts=%u->%u successes=%u->%u event=%lu "
+               "objects=%u contexts=%u flags=0x%x len=%u "
+               "host_events=%u/%u/%u->%u/%u/%u status=%s\n",
+               cpu_rc, efd, before.attempts, after.attempts,
+               before.successes, after.successes, after.event_id,
+               after.objects, after.contexts, after.flags, after.len,
+               before.active, before.allocs, before.removes,
+               after.active, after.allocs, after.removes,
+               pass ? "PASS" : "FAIL");
     }
 
     memset(&wait_gpu, 0, sizeof(wait_gpu));
