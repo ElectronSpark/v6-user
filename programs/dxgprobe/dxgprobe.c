@@ -27,6 +27,7 @@ static int g_scanout_pin_lifetime_validate;
 static int g_import_negative_validate;
 static int g_shared_seal_provenance_validate;
 static int g_qai_admission_validate;
+static int g_create_publication_faults_validate;
 static uint32 g_residency_batch_count = 2;
 static uint32 g_residency_batch_flags = 0x1;
 static uint32 g_requested_adapter_index = D3DKMT_ADAPTERS_MAX;
@@ -115,6 +116,33 @@ struct dxg_syncfile_status {
 };
 
 static int read_dxg_syncfile_status(struct dxg_syncfile_status *out);
+
+struct dxg_create_publication_status {
+    uint32 createdevice_last_process;
+    uint32 createdevice_last_device;
+    uint32 createdevice_unwind_attempts;
+    uint32 createdevice_unwind_successes;
+    int32 createdevice_unwind_ret;
+    uint32 createdevice_unwind_process;
+    uint32 createdevice_unwind_device;
+    uint32 createcontext_last_handle;
+    uint32 createcontext_unwind_attempts;
+    uint32 createcontext_unwind_successes;
+    int32 createcontext_unwind_ret;
+    uint32 createcontext_unwind_process;
+    uint32 createcontext_unwind_context;
+    uint32 createhwqueue_last_queue;
+    uint32 createhwqueue_last_fence;
+    uint32 createhwqueue_unwind_attempts;
+    uint32 createhwqueue_unwind_successes;
+    int32 createhwqueue_unwind_ret;
+    uint32 createhwqueue_unwind_process;
+    uint32 createhwqueue_unwind_queue;
+    uint32 createhwqueue_unwind_fence;
+};
+
+static int read_create_publication_status(
+    struct dxg_create_publication_status *out);
 
 static int parse_u32_option_value(const char *value, uint32 *out)
 {
@@ -1283,6 +1311,277 @@ static int destroy_context_handle(int fd, struct d3dkmthandle context)
         return -1;
     }
     return 0;
+}
+
+static int probe_create_publication_faults_validate(
+    int fd, struct d3dkmthandle adapter)
+{
+    static const struct {
+        const char *name;
+        uint32 node;
+        uint32 engine;
+        enum d3dkmt_clienthint hint;
+        uint32 hwqueue_supported;
+    } context_cases[] = {
+        { "dx12_hwqueue_e0", 0, 0, _D3DKMT_CLIENTHINT_DX12, 1 },
+        { "dx12_empty_e1", 0, 1, _D3DKMT_CLIENTHINT_DX12, 0 },
+        { "unknown_empty_e0", 0, 0, _D3DKMT_CLIENTHNT_UNKNOWN, 0 },
+    };
+    struct dxg_create_publication_status before;
+    struct dxg_create_publication_status after_device;
+    struct dxg_create_publication_status before_context;
+    struct dxg_create_publication_status after_context;
+    struct dxg_create_publication_status before_hwqueue;
+    struct dxg_create_publication_status after_hwqueue;
+    struct d3dkmt_createdevice *fault_device;
+    struct d3dkmt_createdevice create_device;
+    struct d3dkmt_destroydevice destroy_device;
+    struct d3dkmt_createcontextvirtual *fault_context;
+    struct d3dkmt_destroycontext destroy_context;
+    struct d3dkmt_createhwqueue *fault_hwqueue;
+    struct d3dkmt_destroyhwqueue destroy_hwqueue;
+    struct d3dkmt_destroysynchronizationobject destroy_sync;
+    struct d3dkmthandle context_handle;
+    unsigned char context_private_data[64];
+    void *page = 0;
+    int context_sync_only = 0;
+    int before_rc;
+    int device_rc = -1;
+    int context_rc = -1;
+    int hwqueue_rc = -1;
+    int destroy_device_retry_rc = -2;
+    int destroy_context_retry_rc = -2;
+    int destroy_hwqueue_retry_rc = -2;
+    int destroy_hwqueue_fence_retry_rc = -2;
+    int device_ok = 0;
+    int context_ok = 0;
+    int hwqueue_ok = 0;
+    int ret = -1;
+    const char *context_case_name = "none";
+
+    memset(&before, 0, sizeof(before));
+    memset(&after_device, 0, sizeof(after_device));
+    before_rc = read_create_publication_status(&before);
+    page = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == (void *)-1) {
+        printf("dxg_createdevice_copyout_unwind_matrix status=SKIP_MMAP\n");
+        return -1;
+    }
+
+    memset(page, 0, 4096);
+    fault_device = (struct d3dkmt_createdevice *)page;
+    fault_device->adapter = adapter;
+    if (mprotect(page, 4096, PROT_READ) != 0) {
+        printf("dxg_createdevice_copyout_unwind_matrix status=SKIP_MPROTECT\n");
+        goto out_unmap;
+    }
+    device_rc = ioctl(fd, LX_DXCREATEDEVICE, fault_device);
+    (void)read_create_publication_status(&after_device);
+    if (mprotect(page, 4096, PROT_READ | PROT_WRITE) != 0) {
+        printf("dxg_createdevice_copyout_unwind_matrix status=FAIL_REPROTECT\n");
+        goto out_unmap;
+    }
+    if (after_device.createdevice_last_device != 0) {
+        memset(&destroy_device, 0, sizeof(destroy_device));
+        destroy_device.device.v = after_device.createdevice_last_device;
+        destroy_device_retry_rc = ioctl(fd, LX_DXDESTROYDEVICE,
+                                        &destroy_device);
+    }
+    device_ok =
+        before_rc == 0 && device_rc == -EFAULT &&
+        after_device.createdevice_unwind_attempts >
+            before.createdevice_unwind_attempts &&
+        after_device.createdevice_unwind_successes >
+            before.createdevice_unwind_successes &&
+        after_device.createdevice_unwind_ret == 0 &&
+        after_device.createdevice_unwind_device ==
+            after_device.createdevice_last_device &&
+        after_device.createdevice_unwind_process ==
+            after_device.createdevice_last_process &&
+        destroy_device_retry_rc < 0;
+    printf("dxg_createdevice_copyout_unwind_matrix rc=%d before_rc=%d "
+           "process=0x%x device=0x%x destroy_retry_rc=%d "
+           "unwind_attempts=%u->%u unwind_successes=%u->%u "
+           "unwind_ret=%d no_local_publication=%u status=%s\n",
+           device_rc, before_rc, after_device.createdevice_last_process,
+           after_device.createdevice_last_device, destroy_device_retry_rc,
+           before.createdevice_unwind_attempts,
+           after_device.createdevice_unwind_attempts,
+           before.createdevice_unwind_successes,
+           after_device.createdevice_unwind_successes,
+           after_device.createdevice_unwind_ret,
+           destroy_device_retry_rc < 0 ? 1 : 0,
+           device_ok ? "PASS" : "FAIL");
+
+    memset(&create_device, 0, sizeof(create_device));
+    create_device.adapter = adapter;
+    if (ioctl(fd, LX_DXCREATEDEVICE, &create_device) < 0 ||
+        create_device.device.v == 0) {
+        printf("dxg_createcontext_copyout_unwind_matrix status=FAIL "
+               "reason=create_device device=0x%x\n",
+               create_device.device.v);
+        goto out_unmap;
+    }
+
+    memset(&before_context, 0, sizeof(before_context));
+    memset(&after_context, 0, sizeof(after_context));
+    if (read_create_publication_status(&before_context) < 0)
+        memset(&before_context, 0, sizeof(before_context));
+    for (uint32 i = 0; i < sizeof(context_cases) / sizeof(context_cases[0]);
+         i++) {
+        memset(page, 0, 4096);
+        fault_context = (struct d3dkmt_createcontextvirtual *)page;
+        fault_context->device = create_device.device;
+        fault_context->node_ordinal = context_cases[i].node;
+        fault_context->engine_affinity = context_cases[i].engine;
+        fault_context->client_hint = context_cases[i].hint;
+        fault_context->flags.hw_queue_supported =
+            context_cases[i].hwqueue_supported;
+        if (mprotect(page, 4096, PROT_READ) != 0) {
+            printf("dxg_createcontext_copyout_unwind_matrix status=FAIL "
+                   "reason=mprotect_read\n");
+            goto cleanup_device;
+        }
+        context_rc = ioctl(fd, LX_DXCREATECONTEXTVIRTUAL, fault_context);
+        (void)read_create_publication_status(&after_context);
+        if (mprotect(page, 4096, PROT_READ | PROT_WRITE) != 0) {
+            printf("dxg_createcontext_copyout_unwind_matrix status=FAIL "
+                   "reason=mprotect_write\n");
+            goto cleanup_device;
+        }
+        if (context_rc == -EFAULT) {
+            context_case_name = context_cases[i].name;
+            break;
+        }
+    }
+    if (after_context.createcontext_last_handle != 0) {
+        memset(&destroy_context, 0, sizeof(destroy_context));
+        destroy_context.context.v = after_context.createcontext_last_handle;
+        destroy_context_retry_rc = ioctl(fd, LX_DXDESTROYCONTEXT,
+                                         &destroy_context);
+    }
+    context_ok =
+        context_rc == -EFAULT &&
+        after_context.createcontext_unwind_attempts >
+            before_context.createcontext_unwind_attempts &&
+        after_context.createcontext_unwind_successes >
+            before_context.createcontext_unwind_successes &&
+        after_context.createcontext_unwind_ret == 0 &&
+        after_context.createcontext_unwind_context ==
+            after_context.createcontext_last_handle &&
+        destroy_context_retry_rc < 0;
+    printf("dxg_createcontext_copyout_unwind_matrix rc=%d case=%s "
+           "context=0x%x destroy_retry_rc=%d "
+           "unwind_attempts=%u->%u unwind_successes=%u->%u "
+           "unwind_ret=%d no_local_publication=%u status=%s\n",
+           context_rc, context_case_name,
+           after_context.createcontext_last_handle,
+           destroy_context_retry_rc,
+           before_context.createcontext_unwind_attempts,
+           after_context.createcontext_unwind_attempts,
+           before_context.createcontext_unwind_successes,
+           after_context.createcontext_unwind_successes,
+           after_context.createcontext_unwind_ret,
+           destroy_context_retry_rc < 0 ? 1 : 0,
+           context_ok ? "PASS" : "FAIL");
+
+    memset(context_private_data, 0, sizeof(context_private_data));
+    memset(&context_handle, 0, sizeof(context_handle));
+    if (probe_context_matrix(fd, create_device.device,
+                             context_private_data,
+                             sizeof(context_private_data),
+                             &context_handle, &context_sync_only) < 0 ||
+        context_handle.v == 0 || context_sync_only) {
+        printf("dxg_createhwqueue_copyout_unwind_matrix status=FAIL "
+               "reason=create_context context=0x%x sync_only=%d\n",
+               context_handle.v, context_sync_only);
+        goto cleanup_device;
+    }
+
+    memset(&before_hwqueue, 0, sizeof(before_hwqueue));
+    memset(&after_hwqueue, 0, sizeof(after_hwqueue));
+    if (read_create_publication_status(&before_hwqueue) < 0)
+        memset(&before_hwqueue, 0, sizeof(before_hwqueue));
+    memset(page, 0, 4096);
+    fault_hwqueue = (struct d3dkmt_createhwqueue *)page;
+    fault_hwqueue->context = context_handle;
+    if (mprotect(page, 4096, PROT_READ) != 0) {
+        printf("dxg_createhwqueue_copyout_unwind_matrix status=FAIL "
+               "reason=mprotect_read\n");
+        goto cleanup_context;
+    }
+    hwqueue_rc = ioctl(fd, LX_DXCREATEHWQUEUE, fault_hwqueue);
+    (void)read_create_publication_status(&after_hwqueue);
+    if (mprotect(page, 4096, PROT_READ | PROT_WRITE) != 0) {
+        printf("dxg_createhwqueue_copyout_unwind_matrix status=FAIL "
+               "reason=mprotect_write\n");
+        goto cleanup_context;
+    }
+    if (after_hwqueue.createhwqueue_last_queue != 0) {
+        memset(&destroy_hwqueue, 0, sizeof(destroy_hwqueue));
+        destroy_hwqueue.queue.v = after_hwqueue.createhwqueue_last_queue;
+        destroy_hwqueue_retry_rc = ioctl(fd, LX_DXDESTROYHWQUEUE,
+                                         &destroy_hwqueue);
+    }
+    if (after_hwqueue.createhwqueue_last_fence != 0) {
+        memset(&destroy_sync, 0, sizeof(destroy_sync));
+        destroy_sync.sync_object.v = after_hwqueue.createhwqueue_last_fence;
+        destroy_hwqueue_fence_retry_rc =
+            ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync);
+    }
+    hwqueue_ok =
+        hwqueue_rc == -EFAULT &&
+        after_hwqueue.createhwqueue_unwind_attempts >
+            before_hwqueue.createhwqueue_unwind_attempts &&
+        after_hwqueue.createhwqueue_unwind_successes >
+            before_hwqueue.createhwqueue_unwind_successes &&
+        after_hwqueue.createhwqueue_unwind_ret == 0 &&
+        after_hwqueue.createhwqueue_unwind_queue ==
+            after_hwqueue.createhwqueue_last_queue &&
+        after_hwqueue.createhwqueue_unwind_fence ==
+            after_hwqueue.createhwqueue_last_fence &&
+        destroy_hwqueue_retry_rc < 0 &&
+        destroy_hwqueue_fence_retry_rc < 0;
+    printf("dxg_createhwqueue_copyout_unwind_matrix rc=%d queue=0x%x "
+           "fence=0x%x destroy_queue_retry_rc=%d "
+           "destroy_fence_retry_rc=%d unwind_attempts=%u->%u "
+           "unwind_successes=%u->%u unwind_ret=%d "
+           "no_local_publication=%u status=%s\n",
+           hwqueue_rc, after_hwqueue.createhwqueue_last_queue,
+           after_hwqueue.createhwqueue_last_fence,
+           destroy_hwqueue_retry_rc, destroy_hwqueue_fence_retry_rc,
+           before_hwqueue.createhwqueue_unwind_attempts,
+           after_hwqueue.createhwqueue_unwind_attempts,
+           before_hwqueue.createhwqueue_unwind_successes,
+           after_hwqueue.createhwqueue_unwind_successes,
+           after_hwqueue.createhwqueue_unwind_ret,
+           destroy_hwqueue_retry_rc < 0 &&
+           destroy_hwqueue_fence_retry_rc < 0 ? 1 : 0,
+           hwqueue_ok ? "PASS" : "FAIL");
+    ret = device_ok && context_ok && hwqueue_ok ? 0 : -1;
+
+cleanup_context:
+    (void)destroy_context_handle(fd, context_handle);
+cleanup_device:
+    memset(&destroy_device, 0, sizeof(destroy_device));
+    destroy_device.device = create_device.device;
+    if (create_device.device.v != 0 &&
+        ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device) < 0) {
+        printf("dxg_create_publication_faults cleanup_destroy_device_failed "
+               "device=0x%x\n",
+               create_device.device.v);
+        ret = -1;
+    }
+out_unmap:
+    munmap(page, 4096);
+    printf("dxg_create_publication_faults_matrix device=%s context=%s "
+           "hwqueue=%s status=%s\n",
+           device_ok ? "PASS" : "FAIL",
+           context_ok ? "PASS" : "FAIL",
+           hwqueue_ok ? "PASS" : "FAIL",
+           ret == 0 ? "PASS" : "FAIL");
+    return ret;
 }
 
 static void probe_context_priority(int fd, struct d3dkmthandle context)
@@ -2462,6 +2761,87 @@ static int read_dxg_syncfile_status(struct dxg_syncfile_status *out)
         if (slash != 0)
             dxg_parse_uint_after(slash, "/", &out->host_event_removes);
     }
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_create_publication_status(
+    struct dxg_create_publication_status *out)
+{
+    char *buf;
+    char *createdevice_last;
+    char *createdevice_unwind;
+    char *createcontext_last;
+    char *createcontext_unwind;
+    char *createhwqueue_last;
+    char *createhwqueue_unwind;
+    uint32 tmp = 0;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    createdevice_last = dxg_find_text(buf, "dxg_createdevice_last=");
+    createdevice_unwind = dxg_find_text(buf, "dxg_createdevice_unwind=");
+    createcontext_last = dxg_find_text(buf, "dxg_context_last=");
+    createcontext_unwind = dxg_find_text(buf, "dxg_context_unwind=");
+    createhwqueue_last = dxg_find_text(buf, "dxg_hwqueue_last=");
+    createhwqueue_unwind = dxg_find_text(buf, "dxg_hwqueue_unwind=");
+    if (createdevice_last == 0 || createdevice_unwind == 0 ||
+        createcontext_last == 0 || createcontext_unwind == 0 ||
+        createhwqueue_last == 0 || createhwqueue_unwind == 0)
+        goto out_free;
+
+    dxg_parse_uint_after(createdevice_last, "proc:",
+                         &out->createdevice_last_process);
+    dxg_parse_uint_after(createdevice_last, "device:",
+                         &out->createdevice_last_device);
+    dxg_parse_uint_after(createdevice_unwind, "attempts:",
+                         &out->createdevice_unwind_attempts);
+    dxg_parse_uint_after(createdevice_unwind, "successes:",
+                         &out->createdevice_unwind_successes);
+    if (dxg_parse_uint_after(createdevice_unwind, "ret:", &tmp) == 0)
+        out->createdevice_unwind_ret = (int32)tmp;
+    dxg_parse_uint_after(createdevice_unwind, "process:",
+                         &out->createdevice_unwind_process);
+    dxg_parse_uint_after(createdevice_unwind, "device:",
+                         &out->createdevice_unwind_device);
+
+    dxg_parse_uint_after(createcontext_last, "handle:",
+                         &out->createcontext_last_handle);
+    dxg_parse_uint_after(createcontext_unwind, "attempts:",
+                         &out->createcontext_unwind_attempts);
+    dxg_parse_uint_after(createcontext_unwind, "successes:",
+                         &out->createcontext_unwind_successes);
+    if (dxg_parse_uint_after(createcontext_unwind, "ret:", &tmp) == 0)
+        out->createcontext_unwind_ret = (int32)tmp;
+    dxg_parse_uint_after(createcontext_unwind, "process:",
+                         &out->createcontext_unwind_process);
+    dxg_parse_uint_after(createcontext_unwind, "context:",
+                         &out->createcontext_unwind_context);
+
+    dxg_parse_uint_after(createhwqueue_last, "queue:",
+                         &out->createhwqueue_last_queue);
+    dxg_parse_uint_after(createhwqueue_last, "fence:",
+                         &out->createhwqueue_last_fence);
+    dxg_parse_uint_after(createhwqueue_unwind, "attempts:",
+                         &out->createhwqueue_unwind_attempts);
+    dxg_parse_uint_after(createhwqueue_unwind, "successes:",
+                         &out->createhwqueue_unwind_successes);
+    if (dxg_parse_uint_after(createhwqueue_unwind, "ret:", &tmp) == 0)
+        out->createhwqueue_unwind_ret = (int32)tmp;
+    dxg_parse_uint_after(createhwqueue_unwind, "process:",
+                         &out->createhwqueue_unwind_process);
+    dxg_parse_uint_after(createhwqueue_unwind, "queue:",
+                         &out->createhwqueue_unwind_queue);
+    dxg_parse_uint_after(createhwqueue_unwind, "fence:",
+                         &out->createhwqueue_unwind_fence);
     ret = 0;
 
 out_free:
@@ -11742,6 +12122,10 @@ int main(int argc, char **argv)
             owner_isolation = 1;
         else if (strcmp(argv[i], "--handle-lifetime-validate") == 0)
             handle_lifetime_validate = 1;
+        else if (strcmp(argv[i], "--create-publication-faults") == 0 ||
+                 strcmp(argv[i],
+                        "--create-publication-faults-validate") == 0)
+            g_create_publication_faults_validate = 1;
         else if (strcmp(argv[i], "--import-negative") == 0 ||
                  strcmp(argv[i], "--import-negative-validate") == 0)
             g_import_negative_validate = 1;
@@ -12259,6 +12643,12 @@ int main(int argc, char **argv)
         if (probe_process_memory_lifetime_validate() < 0)
             ret = 1;
         if (probe_process_adapter_validate(enum2_selected_luid) < 0)
+            ret = 1;
+        goto close_adapter;
+    }
+    if (g_create_publication_faults_validate) {
+        if (probe_create_publication_faults_validate(
+                fd, open_luid.adapter_handle) < 0)
             ret = 1;
         goto close_adapter;
     }
