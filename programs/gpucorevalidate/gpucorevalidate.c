@@ -1953,6 +1953,16 @@ static int validate_backend(void)
            stats.nouveau_gpuobj_frees,
            stats.nouveau_object_rejects,
            stats.nouveau_close_object_reclaims);
+    printf("gpu_core_c_validator nouveau_nvif_failclosed_matrix "
+           "ioctls=%lu sclass_queries=%lu sclass_count=%lu "
+           "new_rejects=%lu del_rejects=%lu unsupported=%lu "
+           "status=PENDING\n",
+           stats.nouveau_nvif_ioctls,
+           stats.nouveau_nvif_sclass_queries,
+           stats.nouveau_nvif_sclass_count,
+           stats.nouveau_nvif_new_rejects,
+           stats.nouveau_nvif_del_rejects,
+           stats.nouveau_nvif_unsupported);
 
     if (backend.backend != FB_GPU_BACKEND_HYPERV_DXG) {
         note_fail("backend", "not_hyperv_dxg");
@@ -2106,6 +2116,10 @@ static int validate_backend(void)
         note_fail("backend", "nouveau_channel_lifetime_leak");
         ok = 0;
     }
+    if (stats.nouveau_nvif_sclass_count != 0) {
+        note_fail("backend", "nouveau_nvif_fabricated_classes");
+        ok = 0;
+    }
     if (stats.dxg_present_dda_nouveau_import_path_present != 0 ||
         stats.dxg_present_dda_nouveau_scanout_bind_present != 0) {
         note_fail("backend", "dda_d3d12_present_path_fabricated");
@@ -2167,6 +2181,15 @@ static int validate_backend(void)
                stats.nouveau_gpuobj_frees,
                stats.nouveau_object_rejects,
                stats.nouveau_close_object_reclaims);
+        printf("gpu_core_c_validator nouveau_nvif_failclosed_matrix "
+               "ioctls=%lu sclass_queries=%lu sclass_count=0 "
+               "new_rejects=%lu del_rejects=%lu unsupported=%lu "
+               "no_fabricated_classes=PASS status=PASS\n",
+               stats.nouveau_nvif_ioctls,
+               stats.nouveau_nvif_sclass_queries,
+               stats.nouveau_nvif_new_rejects,
+               stats.nouveau_nvif_del_rejects,
+               stats.nouveau_nvif_unsupported);
     }
     if (ok)
         printf("gpu_core_c_validator step=backend status=PASS\n");

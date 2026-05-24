@@ -689,6 +689,17 @@ int main(int argc, char *argv[])
     printf("nouveau_object_rejects %lu\n", stats.nouveau_object_rejects);
     printf("nouveau_close_object_reclaims %lu\n",
            stats.nouveau_close_object_reclaims);
+    printf("nouveau_nvif_ioctls %lu\n", stats.nouveau_nvif_ioctls);
+    printf("nouveau_nvif_sclass_queries %lu\n",
+           stats.nouveau_nvif_sclass_queries);
+    printf("nouveau_nvif_sclass_count %lu\n",
+           stats.nouveau_nvif_sclass_count);
+    printf("nouveau_nvif_new_rejects %lu\n",
+           stats.nouveau_nvif_new_rejects);
+    printf("nouveau_nvif_del_rejects %lu\n",
+           stats.nouveau_nvif_del_rejects);
+    printf("nouveau_nvif_unsupported %lu\n",
+           stats.nouveau_nvif_unsupported);
     printf("nouveau_gem_news %lu\n", stats.nouveau_gem_news);
     printf("nouveau_gem_infos %lu\n", stats.nouveau_gem_infos);
     printf("nouveau_cpu_preps %lu\n", stats.nouveau_cpu_preps);
@@ -906,6 +917,17 @@ int main(int argc, char *argv[])
            stats.nouveau_object_rejects,
            stats.nouveau_close_object_reclaims,
            stats.nouveau_channel_active == 0 ? "PASS" : "PENDING");
+    printf("nouveau_nvif_failclosed_matrix stats "
+           "ioctls=%lu sclass_queries=%lu sclass_count=%lu "
+           "new_rejects=%lu del_rejects=%lu unsupported=%lu "
+           "status=%s\n",
+           stats.nouveau_nvif_ioctls,
+           stats.nouveau_nvif_sclass_queries,
+           stats.nouveau_nvif_sclass_count,
+           stats.nouveau_nvif_new_rejects,
+           stats.nouveau_nvif_del_rejects,
+           stats.nouveau_nvif_unsupported,
+           stats.nouveau_nvif_sclass_count == 0 ? "PASS" : "FAIL");
     printf("kms_framebuffers %lu\n", stats.kms_framebuffers);
     printf("kms_page_flips %lu\n", stats.kms_page_flips);
     printf("kms_page_flip_target_rejects %lu\n",

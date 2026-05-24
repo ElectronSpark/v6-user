@@ -3715,6 +3715,16 @@ static int check_nouveau(int fd)
     struct drm_nouveau_notifierobj_alloc_compat notifier;
     struct drm_nouveau_grobj_alloc_compat grobj;
     struct drm_nouveau_gpuobj_free_compat gpuobj_free;
+    struct {
+        struct nvif_ioctl_v0_compat hdr;
+        struct nvif_ioctl_sclass_v0_compat sclass;
+        struct nvif_ioctl_sclass_oclass_v0_compat classes[4];
+    } nvif_sclass;
+    struct {
+        struct nvif_ioctl_v0_compat hdr;
+        struct nvif_ioctl_new_v0_compat newobj;
+    } nvif_new;
+    struct nvif_ioctl_v0_compat nvif_hdr;
     struct drm_nouveau_gem_new_compat gem_new;
     struct drm_nouveau_gem_info_compat gem_info;
     struct drm_nouveau_gem_cpu_prep_compat prep;
@@ -3819,6 +3829,27 @@ static int check_nouveau(int fd)
         return fail("Nouveau GROBJ free failed");
     if (ioctl(fd, DRM_IOCTL_NOUVEAU_GPUOBJ_FREE, &gpuobj_free) >= 0)
         return fail("Nouveau duplicate GROBJ free unexpectedly succeeded");
+
+    memset(&nvif_sclass, 0, sizeof(nvif_sclass));
+    nvif_sclass.hdr.version = 0;
+    nvif_sclass.hdr.type = NVIF_IOCTL_V0_SCLASS;
+    nvif_sclass.hdr.owner = NVIF_IOCTL_V0_OWNER_ANY;
+    nvif_sclass.sclass.count = 4;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_NVIF, &nvif_sclass) < 0 ||
+        nvif_sclass.sclass.count != 0)
+        return fail("Nouveau NVIF SCLASS fail-closed query failed");
+    memset(&nvif_new, 0, sizeof(nvif_new));
+    nvif_new.hdr.version = 0;
+    nvif_new.hdr.type = NVIF_IOCTL_V0_NEW;
+    nvif_new.hdr.owner = NVIF_IOCTL_V0_OWNER_ANY;
+    nvif_new.newobj.oclass = 0x906e;
+    nvif_new.newobj.handle = 0x4000;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_NVIF, &nvif_new) >= 0)
+        return fail("Nouveau NVIF NEW unexpectedly succeeded");
+    memset(&nvif_hdr, 0, sizeof(nvif_hdr));
+    nvif_hdr.type = NVIF_IOCTL_V0_MTHD;
+    if (ioctl(fd, DRM_IOCTL_NOUVEAU_NVIF, &nvif_hdr) >= 0)
+        return fail("Nouveau NVIF method unexpectedly succeeded");
 
     memset(&gem_new, 0, sizeof(gem_new));
     gem_new.info.size = 4096;
@@ -4016,6 +4047,8 @@ static int check_nouveau(int fd)
     printf("drmiftest: nouveau_channel_object_matrix channel=PASS "
            "notifier=PASS grobj=PASS duplicate_reject=PASS "
            "unsupported_class_reject=PASS free=PASS status=PASS\n");
+    printf("drmiftest: nouveau_nvif_failclosed_matrix sclass_empty=PASS "
+           "new_reject=PASS method_reject=PASS status=PASS\n");
     printf("drmiftest: nouveau probe ok device=0x%lx channel=%d domains=0x%x fb=%lu gart=%lu exec_push_max=%lu\n",
            device, chan.channel, chan.pushbuf_domains, fb_size, gart_size,
            exec_push_max);
