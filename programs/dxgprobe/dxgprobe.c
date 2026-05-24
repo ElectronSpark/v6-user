@@ -7839,6 +7839,7 @@ static int probe_present_source_failclosed_contract(
     struct fb_gpu_dxg_present_source_query query;
     struct fb_gpu_dxg_present_source_query wait_query;
     struct fb_gpu_dxg_present_host_bind_contract bind_contract;
+    struct fb_gpu_dxg_present_host_bind_contract foreign_bind_contract;
     struct fb_gpu_dxg_present_source_register bad_reg;
     struct fb_gpu_dxg_present_source_register unverified_reg;
     struct fb_gpu_dxg_present_source_commit unverified_commit;
@@ -7856,6 +7857,7 @@ static int probe_present_source_failclosed_contract(
     struct fb_gpu_stats stats_closed;
     uint64 shared_handle = 0;
     int fb_fd = -1;
+    int fb_fd_foreign = -1;
     int fb_fd_after = -1;
     int create_rc = -1;
     int share_rc = -1;
@@ -7879,6 +7881,7 @@ static int probe_present_source_failclosed_contract(
     int mismatch_query_rc = -1;
     int query_rc = -1;
     int bind_contract_rc = -1;
+    int foreign_bind_contract_rc = -1;
     int after_close_query_rc = -1;
     int after_close_bind_contract_rc = -1;
     int stats_before_rc = -1;
@@ -7893,6 +7896,7 @@ static int probe_present_source_failclosed_contract(
     int provenance_complete = 0;
     int failclosed = 0;
     int bind_contract_failclosed = 0;
+    int foreign_bind_contract_failclosed = 0;
     int stale_bind_contract_failclosed = 0;
     int wait_sync_failclosed = 0;
     int wait_sync_metadata = 0;
@@ -7923,6 +7927,7 @@ static int probe_present_source_failclosed_contract(
     memset(&query, 0, sizeof(query));
     memset(&wait_query, 0, sizeof(wait_query));
     memset(&bind_contract, 0, sizeof(bind_contract));
+    memset(&foreign_bind_contract, 0, sizeof(foreign_bind_contract));
     memset(&bad_reg, 0, sizeof(bad_reg));
     memset(&unverified_reg, 0, sizeof(unverified_reg));
     memset(&unverified_commit, 0, sizeof(unverified_commit));
@@ -8094,6 +8099,16 @@ static int probe_present_source_failclosed_contract(
     bind_contract_rc =
         ioctl(fb_fd, FB_GPU_DXG_PRESENT_BIND_CONTRACT_QUERY,
               &bind_contract);
+    fb_fd_foreign = open("/dev/gpu0", O_RDWR);
+    if (fb_fd_foreign < 0)
+        fb_fd_foreign = open("/dev/fb0", O_RDWR);
+    if (fb_fd_foreign >= 0) {
+        foreign_bind_contract = bind_contract;
+        foreign_bind_contract.present_source = reg.present_source;
+        foreign_bind_contract_rc =
+            ioctl(fb_fd_foreign, FB_GPU_DXG_PRESENT_BIND_CONTRACT_QUERY,
+                  &foreign_bind_contract);
+    }
     stats_after_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_after);
     if (stats_after_rc < 0)
         goto out;
@@ -8219,6 +8234,18 @@ static int probe_present_source_failclosed_contract(
           FB_GPU_DXG_PRESENT_BLOCK_NO_COMPLETION)) ==
         (FB_GPU_DXG_PRESENT_BLOCK_NO_TRANSPORT |
          FB_GPU_DXG_PRESENT_BLOCK_NO_COMPLETION);
+    foreign_bind_contract_failclosed =
+        fb_fd_foreign >= 0 &&
+        foreign_bind_contract_rc < 0 &&
+        foreign_bind_contract.present_source == reg.present_source &&
+        foreign_bind_contract.source_live == 0 &&
+        foreign_bind_contract.source_generation == 0 &&
+        foreign_bind_contract.present_id == 0 &&
+        foreign_bind_contract.completed == 0 &&
+        foreign_bind_contract.completion_source ==
+            FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+        (foreign_bind_contract.helper_block_reason &
+         FB_GPU_DXG_PRESENT_BLOCK_NO_REGISTERED_SOURCE) != 0;
     wait_sync_metadata =
         (wait_query.helper_required_metadata &
          (FB_GPU_DXG_PRESENT_META_SYNC_OBJECT |
@@ -8314,7 +8341,7 @@ static int probe_present_source_failclosed_contract(
         backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     pass = provenance_complete && no_present_credit && failclosed &&
-           bind_contract_failclosed &&
+           bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
@@ -8401,6 +8428,20 @@ out:
            after_close_bind_contract.present_id,
            after_close_bind_contract.completed,
            stale_bind_contract_failclosed ? "PASS" : "FAIL");
+    printf("present_bind_contract_foreign_source_matrix "
+           "ioctl_rc=%d source=0x%x source_live=%u "
+           "source_generation=%lu block_reason=0x%lx "
+           "completion_source=%lu present_id=%lu completed=%lu "
+           "native_present_claim=0 status=%s\n",
+           foreign_bind_contract_rc,
+           foreign_bind_contract.present_source,
+           foreign_bind_contract.source_live,
+           foreign_bind_contract.source_generation,
+           foreign_bind_contract.helper_block_reason,
+           foreign_bind_contract.completion_source,
+           foreign_bind_contract.present_id,
+           foreign_bind_contract.completed,
+           foreign_bind_contract_failclosed ? "PASS" : "FAIL");
     printf("present_source_waitsync_failclosed_matrix "
            "create_resource=PASS share_resource=PASS register=PASS "
            "sync_create_rc=%d sync_object=0x%x "
@@ -8465,6 +8506,8 @@ out:
 
     if (fb_fd >= 0)
         close(fb_fd);
+    if (fb_fd_foreign >= 0)
+        close(fb_fd_foreign);
     if (fb_fd_after >= 0)
         close(fb_fd_after);
     if (shared_handle != 0)
