@@ -7494,6 +7494,8 @@ static int probe_shared_seal_provenance_contract(int fd,
     int create_rc = -1;
     int share_rc = -1;
     int share_fd_valid = 0;
+    int share_fd_flags = -1;
+    int share_fd_cloexec = 0;
     int query_rc = -1;
     int open_rc = -1;
     int close_fd_rc = -1;
@@ -7562,6 +7564,9 @@ static int probe_shared_seal_provenance_contract(int fd,
         published_handle = shared_handle;
     if (!share_fd_valid)
         goto cleanup_resource;
+    share_fd_flags = fcntl((int)shared_handle, F_GETFD, 0);
+    share_fd_cloexec =
+        share_fd_flags >= 0 && (share_fd_flags & FD_CLOEXEC) != 0;
 
     share_diag_rc = read_dxg_shared_resource_diag(&share_diag);
     if (share_diag_rc == 0 && share_diag.metadata_seen) {
@@ -7715,16 +7720,17 @@ print_row:
         present_before.register_attempts == present_after.register_attempts &&
         present_before.commit_attempts == present_after.commit_attempts;
     pass = create_rc == 0 && share_rc == 0 && share_fd_valid &&
+           share_fd_cloexec &&
            query_rc == 0 && open_rc == 0 && close_fd_rc == 0 &&
            destroy_rc == 0 && metadata_stable && seal_before_query &&
            local_resource_admitted && refcounts_coherent &&
            record_generation_coherent && canonical_record_coherent &&
            no_present_credit;
 
-    printf("shared_resource_seal_provenance_matrix create_rc=%d share_rc=%d fd=%lu fd_valid=%u query_rc=%d open_rc=%d close_fd_rc=%d destroy_rc=%d device=0x%x resource=0x%x allocation=0x%x global=0x%x opened_resource=0x%x opened_allocation=0x%x opened_gpuva=0x%lx create_flags=0x%x alloc_flags=0x%x expected_runtime=%u/%08x expected_resource=%u/%08x expected_total=%u/%08x share_meta=%u/%08x,%u/%08x,%u/%08x open_blob=%u/%08x,%u/%08x,%u/%08x close_meta=%u/%08x,%u/%08x,%u/%08x metadata_stable=%u nt_seal_before_query=%u nt_meta=%u->%u nt_seal=%u->%u nt_host_seal=%u->%u local_resource_admitted=%u runtime_user_obj=0x%x runtime_user_dev=0x%x runtime_entry=%u/%u query_allocs=%u query_sizes=%u,%u,%u open_refs=%u query_refs=%u lifetime_seals=%u->%u lifetime_open_tracked=%u->%u refcounts_coherent=%u record_generation_coherent=%u canonical_record_coherent=%u record_key=0x%x/0x%x/0x%x record_source=0x%x/%u record_counts=q%u/o%u/fd%u record_mutated=%u present_attempted=0 native_present_claim=0 present_stats_rc=%d/%d present_delta=%lu,%lu,%lu,%lu no_present_credit=%u status=%s\n",
+    printf("shared_resource_seal_provenance_matrix create_rc=%d share_rc=%d fd=%lu fd_valid=%u fd_flags=%d fd_cloexec=%u query_rc=%d open_rc=%d close_fd_rc=%d destroy_rc=%d device=0x%x resource=0x%x allocation=0x%x global=0x%x opened_resource=0x%x opened_allocation=0x%x opened_gpuva=0x%lx create_flags=0x%x alloc_flags=0x%x expected_runtime=%u/%08x expected_resource=%u/%08x expected_total=%u/%08x share_meta=%u/%08x,%u/%08x,%u/%08x open_blob=%u/%08x,%u/%08x,%u/%08x close_meta=%u/%08x,%u/%08x,%u/%08x metadata_stable=%u nt_seal_before_query=%u nt_meta=%u->%u nt_seal=%u->%u nt_host_seal=%u->%u local_resource_admitted=%u runtime_user_obj=0x%x runtime_user_dev=0x%x runtime_entry=%u/%u query_allocs=%u query_sizes=%u,%u,%u open_refs=%u query_refs=%u lifetime_seals=%u->%u lifetime_open_tracked=%u->%u refcounts_coherent=%u record_generation_coherent=%u canonical_record_coherent=%u record_key=0x%x/0x%x/0x%x record_source=0x%x/%u record_counts=q%u/o%u/fd%u record_mutated=%u present_attempted=0 native_present_claim=0 present_stats_rc=%d/%d present_delta=%lu,%lu,%lu,%lu no_present_credit=%u status=%s\n",
            create_rc, share_rc,
            share_fd_valid ? published_handle : (uint64)~0ULL,
-           share_fd_valid,
+           share_fd_valid, share_fd_flags, share_fd_cloexec,
            query_rc, open_rc, close_fd_rc, destroy_rc, device.v,
            create_allocation.resource.v, allocation_info.allocation.v,
            create_allocation.global_share.v, opened_resource.v,
