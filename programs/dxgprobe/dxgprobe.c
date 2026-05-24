@@ -94,6 +94,28 @@ struct dxg_unwind_status {
 
 static int read_dxg_unwind_status(struct dxg_unwind_status *out);
 
+struct dxg_syncfile_status {
+    int32 last_ret;
+    uint32 last_out_sync;
+    uint64 last_handle;
+    uint32 live;
+    uint32 creates;
+    uint32 releases;
+    uint32 event_removed;
+    uint32 nt_released;
+    uint32 create_faults;
+    uint32 fd_reclaimed;
+    uint32 open_faults;
+    uint32 open_destroy_attempts;
+    uint32 open_destroy_successes;
+    int32 open_destroy_ret;
+    uint32 host_event_active;
+    uint32 host_event_allocs;
+    uint32 host_event_removes;
+};
+
+static int read_dxg_syncfile_status(struct dxg_syncfile_status *out);
+
 static int parse_u32_option_value(const char *value, uint32 *out)
 {
     uint64 parsed = 0;
@@ -2384,6 +2406,69 @@ out_free:
     return ret;
 }
 
+static int read_dxg_syncfile_status(struct dxg_syncfile_status *out)
+{
+    char *buf;
+    char *last;
+    char *life;
+    char *slash;
+    uint32 tmp = 0;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    last = dxg_find_text(buf, "dxg_syncfile_last=");
+    life = dxg_find_text(buf, "dxg_syncfile_lifetime=");
+    if (last == 0 || life == 0)
+        goto out_free;
+    if (dxg_parse_uint_after(last, "ret:", &tmp) == 0)
+        out->last_ret = (int32)tmp;
+    dxg_parse_uint_after(last, "out_sync:", &out->last_out_sync);
+    dxg_parse_u64_after(last, "handle:", &out->last_handle);
+    dxg_parse_uint_after(life, "live:", &out->live);
+    dxg_parse_uint_after(life, "creates:", &out->creates);
+    dxg_parse_uint_after(life, "releases:", &out->releases);
+    dxg_parse_uint_after(life, "event_removed:", &out->event_removed);
+    dxg_parse_uint_after(life, "nt_released:", &out->nt_released);
+    dxg_parse_uint_after(life, "create_faults:", &out->create_faults);
+    dxg_parse_uint_after(life, "fd_reclaimed:", &out->fd_reclaimed);
+    dxg_parse_uint_after(life, "open_faults:", &out->open_faults);
+    if (dxg_parse_uint_after(life, "open_destroy:",
+                             &out->open_destroy_attempts) == 0) {
+        slash = dxg_find_text(life, "open_destroy:");
+        if (slash != 0)
+            slash = dxg_find_text(slash, "/");
+        if (slash != 0) {
+            dxg_parse_uint_after(slash, "/",
+                                 &out->open_destroy_successes);
+            slash = dxg_find_text(slash + 1, "/");
+        }
+        if (slash != 0 && dxg_parse_uint_after(slash, "/", &tmp) == 0)
+            out->open_destroy_ret = (int32)tmp;
+    }
+    if (dxg_parse_uint_after(life, "host_events:",
+                             &out->host_event_active) == 0) {
+        slash = dxg_find_text(life, "host_events:");
+        if (slash != 0)
+            slash = dxg_find_text(slash, "/");
+        if (slash != 0) {
+            dxg_parse_uint_after(slash, "/", &out->host_event_allocs);
+            slash = dxg_find_text(slash + 1, "/");
+        }
+        if (slash != 0)
+            dxg_parse_uint_after(slash, "/", &out->host_event_removes);
+    }
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
 static void probe_createallocation_unwind(int fd,
                                           struct d3dkmthandle device)
 {
@@ -3026,6 +3111,27 @@ static int probe_sync_file_matrix(int fd, struct d3dkmthandle device,
     int child_status = 1;
     int child_pipe[2];
     int ret = -1;
+    int create_fault_rc = -2;
+    int create_fault_before_rc = -1;
+    int create_fault_after_rc = -1;
+    int create_fault_fd_visible = 0;
+    int create_fault_balanced = 0;
+    int create_fault_pass = 0;
+    void *create_fault_page = 0;
+    struct d3dkmt_createsyncfile *create_fault_req = 0;
+    struct dxg_syncfile_status create_fault_before;
+    struct dxg_syncfile_status create_fault_after;
+    int open_fault_rc = -2;
+    int open_fault_before_rc = -1;
+    int open_fault_after_rc = -1;
+    int open_fault_source_fd_valid = 0;
+    int open_fault_no_local_leak = 0;
+    int open_fault_pass = 0;
+    int open_fault_destroy_retry_rc = -2;
+    void *open_fault_page = 0;
+    struct d3dkmt_opensyncobjectfromsyncfile *open_fault_req = 0;
+    struct dxg_syncfile_status open_fault_before;
+    struct dxg_syncfile_status open_fault_after;
 
     if (device.v == 0)
         return -1;
@@ -3057,6 +3163,63 @@ static int probe_sync_file_matrix(int fd, struct d3dkmthandle device,
            create_sync.info.monitored_fence.fence_cpu_virtual_address,
            create_sync.info.monitored_fence.fence_gpu_virtual_address,
            g_sync_file_target_value);
+
+    memset(&create_fault_before, 0, sizeof(create_fault_before));
+    memset(&create_fault_after, 0, sizeof(create_fault_after));
+    create_fault_before_rc = read_dxg_syncfile_status(&create_fault_before);
+    create_fault_page = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (create_fault_page != (void *)-1) {
+        struct stat st;
+
+        memset(create_fault_page, 0, 4096);
+        create_fault_req = (struct d3dkmt_createsyncfile *)create_fault_page;
+        create_fault_req->device = device;
+        create_fault_req->monitored_fence = create_sync.sync_object;
+        create_fault_req->fence_value = g_sync_file_target_value + 1;
+        if (mprotect(create_fault_page, 4096, PROT_READ) == 0) {
+            create_fault_rc = ioctl(fd, LX_DXCREATESYNCFILE,
+                                    create_fault_req);
+            create_fault_after_rc =
+                read_dxg_syncfile_status(&create_fault_after);
+            if (mprotect(create_fault_page, 4096,
+                         PROT_READ | PROT_WRITE) != 0)
+                create_fault_after_rc = -2;
+            if (create_fault_after.last_handle != 0)
+                create_fault_fd_visible =
+                    fstat((int)create_fault_after.last_handle, &st) == 0;
+            create_fault_balanced =
+                create_fault_after.live == create_fault_before.live &&
+                create_fault_after.host_event_active ==
+                    create_fault_before.host_event_active;
+            create_fault_pass =
+                create_fault_rc == -EFAULT &&
+                create_fault_before_rc == 0 &&
+                create_fault_after_rc == 0 &&
+                create_fault_after.create_faults >
+                    create_fault_before.create_faults &&
+                create_fault_after.fd_reclaimed >
+                    create_fault_before.fd_reclaimed &&
+                create_fault_after.event_removed >
+                    create_fault_before.event_removed &&
+                create_fault_balanced &&
+                !create_fault_fd_visible;
+        }
+        munmap(create_fault_page, 4096);
+    }
+    printf("dxg_syncfile_create_unwind_matrix create_fault_rc=%d before_rc=%d after_rc=%d handle=%lu fd_visible=%u create_faults=%u->%u fd_reclaimed=%u->%u event_removed=%u->%u live=%u->%u host_events=%u->%u balanced=%u status=%s\n",
+           create_fault_rc, create_fault_before_rc, create_fault_after_rc,
+           create_fault_after.last_handle, create_fault_fd_visible,
+           create_fault_before.create_faults,
+           create_fault_after.create_faults,
+           create_fault_before.fd_reclaimed,
+           create_fault_after.fd_reclaimed,
+           create_fault_before.event_removed,
+           create_fault_after.event_removed,
+           create_fault_before.live, create_fault_after.live,
+           create_fault_before.host_event_active,
+           create_fault_after.host_event_active,
+           create_fault_balanced, create_fault_pass ? "PASS" : "FAIL");
 
     memset(&create_sync_file, 0, sizeof(create_sync_file));
     create_sync_file.device = device;
@@ -3119,6 +3282,66 @@ static int probe_sync_file_matrix(int fd, struct d3dkmthandle device,
             printf("sync_file_open destroy_failed sync=0x%x\n",
                    open_sync_file.syncobj.v);
     }
+
+    memset(&open_fault_before, 0, sizeof(open_fault_before));
+    memset(&open_fault_after, 0, sizeof(open_fault_after));
+    open_fault_before_rc = read_dxg_syncfile_status(&open_fault_before);
+    open_fault_page = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (open_fault_page != (void *)-1) {
+        memset(open_fault_page, 0, 4096);
+        open_fault_req =
+            (struct d3dkmt_opensyncobjectfromsyncfile *)open_fault_page;
+        open_fault_req->device = device;
+        open_fault_req->sync_file_handle = sync_file_handle;
+        if (mprotect(open_fault_page, 4096, PROT_READ) == 0) {
+            struct d3dkmt_destroysynchronizationobject retry_destroy;
+            struct stat st;
+
+            open_fault_rc = ioctl(fd, LX_DXOPENSYNCOBJECTFROMSYNCFILE,
+                                  open_fault_req);
+            open_fault_after_rc =
+                read_dxg_syncfile_status(&open_fault_after);
+            if (mprotect(open_fault_page, 4096,
+                         PROT_READ | PROT_WRITE) != 0)
+                open_fault_after_rc = -2;
+            open_fault_source_fd_valid =
+                fstat((int)sync_file_handle, &st) == 0;
+            if (open_fault_after.last_out_sync != 0) {
+                memset(&retry_destroy, 0, sizeof(retry_destroy));
+                retry_destroy.sync_object.v = open_fault_after.last_out_sync;
+                open_fault_destroy_retry_rc =
+                    ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                          &retry_destroy);
+            }
+            open_fault_no_local_leak = open_fault_destroy_retry_rc < 0;
+            open_fault_pass =
+                open_fault_rc == -EFAULT &&
+                open_fault_before_rc == 0 &&
+                open_fault_after_rc == 0 &&
+                open_fault_after.open_faults >
+                    open_fault_before.open_faults &&
+                open_fault_after.open_destroy_attempts >
+                    open_fault_before.open_destroy_attempts &&
+                open_fault_after.open_destroy_successes >
+                    open_fault_before.open_destroy_successes &&
+                open_fault_after.open_destroy_ret == 0 &&
+                open_fault_source_fd_valid &&
+                open_fault_no_local_leak;
+        }
+        munmap(open_fault_page, 4096);
+    }
+    printf("dxg_syncfile_open_unwind_matrix open_fault_rc=%d before_rc=%d after_rc=%d out_sync=0x%x destroy_retry_rc=%d open_faults=%u->%u open_destroy=%u/%u->%u/%u destroy_ret=%d source_fd_valid=%u no_local_leak=%u status=%s\n",
+           open_fault_rc, open_fault_before_rc, open_fault_after_rc,
+           open_fault_after.last_out_sync, open_fault_destroy_retry_rc,
+           open_fault_before.open_faults, open_fault_after.open_faults,
+           open_fault_before.open_destroy_attempts,
+           open_fault_before.open_destroy_successes,
+           open_fault_after.open_destroy_attempts,
+           open_fault_after.open_destroy_successes,
+           open_fault_after.open_destroy_ret,
+           open_fault_source_fd_valid, open_fault_no_local_leak,
+           open_fault_pass ? "PASS" : "FAIL");
 
     {
         int pid;
