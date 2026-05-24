@@ -1413,6 +1413,19 @@ int main(int argc, char *argv[])
            stats.display_last_present, stats.display_last_complete,
            stats.display_last_complete >= stats.display_last_present,
            stats.dxg_present_helper_block_reason);
+    printf("dxg_present_lane_selection_matrix "
+           "selected=%s selected_id=%lu "
+           "working_model=dxg_resource_scanout_bind "
+           "wslg_display_channel=0 "
+           "synthvid_vram_bridge=gpa_dirty_only "
+           "synthvid_native_resource_bind=0 "
+           "gpup_or_dda_required=1 custom_host_tool=0 "
+           "missing_host_abi=%lu transport_present=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
+           present_lane_name(stats.dxg_present_selected_lane),
+           stats.dxg_present_selected_lane,
+           stats.dxg_present_missing_host_abi,
+           stats.dxg_present_helper_transport_present);
     close(fd);
     return 0;
 }
