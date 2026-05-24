@@ -9438,6 +9438,14 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
     int fd2;
     int ret = -1;
     uint32 expected_denials = 0;
+    uint32 denied_delta = 0;
+    int stale_device_second_fd_rc = -1;
+    int stale_sync_rc = -1;
+    int stale_paging_queue_rc = -1;
+    int stale_paging_queue_sync_rc = -1;
+    int stale_allocation_rc = -1;
+    int stale_gpuva_rc = -1;
+    int stale_device_final_rc = -1;
 
     if (read_object_table_status(&before) < 0) {
         printf("handle_lifetime status_initial_failed\n");
@@ -9506,9 +9514,11 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
         goto cleanup_device;
     }
     close(fd2);
+    stale_device_second_fd_rc = ioctl(fd, LX_DXDESTROYDEVICE,
+                                      &destroy_device);
     if (expect_stale_ioctl_rejected(
             "destroy_device_after_second_fd_destroy",
-            ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device)) < 0)
+            stale_device_second_fd_rc) < 0)
         return -1;
     expected_denials++;
 
@@ -9539,10 +9549,10 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                create_sync.sync_object.v);
         goto cleanup_device;
     }
+    stale_sync_rc = ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                          &destroy_sync);
     if (expect_stale_ioctl_rejected(
-            "destroy_sync_again",
-            ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
-                  &destroy_sync)) < 0)
+            "destroy_sync_again", stale_sync_rc) < 0)
         goto cleanup_device;
     expected_denials++;
 
@@ -9562,18 +9572,19 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                create_paging_queue.paging_queue.v);
         goto cleanup_device;
     }
+    stale_paging_queue_rc = ioctl(fd, LX_DXDESTROYPAGINGQUEUE,
+                                  &destroy_paging_queue);
     if (expect_stale_ioctl_rejected(
-            "destroy_paging_queue_again",
-            ioctl(fd, LX_DXDESTROYPAGINGQUEUE,
-                  &destroy_paging_queue)) < 0)
+            "destroy_paging_queue_again", stale_paging_queue_rc) < 0)
         goto cleanup_device;
     expected_denials++;
     memset(&destroy_sync, 0, sizeof(destroy_sync));
     destroy_sync.sync_object = create_paging_queue.sync_object;
+    stale_paging_queue_sync_rc =
+        ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync);
     if (expect_stale_ioctl_rejected(
             "destroy_paging_queue_sync_after_queue_destroy",
-            ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
-                  &destroy_sync)) < 0)
+            stale_paging_queue_sync_rc) < 0)
         goto cleanup_device;
     expected_denials++;
 
@@ -9603,10 +9614,10 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                allocation_info.allocation.v, create_allocation.resource.v);
         goto cleanup_device;
     }
+    stale_allocation_rc = ioctl(fd, LX_DXDESTROYALLOCATION2,
+                                &destroy_allocation);
     if (expect_stale_ioctl_rejected(
-            "destroy_allocation_again",
-            ioctl(fd, LX_DXDESTROYALLOCATION2,
-                  &destroy_allocation)) < 0)
+            "destroy_allocation_again", stale_allocation_rc) < 0)
         goto cleanup_device;
     expected_denials++;
 
@@ -9629,10 +9640,9 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                reserve_gpuva.virtual_address);
         goto cleanup_device;
     }
+    stale_gpuva_rc = ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS, &free_gpuva);
     if (expect_stale_ioctl_rejected(
-            "free_gpuva_again",
-            ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS,
-                  &free_gpuva)) < 0)
+            "free_gpuva_again", stale_gpuva_rc) < 0)
         goto cleanup_device;
     expected_denials++;
 
@@ -9643,9 +9653,9 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                create_device.device.v);
         return -1;
     }
+    stale_device_final_rc = ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device);
     if (expect_stale_ioctl_rejected(
-            "destroy_device_again",
-            ioctl(fd, LX_DXDESTROYDEVICE, &destroy_device)) < 0)
+            "destroy_device_again", stale_device_final_rc) < 0)
         return -1;
     expected_denials++;
 
@@ -9653,6 +9663,7 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
         printf("handle_lifetime status_final_failed\n");
         return -1;
     }
+    denied_delta = after.denied - before.denied;
     if (after.denied < before.denied + expected_denials) {
         printf("handle_lifetime counters_unexpected denied:%u->%u expected_delta=%u\n",
                before.denied, after.denied, expected_denials);
@@ -9663,6 +9674,28 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                after.min_free);
         return -1;
     }
+    printf("handle_lifetime_stale_matrix "
+           "device_second_fd_rc=%d device_second_fd_rejected=%u "
+           "sync_rc=%d sync_rejected=%u "
+           "paging_queue_rc=%d paging_queue_rejected=%u "
+           "paging_queue_sync_rc=%d paging_queue_sync_rejected=%u "
+           "allocation_rc=%d allocation_rejected=%u "
+           "gpuva_rc=%d gpuva_rejected=%u "
+           "device_final_rc=%d device_final_rejected=%u "
+           "expected_denials=%u denied_delta=%u "
+           "object_classes=device,sync,paging_queue,paging_queue_sync,allocation,gpuva "
+           "status=PASS\n",
+           stale_device_second_fd_rc,
+           (uint32)(stale_device_second_fd_rc < 0),
+           stale_sync_rc, (uint32)(stale_sync_rc < 0),
+           stale_paging_queue_rc,
+           (uint32)(stale_paging_queue_rc < 0),
+           stale_paging_queue_sync_rc,
+           (uint32)(stale_paging_queue_sync_rc < 0),
+           stale_allocation_rc, (uint32)(stale_allocation_rc < 0),
+           stale_gpuva_rc, (uint32)(stale_gpuva_rc < 0),
+           stale_device_final_rc, (uint32)(stale_device_final_rc < 0),
+           expected_denials, denied_delta);
     printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u reuse_delayed:%u reuse_allowed:%u min_free:%u\n",
            before.denied, after.denied, after.max, after.generation,
            after.drops, after.reuse_delayed, after.reuse_allowed,
