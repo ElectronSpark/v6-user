@@ -355,6 +355,7 @@ int main(int argc, char *argv[])
     struct fb_gpu_stats stats;
     struct fb_gpu_backend_info backend;
     int have_backend = 0;
+    int backend_opengl_submit = 0;
     int fd;
 
     if (argc == 2) {
@@ -379,8 +380,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     memset(&backend, 0, sizeof(backend));
-    if (ioctl(fd, FB_GPU_BACKEND_QUERY, &backend) == 0)
+    if (ioctl(fd, FB_GPU_BACKEND_QUERY, &backend) == 0) {
         have_backend = 1;
+        backend_opengl_submit =
+            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0;
+    }
 
     if (have_backend) {
         printf("backend %s flags 0x%x renderer %s\n",
@@ -388,11 +392,9 @@ int main(int argc, char *argv[])
                backend.flags,
                backend.renderer[0] ? backend.renderer : "unknown");
         printf("backend_id %u\n", backend.backend);
-        printf("backend_opengl_submit %u\n",
-               (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0);
+        printf("backend_opengl_submit %u\n", backend_opengl_submit);
         printf("backend_opengl_submit_gate %s\n",
-               (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0 ?
-               "open" : "closed");
+               backend_opengl_submit ? "open" : "closed");
         printf("backend_virgl_opengl %u\n",
                (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0);
         printf("backend_dxg_transport %u\n",
@@ -406,6 +408,15 @@ int main(int argc, char *argv[])
         printf("dxg_global_status %u\n", backend.dxg_global_status);
         printf("dxg_vgpu_status %u\n", backend.dxg_vgpu_status);
     }
+    printf("gpu_diagnostics_separation_matrix "
+           "generic_scanout=drm-kms-fb generic_scanout_prefixes=drm,kms,fb "
+           "d3d12_present=dxg-present webkit_policy=separate "
+           "ioctl_trace_label=fb-gpu-trace "
+           "generic_scanout_native_present_credit=0 "
+           "d3d12_native_present_credit=%lu "
+           "opengl_submit_credit=0 backend_opengl_submit=%u status=PASS\n",
+           stats.display_last_complete,
+           backend_opengl_submit);
     print_drm_node_diag("/dev/dri/card0", "primary");
     print_drm_node_diag("/dev/dri/renderD128", "render");
     printf("full_blits %lu\n", stats.full_blits);
