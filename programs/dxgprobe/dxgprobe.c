@@ -3021,15 +3021,25 @@ out_destroy_original:
     return ret;
 }
 
-static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
+static int probe_import_negative_contract(int fd, struct d3dkmthandle adapter,
+                                          struct winluid adapter_luid,
+                                          struct d3dkmthandle device)
 {
     struct import_negative_child_sync_result {
         int own_rc;
         int inherited_rc;
+        int inherited_enum_rc;
+        int inherited_openadapter_rc;
+        int inherited_query_rc;
+        int inherited_create_rc;
         int child_pid;
         int child_tid;
         int parent_pid_seen;
         int parent_tid_seen;
+        uint32 inherited_enum_count;
+        uint32 inherited_openadapter_handle;
+        uint32 inherited_query_value;
+        uint32 inherited_create_device;
         uint32 child_dxg_fd;
         uint32 child_adapter;
         uint32 child_device;
@@ -3110,6 +3120,10 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
     memset(&child_sync_result, 0, sizeof(child_sync_result));
     child_sync_result.own_rc = -2;
     child_sync_result.inherited_rc = -2;
+    child_sync_result.inherited_enum_rc = -2;
+    child_sync_result.inherited_openadapter_rc = -2;
+    child_sync_result.inherited_query_rc = -2;
+    child_sync_result.inherited_create_rc = -2;
     child_sync_result.child_pid = -1;
     child_sync_result.child_tid = -1;
     child_sync_result.parent_pid_seen = getpid();
@@ -3236,6 +3250,10 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
             int child_fd = -1;
             int child_own_rc = -2;
             int child_inherited_rc = -2;
+            int child_inherited_enum_rc = -2;
+            int child_inherited_openadapter_rc = -2;
+            int child_inherited_query_rc = -2;
+            int child_inherited_create_rc = -2;
             struct import_negative_child_sync_result child_result;
             struct d3dkmthandle child_adapter;
             struct d3dkmthandle child_device;
@@ -3247,6 +3265,10 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
             memset(&child_result, 0, sizeof(child_result));
             child_result.own_rc = -2;
             child_result.inherited_rc = -2;
+            child_result.inherited_enum_rc = -2;
+            child_result.inherited_openadapter_rc = -2;
+            child_result.inherited_query_rc = -2;
+            child_result.inherited_create_rc = -2;
             child_result.child_pid = getpid();
             child_result.child_tid = gettid();
             child_result.parent_pid_seen = getppid();
@@ -3281,6 +3303,86 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
                           &destroy_sync);
                 }
 
+                {
+                    struct d3dkmt_adapterinfo inherited_adapters[
+                        D3DKMT_ADAPTERS_MAX];
+                    struct d3dkmt_enumadapters2 inherited_enum;
+                    struct d3dkmt_openadapterfromluid inherited_open_luid;
+                    struct d3dkmt_queryadapterinfo inherited_query;
+                    struct d3dkmt_adaptertype inherited_adapter_type;
+                    struct d3dkmt_createdevice inherited_create_device;
+
+                    memset(inherited_adapters, 0,
+                           sizeof(inherited_adapters));
+                    memset(&inherited_enum, 0, sizeof(inherited_enum));
+                    inherited_enum.num_adapters = D3DKMT_ADAPTERS_MAX;
+                    inherited_enum.adapters = (uint64)inherited_adapters;
+                    child_inherited_enum_rc =
+                        ioctl(fd, LX_DXENUMADAPTERS2, &inherited_enum);
+                    child_result.inherited_enum_rc =
+                        child_inherited_enum_rc;
+                    child_result.inherited_enum_count =
+                        inherited_enum.num_adapters;
+
+                    memset(&inherited_open_luid, 0,
+                           sizeof(inherited_open_luid));
+                    inherited_open_luid.adapter_luid = adapter_luid;
+                    child_inherited_openadapter_rc =
+                        ioctl(fd, LX_DXOPENADAPTERFROMLUID,
+                              &inherited_open_luid);
+                    child_result.inherited_openadapter_rc =
+                        child_inherited_openadapter_rc;
+                    child_result.inherited_openadapter_handle =
+                        inherited_open_luid.adapter_handle.v;
+                    if (inherited_open_luid.adapter_handle.v != 0) {
+                        struct d3dkmt_closeadapter inherited_close;
+
+                        memset(&inherited_close, 0,
+                               sizeof(inherited_close));
+                        inherited_close.adapter_handle =
+                            inherited_open_luid.adapter_handle;
+                        ioctl(fd, LX_DXCLOSEADAPTER, &inherited_close);
+                    }
+
+                    memset(&inherited_adapter_type, 0,
+                           sizeof(inherited_adapter_type));
+                    memset(&inherited_query, 0, sizeof(inherited_query));
+                    inherited_query.adapter = adapter;
+                    inherited_query.type = _KMTQAITYPE_ADAPTERTYPE;
+                    inherited_query.private_data =
+                        (uint64)&inherited_adapter_type;
+                    inherited_query.private_data_size =
+                        sizeof(inherited_adapter_type);
+                    child_inherited_query_rc =
+                        ioctl(fd, LX_DXQUERYADAPTERINFO,
+                              &inherited_query);
+                    child_result.inherited_query_rc =
+                        child_inherited_query_rc;
+                    child_result.inherited_query_value =
+                        inherited_adapter_type.value;
+
+                    memset(&inherited_create_device, 0,
+                           sizeof(inherited_create_device));
+                    inherited_create_device.adapter = adapter;
+                    child_inherited_create_rc =
+                        ioctl(fd, LX_DXCREATEDEVICE,
+                              &inherited_create_device);
+                    child_result.inherited_create_rc =
+                        child_inherited_create_rc;
+                    child_result.inherited_create_device =
+                        inherited_create_device.device.v;
+                    if (inherited_create_device.device.v != 0) {
+                        struct d3dkmt_destroydevice inherited_destroy;
+
+                        memset(&inherited_destroy, 0,
+                               sizeof(inherited_destroy));
+                        inherited_destroy.device =
+                            inherited_create_device.device;
+                        ioctl(fd, LX_DXDESTROYDEVICE,
+                              &inherited_destroy);
+                    }
+                }
+
                 memset(&open_sync, 0, sizeof(open_sync));
                 open_sync.device = device;
                 open_sync.nt_handle = sync_fd;
@@ -3313,7 +3415,12 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
                       sizeof(child_result));
                 close(pipe_fds[1]);
             }
-            exit(child_inherited_rc < 0 ? 0 : 1);
+            exit(child_own_rc == 0 &&
+                 child_inherited_enum_rc < 0 &&
+                 child_inherited_openadapter_rc < 0 &&
+                 child_inherited_query_rc < 0 &&
+                 child_inherited_create_rc < 0 &&
+                 child_inherited_rc < 0 ? 0 : 1);
         } else if (pid > 0) {
             if (pipe_fds[1] >= 0)
                 close(pipe_fds[1]);
@@ -3417,7 +3524,8 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
 
         if (dxg_status != 0) {
             opensync_namespace_diag_present =
-                dxg_find_text(dxg_status, "dxg_opensync_namespace") != 0;
+                dxg_find_text(dxg_status, "dxg_opensync_namespace") != 0 ||
+                dxg_find_text(dxg_status, "dxg_ioctl_tgid_gate=") != 0;
             free(dxg_status);
         }
     }
@@ -3496,6 +3604,29 @@ static int probe_import_negative_contract(int fd, struct d3dkmthandle device)
            "ok" : "inherited_parent_dxg_sync_open_accepted",
            child_sync_result.inherited_rc < 0 && sync_child_status == 0 ?
            "PASS" : "FAIL");
+    printf("dxg_tgid_pre_dispatch_matrix parent_pid=%d parent_tid=%d child_pid=%d child_tid=%d inherited_parent_dxg_fd=%u inherited_enum_rc=%d inherited_enum_count=%u inherited_openadapter_rc=%d inherited_openadapter_handle=0x%x inherited_query_rc=%d inherited_query_value=0x%x inherited_create_rc=%d inherited_create_device=0x%x inherited_opensync_rc=%d own_dxg_open_rc=%d child_status=%d kernel_namespace_diag_present=%u expected=reject_all_inherited_parent_dxg_ioctls_before_dispatch status=%s\n",
+           getpid(), gettid(), child_sync_result.child_pid,
+           child_sync_result.child_tid,
+           child_sync_result.inherited_parent_dxg_fd,
+           child_sync_result.inherited_enum_rc,
+           child_sync_result.inherited_enum_count,
+           child_sync_result.inherited_openadapter_rc,
+           child_sync_result.inherited_openadapter_handle,
+           child_sync_result.inherited_query_rc,
+           child_sync_result.inherited_query_value,
+           child_sync_result.inherited_create_rc,
+           child_sync_result.inherited_create_device,
+           child_sync_result.inherited_rc,
+           child_sync_result.own_rc,
+           sync_child_status, opensync_namespace_diag_present,
+           child_sync_result.own_rc == 0 &&
+           child_sync_result.inherited_enum_rc < 0 &&
+           child_sync_result.inherited_openadapter_rc < 0 &&
+           child_sync_result.inherited_query_rc < 0 &&
+           child_sync_result.inherited_create_rc < 0 &&
+           child_sync_result.inherited_rc < 0 &&
+           sync_child_status == 0 &&
+           opensync_namespace_diag_present ? "PASS" : "FAIL");
     printf("ntshare_object_kind_matrix owner_device=0x%x resource_object=0x%x resource_allocation=0x%x resource_global=0x%x resource_create_flags=0x%x resource_share_rc=%d returned_resource_fd=%lu resource_returned_fd_valid=%u sync_object=0x%x sync_global=0x%x sync_flags=0x%x sync_share_rc=%d returned_sync_fd=%lu sync_returned_fd_valid=%u resource_query_on_sync_rc=%d resource_open_on_sync_rc=%d sync_open_on_resource_rc=%d resource_wrong_kind_rejected=%u sync_wrong_kind_rejected=%u present_attempted=0 native_present_claim=0 status=%s\n",
            device.v, create_allocation.resource.v,
            allocation_info.allocation.v, create_allocation.global_share.v,
@@ -10844,7 +10975,8 @@ int main(int argc, char **argv)
         memset(&validate_device, 0, sizeof(validate_device));
         if (open_first_dxg_device(&validate_fd, &validate_adapter,
                                   &validate_device) < 0 ||
-            probe_import_negative_contract(validate_fd,
+            probe_import_negative_contract(validate_fd, validate_adapter,
+                                           enum2_selected_luid,
                                            validate_device) < 0)
             ret = 1;
         if (validate_fd >= 0)
