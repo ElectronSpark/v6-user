@@ -36,6 +36,7 @@ static struct winluid g_requested_adapter_luid;
 static void *probe_alloc_buffer(uint32 size);
 static char *dxg_find_text(char *s, const char *needle);
 static int dxg_parse_uint_after(char *line, const char *name, uint32 *out);
+static int dxg_parse_hex_after(char *line, const char *name, uint32 *out);
 static char *read_dxg_status_buffer(void);
 
 struct dxg_existing_sysmem_target_status {
@@ -3569,6 +3570,23 @@ struct dxg_object_table_status {
     uint32 drops;
     uint32 denied;
     uint32 generation;
+    uint32 reuse_delayed;
+    uint32 reuse_allowed;
+    uint32 min_free;
+};
+
+struct dxg_local_adapter_status {
+    uint32 hits;
+    uint32 misses;
+    uint32 last_result;
+    uint32 handle;
+    uint32 host;
+    uint32 refs;
+    uint32 locals;
+    uint32 generation;
+    uint32 reuse_delayed;
+    uint32 reuse_allowed;
+    uint32 min_free;
 };
 
 struct dxg_shared_resource_diag {
@@ -5473,7 +5491,48 @@ static int read_object_table_status(struct dxg_object_table_status *out)
     if (dxg_parse_uint_after(line, "max:", &out->max) < 0 ||
         dxg_parse_uint_after(line, "drops:", &out->drops) < 0 ||
         dxg_parse_uint_after(line, "denied:", &out->denied) < 0 ||
-        dxg_parse_uint_after(line, "generation:", &out->generation) < 0)
+        dxg_parse_uint_after(line, "generation:", &out->generation) < 0 ||
+        dxg_parse_uint_after(line, "reuse_delayed:",
+                             &out->reuse_delayed) < 0 ||
+        dxg_parse_uint_after(line, "reuse_allowed:",
+                             &out->reuse_allowed) < 0 ||
+        dxg_parse_uint_after(line, "min_free:", &out->min_free) < 0)
+        goto out_free;
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_local_adapter_status(struct dxg_local_adapter_status *out)
+{
+    char *buf;
+    char *line;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    line = dxg_find_text(buf, "dxg_local_adapter_namespace=");
+    if (line == 0)
+        goto out_free;
+    memset(out, 0, sizeof(*out));
+    if (dxg_parse_uint_after(line, "hits:", &out->hits) < 0 ||
+        dxg_parse_uint_after(line, "misses:", &out->misses) < 0 ||
+        dxg_parse_uint_after(line, "result:", &out->last_result) < 0 ||
+        dxg_parse_hex_after(line, "handle:", &out->handle) < 0 ||
+        dxg_parse_hex_after(line, "host:", &out->host) < 0 ||
+        dxg_parse_uint_after(line, "refs:", &out->refs) < 0 ||
+        dxg_parse_uint_after(line, "locals:", &out->locals) < 0 ||
+        dxg_parse_uint_after(line, "generation:", &out->generation) < 0 ||
+        dxg_parse_uint_after(line, "reuse_delayed:",
+                             &out->reuse_delayed) < 0 ||
+        dxg_parse_uint_after(line, "reuse_allowed:",
+                             &out->reuse_allowed) < 0 ||
+        dxg_parse_uint_after(line, "min_free:", &out->min_free) < 0)
         goto out_free;
     ret = 0;
 
@@ -9296,7 +9355,71 @@ static int expect_stale_ioctl_rejected(const char *label, int rc)
     return 0;
 }
 
-static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter)
+static int probe_local_adapter_reuse_validate(int fd, struct winluid luid)
+{
+    struct dxg_local_adapter_status before;
+    struct dxg_local_adapter_status after;
+    uint32 previous_handle = 0;
+    uint32 opened = 0;
+
+    if (read_local_adapter_status(&before) < 0) {
+        printf("local_adapter_reuse status_initial_failed\n");
+        return -1;
+    }
+    for (uint32 i = 0; i < 4; i++) {
+        struct d3dkmt_openadapterfromluid open_luid;
+        struct d3dkmt_closeadapter close_adapter;
+
+        memset(&open_luid, 0, sizeof(open_luid));
+        open_luid.adapter_luid = luid;
+        if (ioctl(fd, LX_DXOPENADAPTERFROMLUID, &open_luid) < 0 ||
+            open_luid.adapter_handle.v == 0) {
+            printf("local_adapter_reuse open_failed iter=%u handle=0x%x\n",
+                   i, open_luid.adapter_handle.v);
+            return -1;
+        }
+        if (previous_handle != 0 &&
+            previous_handle == open_luid.adapter_handle.v) {
+            printf("local_adapter_reuse premature_reuse iter=%u handle=0x%x\n",
+                   i, open_luid.adapter_handle.v);
+            memset(&close_adapter, 0, sizeof(close_adapter));
+            close_adapter.adapter_handle = open_luid.adapter_handle;
+            ioctl(fd, LX_DXCLOSEADAPTER, &close_adapter);
+            return -1;
+        }
+        previous_handle = open_luid.adapter_handle.v;
+        opened++;
+        memset(&close_adapter, 0, sizeof(close_adapter));
+        close_adapter.adapter_handle = open_luid.adapter_handle;
+        if (ioctl(fd, LX_DXCLOSEADAPTER, &close_adapter) < 0) {
+            printf("local_adapter_reuse close_failed iter=%u handle=0x%x\n",
+                   i, open_luid.adapter_handle.v);
+            return -1;
+        }
+    }
+    if (read_local_adapter_status(&after) < 0) {
+        printf("local_adapter_reuse status_final_failed\n");
+        return -1;
+    }
+    if (after.min_free != 128) {
+        printf("local_adapter_reuse min_free_unexpected min_free=%u\n",
+               after.min_free);
+        return -1;
+    }
+    if (after.reuse_delayed <= before.reuse_delayed) {
+        printf("local_adapter_reuse no_delayed_reuse_counter before=%u after=%u\n",
+               before.reuse_delayed, after.reuse_delayed);
+        return -1;
+    }
+    printf("local_adapter_reuse ok opened=%u delayed:%u->%u allowed:%u->%u min_free=%u last=0x%x\n",
+           opened, before.reuse_delayed, after.reuse_delayed,
+           before.reuse_allowed, after.reuse_allowed, after.min_free,
+           after.handle);
+    return 0;
+}
+
+static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
+                                          struct winluid adapter_luid)
 {
     struct dxg_object_table_status before;
     struct dxg_object_table_status after;
@@ -9320,6 +9443,8 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter)
         printf("handle_lifetime status_initial_failed\n");
         return -1;
     }
+    if (probe_local_adapter_reuse_validate(fd, adapter_luid) < 0)
+        return -1;
 
     memset(&create_device, 0, sizeof(create_device));
     create_device.adapter = adapter;
@@ -9533,9 +9658,15 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter)
                before.denied, after.denied, expected_denials);
         return -1;
     }
-    printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u\n",
+    if (after.min_free != 128) {
+        printf("handle_lifetime min_free_unexpected min_free=%u\n",
+               after.min_free);
+        return -1;
+    }
+    printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u reuse_delayed:%u reuse_allowed:%u min_free:%u\n",
            before.denied, after.denied, after.max, after.generation,
-           after.drops);
+           after.drops, after.reuse_delayed, after.reuse_allowed,
+           after.min_free);
     return 0;
 
 cleanup_device:
@@ -10823,7 +10954,8 @@ int main(int argc, char **argv)
     }
     if (handle_lifetime_validate) {
         if (probe_handle_lifetime_validate(fd,
-                                           open_luid.adapter_handle) < 0)
+                                           open_luid.adapter_handle,
+                                           enum2_selected_luid) < 0)
             ret = 1;
         goto close_adapter;
     }
