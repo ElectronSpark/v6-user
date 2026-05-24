@@ -7383,6 +7383,16 @@ static int probe_wddm_payload_diagnostics(void)
     char *lock2;
     char *destroy;
     char *createprocess;
+    char *createdevice;
+    char *createdevice_unwind;
+    char *createcontext_unwind;
+    char *createhwqueue_unwind;
+    char *openresource;
+    char *opensync;
+    char *shareobject;
+    char *syncgpu_wait;
+    char *synccpuevent;
+    char *asyncsend;
     uint32 context_len = 0;
     uint32 context_priv_size = 0;
     uint32 context_priv_head_len = 0;
@@ -7436,8 +7446,44 @@ static int probe_wddm_payload_diagnostics(void)
     uint32 createprocess_ret = 0;
     uint32 createprocess_handle = 0;
     uint32 createprocess_layout = 0;
+    uint32 createdevice_proc = 0;
+    uint32 createdevice_device = 0;
+    uint32 createdevice_unwind_attempts = 0;
+    uint32 createdevice_unwind_successes = 0;
+    uint32 createcontext_unwind_attempts = 0;
+    uint32 createcontext_unwind_successes = 0;
+    uint32 createhwqueue_unwind_attempts = 0;
+    uint32 createhwqueue_unwind_successes = 0;
+    uint32 openresource_wire = 0;
+    uint32 openresource_result = 0;
+    uint32 openresource_actual = 0;
+    uint32 openresource_proc = 0;
+    uint32 openresource_allocs = 0;
+    uint32 openresource_out_res = 0;
+    uint32 openresource_out_alloc0 = 0;
+    uint32 opensync_wire = 0;
+    uint32 opensync_result = 0;
+    uint32 opensync_actual = 0;
+    uint32 opensync_proc = 0;
+    uint32 opensync_out_sync = 0;
+    uint32 shareobject_cmd_len = 0;
+    uint32 shareobject_wire = 0;
+    uint32 shareobject_result_len = 0;
+    uint32 shareobject_proc = 0;
+    uint32 shareobject_object = 0;
+    uint32 syncgpu_wait_context = 0;
+    uint32 syncgpu_wait_object = 0;
+    uint32 syncgpu_wait_count = 0;
+    uint32 syncgpu_wait_cmd_len = 0;
+    uint32 cpuevent_attempts = 0;
+    uint32 cpuevent_successes = 0;
+    uint32 async_enabled = 0;
+    uint32 async_attempts = 0;
+    uint32 async_successes = 0;
+    uint32 async_fallbacks = 0;
     int createprocess_ok;
     int single_pending_ok;
+    int packet_shape_ok;
     int ret = -1;
 
     buf = read_dxg_status_buffer();
@@ -7458,15 +7504,33 @@ static int probe_wddm_payload_diagnostics(void)
     lock2 = dxg_find_text(buf, "dxg_lock2_last=");
     destroy = dxg_find_text(buf, "dxg_destroy_last=");
     createprocess = dxg_find_text(buf, "dxg_createprocess_last=");
+    createdevice = dxg_find_text(buf, "dxg_createdevice_last=");
+    createdevice_unwind = dxg_find_text(buf, "dxg_createdevice_unwind=");
+    createcontext_unwind = dxg_find_text(buf, "dxg_context_unwind=");
+    createhwqueue_unwind = dxg_find_text(buf, "dxg_hwqueue_unwind=");
+    openresource = dxg_find_text(buf, "dxg_openresource_envelope=");
+    opensync = dxg_find_text(buf, "dxg_opensync_envelope=");
+    shareobject = dxg_find_text(buf, "dxg_shareobject_last=");
+    syncgpu_wait = dxg_find_text(buf, "dxg_syncgpu_wait_detail=");
+    synccpuevent = dxg_find_text(buf, "dxg_synccpuevent_signal=");
+    asyncsend = dxg_find_text(buf, "dxg_async_send_last=");
     if (context == 0 || context_priv == 0 || hwqueue == 0 ||
         hwqueue_priv == 0 || residency == 0 || allocation == 0 ||
         allocation_priv == 0 || mapgpuva == 0 || syncobject == 0 ||
-        lock2 == 0 || destroy == 0 || createprocess == 0) {
-        printf("wddm_payload_validate missing_status_lines context=%d context_priv=%d hwqueue=%d hwqueue_priv=%d residency=%d allocation=%d allocation_priv=%d mapgpuva=%d sync=%d lock=%d destroy=%d process=%d\n",
+        lock2 == 0 || destroy == 0 || createprocess == 0 ||
+        createdevice == 0 || createdevice_unwind == 0 ||
+        createcontext_unwind == 0 || createhwqueue_unwind == 0 ||
+        openresource == 0 || opensync == 0 || shareobject == 0 ||
+        syncgpu_wait == 0 || synccpuevent == 0 || asyncsend == 0) {
+        printf("wddm_payload_validate missing_status_lines context=%d context_priv=%d hwqueue=%d hwqueue_priv=%d residency=%d allocation=%d allocation_priv=%d mapgpuva=%d sync=%d lock=%d destroy=%d process=%d createdevice=%d dev_unwind=%d ctx_unwind=%d hwq_unwind=%d openres=%d opensync=%d share=%d syncwait=%d cpuevent=%d async=%d\n",
                context != 0, context_priv != 0, hwqueue != 0,
                hwqueue_priv != 0, residency != 0, allocation != 0,
                allocation_priv != 0, mapgpuva != 0, syncobject != 0,
-               lock2 != 0, destroy != 0, createprocess != 0);
+               lock2 != 0, destroy != 0, createprocess != 0,
+               createdevice != 0, createdevice_unwind != 0,
+               createcontext_unwind != 0, createhwqueue_unwind != 0,
+               openresource != 0, opensync != 0, shareobject != 0,
+               syncgpu_wait != 0, synccpuevent != 0, asyncsend != 0);
         goto out;
     }
 
@@ -7541,7 +7605,62 @@ static int probe_wddm_payload_diagnostics(void)
         dxg_parse_uint_after(createprocess, "handle:",
                              &createprocess_handle) < 0 ||
         dxg_parse_uint_after(createprocess, "layout:",
-                             &createprocess_layout) < 0) {
+                             &createprocess_layout) < 0 ||
+        dxg_parse_uint_after(createdevice, "proc:",
+                             &createdevice_proc) < 0 ||
+        dxg_parse_uint_after(createdevice, "device:",
+                             &createdevice_device) < 0 ||
+        dxg_parse_uint_after(createdevice_unwind, "attempts:",
+                             &createdevice_unwind_attempts) < 0 ||
+        dxg_parse_uint_after(createdevice_unwind, "successes:",
+                             &createdevice_unwind_successes) < 0 ||
+        dxg_parse_uint_after(createcontext_unwind, "attempts:",
+                             &createcontext_unwind_attempts) < 0 ||
+        dxg_parse_uint_after(createcontext_unwind, "successes:",
+                             &createcontext_unwind_successes) < 0 ||
+        dxg_parse_uint_after(createhwqueue_unwind, "attempts:",
+                             &createhwqueue_unwind_attempts) < 0 ||
+        dxg_parse_uint_after(createhwqueue_unwind, "successes:",
+                             &createhwqueue_unwind_successes) < 0 ||
+        dxg_parse_uint_after(openresource, "wire:", &openresource_wire) < 0 ||
+        dxg_parse_uint_after(openresource, "result:", &openresource_result) < 0 ||
+        dxg_parse_uint_after(openresource, "actual:", &openresource_actual) < 0 ||
+        dxg_parse_uint_after(openresource, "proc:", &openresource_proc) < 0 ||
+        dxg_parse_uint_after(openresource, "allocs:", &openresource_allocs) < 0 ||
+        dxg_parse_uint_after(openresource, "out_res:",
+                             &openresource_out_res) < 0 ||
+        dxg_parse_uint_after(openresource, "out_alloc0:",
+                             &openresource_out_alloc0) < 0 ||
+        dxg_parse_uint_after(opensync, "wire:", &opensync_wire) < 0 ||
+        dxg_parse_uint_after(opensync, "result:", &opensync_result) < 0 ||
+        dxg_parse_uint_after(opensync, "actual:", &opensync_actual) < 0 ||
+        dxg_parse_uint_after(opensync, "proc:", &opensync_proc) < 0 ||
+        dxg_parse_uint_after(opensync, "out_sync:", &opensync_out_sync) < 0 ||
+        dxg_parse_uint_after(shareobject, "cmd_len:",
+                             &shareobject_cmd_len) < 0 ||
+        dxg_parse_uint_after(shareobject, "wire:", &shareobject_wire) < 0 ||
+        dxg_parse_uint_after(shareobject, "result_len:",
+                             &shareobject_result_len) < 0 ||
+        dxg_parse_uint_after(shareobject, "proc:", &shareobject_proc) < 0 ||
+        dxg_parse_uint_after(shareobject, "object:",
+                             &shareobject_object) < 0 ||
+        dxg_parse_uint_after(syncgpu_wait, "context:",
+                             &syncgpu_wait_context) < 0 ||
+        dxg_parse_uint_after(syncgpu_wait, "object:",
+                             &syncgpu_wait_object) < 0 ||
+        dxg_parse_uint_after(syncgpu_wait, "count:",
+                             &syncgpu_wait_count) < 0 ||
+        dxg_parse_uint_after(syncgpu_wait, "cmd_len:",
+                             &syncgpu_wait_cmd_len) < 0 ||
+        dxg_parse_uint_after(synccpuevent, "attempts:",
+                             &cpuevent_attempts) < 0 ||
+        dxg_parse_uint_after(synccpuevent, "successes:",
+                             &cpuevent_successes) < 0 ||
+        dxg_parse_uint_after(asyncsend, "enabled:", &async_enabled) < 0 ||
+        dxg_parse_uint_after(asyncsend, "attempts:", &async_attempts) < 0 ||
+        dxg_parse_uint_after(asyncsend, "successes:", &async_successes) < 0 ||
+        dxg_parse_uint_after(asyncsend, "fallback_sync:",
+                             &async_fallbacks) < 0) {
         printf("wddm_payload_validate parse_failed\n");
         goto out;
     }
@@ -7593,6 +7712,90 @@ static int probe_wddm_payload_diagnostics(void)
         ret = 0;
         goto out;
     }
+
+    packet_shape_ok =
+        createdevice_proc != 0 && createdevice_device != 0 &&
+        context_len != 0 && context_priv_size != 0 &&
+        context_priv_head_len != 0 && hwqueue_create_len != 0 &&
+        hwqueue_create_priv != 0 && hwqueue_create_head_len != 0 &&
+        hwqueue_submit_len != 0 && hwqueue_submit_priv != 0 &&
+        allocation_len != 0 && allocation_count != 0 &&
+        allocation_resource != 0 && allocation_handle != 0 &&
+        allocation_in_priv != 0 && allocation_out_priv != 0 &&
+        make_len != 0 && make_count != 0 && make_in0 != 0 &&
+        make_wire0 == make_in0 &&
+        openresource_wire != 0 && openresource_result != 0 &&
+        openresource_actual != 0 && openresource_proc != 0 &&
+        openresource_allocs != 0 && openresource_out_res != 0 &&
+        openresource_out_alloc0 != 0 &&
+        sync_len != 0 && sync_handle != 0 &&
+        opensync_wire != 0 && opensync_result != 0 &&
+        opensync_actual != 0 && opensync_proc != 0 &&
+        opensync_out_sync != 0 &&
+        shareobject_cmd_len != 0 && shareobject_wire != 0 &&
+        shareobject_result_len != 0 && shareobject_proc != 0 &&
+        shareobject_object != 0 &&
+        syncgpu_wait_context != 0 && syncgpu_wait_object != 0 &&
+        syncgpu_wait_count != 0 && syncgpu_wait_cmd_len != 0 &&
+        cpuevent_attempts != 0 && cpuevent_successes != 0 &&
+        ((async_enabled != 0 && async_attempts != 0 &&
+          async_successes != 0) ||
+         (async_enabled == 0 && async_fallbacks != 0)) &&
+        map_len != 0 && map_alloc != 0 && map_va_low != 0 &&
+        lock_len != 0 && lock_alloc != 0 && lock_user_low != 0 &&
+        destroy_device_len != 0 && destroy_context_len != 0 &&
+        destroy_paging_len != 0 && destroy_sync_len != 0 &&
+        createdevice_unwind_attempts != 0 &&
+        createdevice_unwind_successes != 0 &&
+        createcontext_unwind_attempts != 0 &&
+        createcontext_unwind_successes != 0 &&
+        createhwqueue_unwind_attempts != 0 &&
+        createhwqueue_unwind_successes != 0;
+    printf("dxg_packet_shape_matrix createprocess=%u createdevice=%u createcontext=%u createhwqueue=%u createallocation=%u makeresident=%u openresource=%u sync_create=%u opensync=%u shareobject=%u signal_cpu_event=%u waitgpu=%u submithwqueue=%u map=%u lock=%u destroy=%u unwind=%u async=%u status=%s\n",
+           createprocess_ok ? 1U : 0U,
+           (createdevice_proc != 0 && createdevice_device != 0) ? 1U : 0U,
+           (context_len != 0 && context_priv_size != 0 &&
+            context_priv_head_len != 0) ? 1U : 0U,
+           (hwqueue_create_len != 0 && hwqueue_create_priv != 0 &&
+            hwqueue_create_head_len != 0 && hwqueue_submit_len != 0 &&
+            hwqueue_submit_priv != 0) ? 1U : 0U,
+           (allocation_len != 0 && allocation_count != 0 &&
+            allocation_resource != 0 && allocation_handle != 0 &&
+            allocation_in_priv != 0 && allocation_out_priv != 0) ? 1U : 0U,
+           (make_len != 0 && make_count != 0 && make_in0 != 0 &&
+            make_wire0 == make_in0) ? 1U : 0U,
+           (openresource_wire != 0 && openresource_result != 0 &&
+            openresource_actual != 0 && openresource_proc != 0 &&
+            openresource_allocs != 0 && openresource_out_res != 0 &&
+            openresource_out_alloc0 != 0) ? 1U : 0U,
+           (sync_len != 0 && sync_handle != 0 &&
+            sync_fence_cpu_low != 0 && sync_fence_gpu_low != 0) ? 1U : 0U,
+           (opensync_wire != 0 && opensync_result != 0 &&
+            opensync_actual != 0 && opensync_proc != 0 &&
+            opensync_out_sync != 0) ? 1U : 0U,
+           (shareobject_cmd_len != 0 && shareobject_wire != 0 &&
+            shareobject_result_len != 0 && shareobject_proc != 0 &&
+            shareobject_object != 0) ? 1U : 0U,
+           (cpuevent_attempts != 0 && cpuevent_successes != 0) ? 1U : 0U,
+           (syncgpu_wait_context != 0 && syncgpu_wait_object != 0 &&
+            syncgpu_wait_count != 0 && syncgpu_wait_cmd_len != 0) ? 1U : 0U,
+           (hwqueue_submit_len != 0 && hwqueue_submit_priv != 0) ? 1U : 0U,
+           (map_len != 0 && map_alloc != 0 && map_va_low != 0) ? 1U : 0U,
+           (lock_len != 0 && lock_alloc != 0 && lock_user_low != 0) ? 1U : 0U,
+           (destroy_device_len != 0 && destroy_context_len != 0 &&
+            destroy_paging_len != 0 && destroy_sync_len != 0) ? 1U : 0U,
+           (createdevice_unwind_attempts != 0 &&
+            createdevice_unwind_successes != 0 &&
+            createcontext_unwind_attempts != 0 &&
+            createcontext_unwind_successes != 0 &&
+            createhwqueue_unwind_attempts != 0 &&
+            createhwqueue_unwind_successes != 0) ? 1U : 0U,
+           ((async_enabled != 0 && async_attempts != 0 &&
+             async_successes != 0) ||
+            (async_enabled == 0 && async_fallbacks != 0)) ? 1U : 0U,
+           packet_shape_ok ? "PASS" : "FAIL");
+    if (!packet_shape_ok)
+        goto out;
 
     if (allocation_len == 0 || allocation_count == 0 ||
         allocation_resource == 0 || allocation_handle == 0 ||
