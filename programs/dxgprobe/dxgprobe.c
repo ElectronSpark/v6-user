@@ -9696,27 +9696,40 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
     struct dxg_object_table_status after;
     struct d3dkmt_createdevice create_device;
     struct d3dkmt_destroydevice destroy_device;
+    struct d3dkmt_destroycontext destroy_context;
     struct d3dkmt_createsynchronizationobject2 create_sync;
     struct d3dkmt_destroysynchronizationobject destroy_sync;
     struct d3dkmt_createpagingqueue create_paging_queue;
     struct d3dddi_destroypagingqueue destroy_paging_queue;
     struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dddi_allocationinfo2 standalone_allocation_info;
     struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createallocation create_standalone_allocation;
     struct d3dkmt_createstandardallocation standard_allocation;
     struct d3dkmt_destroyallocation2 destroy_allocation;
+    struct d3dkmt_createhwqueue create_hwqueue;
+    struct d3dkmt_destroyhwqueue destroy_hwqueue;
     struct d3dddi_reservegpuvirtualaddress reserve_gpuva;
     struct d3dkmt_freegpuvirtualaddress free_gpuva;
+    struct d3dkmthandle context_handle;
+    struct d3dkmthandle allocation_list[1];
+    unsigned char context_private_data[64];
     int fd2;
     int ret = -1;
     uint32 expected_denials = 0;
     uint32 denied_delta = 0;
     int stale_device_second_fd_rc = -1;
+    int stale_context_rc = -1;
+    int stale_hwqueue_rc = -1;
+    int stale_hwqueue_sync_rc = -1;
     int stale_sync_rc = -1;
     int stale_paging_queue_rc = -1;
     int stale_paging_queue_sync_rc = -1;
+    int stale_resource_rc = -1;
     int stale_allocation_rc = -1;
     int stale_gpuva_rc = -1;
     int stale_device_final_rc = -1;
+    int context_sync_only = 0;
 
     if (read_object_table_status(&before) < 0) {
         printf("handle_lifetime status_initial_failed\n");
@@ -9813,6 +9826,67 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                create_sync.sync_object.v);
         goto cleanup_device;
     }
+    memset(context_private_data, 0, sizeof(context_private_data));
+    memset(&context_handle, 0, sizeof(context_handle));
+    if (probe_context_matrix(fd, create_device.device,
+                             context_private_data,
+                             sizeof(context_private_data),
+                             &context_handle, &context_sync_only) < 0 ||
+        context_handle.v == 0 || context_sync_only) {
+        printf("handle_lifetime create_context_failed context=0x%x sync_only=%d\n",
+               context_handle.v, context_sync_only);
+        goto cleanup_device;
+    }
+    memset(&create_hwqueue, 0, sizeof(create_hwqueue));
+    create_hwqueue.context = context_handle;
+    if (ioctl(fd, LX_DXCREATEHWQUEUE, &create_hwqueue) < 0 ||
+        create_hwqueue.queue.v == 0 ||
+        create_hwqueue.queue_progress_fence.v == 0) {
+        printf("handle_lifetime create_hwqueue_failed context=0x%x queue=0x%x fence=0x%x\n",
+               context_handle.v, create_hwqueue.queue.v,
+               create_hwqueue.queue_progress_fence.v);
+        (void)destroy_context_handle(fd, context_handle);
+        goto cleanup_device;
+    }
+    memset(&destroy_hwqueue, 0, sizeof(destroy_hwqueue));
+    destroy_hwqueue.queue = create_hwqueue.queue;
+    if (ioctl(fd, LX_DXDESTROYHWQUEUE, &destroy_hwqueue) < 0) {
+        printf("handle_lifetime destroy_hwqueue_failed queue=0x%x\n",
+               create_hwqueue.queue.v);
+        (void)destroy_context_handle(fd, context_handle);
+        goto cleanup_device;
+    }
+    stale_hwqueue_rc = ioctl(fd, LX_DXDESTROYHWQUEUE, &destroy_hwqueue);
+    if (expect_stale_ioctl_rejected(
+            "destroy_hwqueue_again", stale_hwqueue_rc) < 0) {
+        (void)destroy_context_handle(fd, context_handle);
+        goto cleanup_device;
+    }
+    expected_denials++;
+    memset(&destroy_sync, 0, sizeof(destroy_sync));
+    destroy_sync.sync_object = create_hwqueue.queue_progress_fence;
+    stale_hwqueue_sync_rc =
+        ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync);
+    if (expect_stale_ioctl_rejected(
+            "destroy_hwqueue_progress_fence_after_queue_destroy",
+            stale_hwqueue_sync_rc) < 0) {
+        (void)destroy_context_handle(fd, context_handle);
+        goto cleanup_device;
+    }
+    expected_denials++;
+    memset(&destroy_context, 0, sizeof(destroy_context));
+    destroy_context.context = context_handle;
+    if (ioctl(fd, LX_DXDESTROYCONTEXT, &destroy_context) < 0) {
+        printf("handle_lifetime destroy_context_failed context=0x%x\n",
+               context_handle.v);
+        goto cleanup_device;
+    }
+    stale_context_rc = ioctl(fd, LX_DXDESTROYCONTEXT, &destroy_context);
+    if (expect_stale_ioctl_rejected(
+            "destroy_context_again", stale_context_rc) < 0)
+        goto cleanup_device;
+    expected_denials++;
+
     memset(&destroy_sync, 0, sizeof(destroy_sync));
     destroy_sync.sync_object = create_sync.sync_object;
     if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync) < 0) {
@@ -9885,10 +9959,50 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                allocation_info.allocation.v, create_allocation.resource.v);
         goto cleanup_device;
     }
+    stale_resource_rc = ioctl(fd, LX_DXDESTROYALLOCATION2,
+                              &destroy_allocation);
+    if (expect_stale_ioctl_rejected(
+            "destroy_resource_again", stale_resource_rc) < 0)
+        goto cleanup_device;
+    expected_denials++;
+
+    memset(&standalone_allocation_info, 0, sizeof(standalone_allocation_info));
+    memset(&create_standalone_allocation, 0,
+           sizeof(create_standalone_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size = 0x10000;
+    create_standalone_allocation.device = create_device.device;
+    create_standalone_allocation.alloc_count = 1;
+    create_standalone_allocation.allocation_info =
+        (uint64)&standalone_allocation_info;
+    create_standalone_allocation.standard_allocation =
+        (uint64)&standard_allocation;
+    create_standalone_allocation.flags.standard_allocation = 1;
+    if (ioctl(fd, LX_DXCREATEALLOCATION,
+              &create_standalone_allocation) < 0 ||
+        standalone_allocation_info.allocation.v == 0) {
+        printf("handle_lifetime create_standalone_allocation_failed allocation=0x%x resource=0x%x\n",
+               standalone_allocation_info.allocation.v,
+               create_standalone_allocation.resource.v);
+        goto cleanup_device;
+    }
+    allocation_list[0] = standalone_allocation_info.allocation;
+    memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+    destroy_allocation.device = create_device.device;
+    destroy_allocation.allocations = (uint64)allocation_list;
+    destroy_allocation.alloc_count = 1;
+    destroy_allocation.flags.assume_not_in_use = 1;
+    if (ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy_allocation) < 0) {
+        printf("handle_lifetime destroy_standalone_allocation_failed allocation=0x%x\n",
+               standalone_allocation_info.allocation.v);
+        goto cleanup_device;
+    }
     stale_allocation_rc = ioctl(fd, LX_DXDESTROYALLOCATION2,
                                 &destroy_allocation);
     if (expect_stale_ioctl_rejected(
-            "destroy_allocation_again", stale_allocation_rc) < 0)
+            "destroy_standalone_allocation_again",
+            stale_allocation_rc) < 0)
         goto cleanup_device;
     expected_denials++;
 
@@ -9947,22 +10061,30 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
     }
     printf("handle_lifetime_stale_matrix "
            "device_second_fd_rc=%d device_second_fd_rejected=%u "
+           "context_rc=%d context_rejected=%u "
+           "hwqueue_rc=%d hwqueue_rejected=%u "
+           "hwqueue_sync_rc=%d hwqueue_sync_rejected=%u "
            "sync_rc=%d sync_rejected=%u "
            "paging_queue_rc=%d paging_queue_rejected=%u "
            "paging_queue_sync_rc=%d paging_queue_sync_rejected=%u "
+           "resource_rc=%d resource_rejected=%u "
            "allocation_rc=%d allocation_rejected=%u "
            "gpuva_rc=%d gpuva_rejected=%u "
            "device_final_rc=%d device_final_rejected=%u "
            "expected_denials=%u denied_delta=%u "
-           "object_classes=device,sync,paging_queue,paging_queue_sync,allocation,gpuva "
+           "object_classes=device,context,hwqueue,hwqueue_sync,sync,paging_queue,paging_queue_sync,resource,allocation,gpuva "
            "status=PASS\n",
            stale_device_second_fd_rc,
            (uint32)(stale_device_second_fd_rc < 0),
+           stale_context_rc, (uint32)(stale_context_rc < 0),
+           stale_hwqueue_rc, (uint32)(stale_hwqueue_rc < 0),
+           stale_hwqueue_sync_rc, (uint32)(stale_hwqueue_sync_rc < 0),
            stale_sync_rc, (uint32)(stale_sync_rc < 0),
            stale_paging_queue_rc,
            (uint32)(stale_paging_queue_rc < 0),
            stale_paging_queue_sync_rc,
            (uint32)(stale_paging_queue_sync_rc < 0),
+           stale_resource_rc, (uint32)(stale_resource_rc < 0),
            stale_allocation_rc, (uint32)(stale_allocation_rc < 0),
            stale_gpuva_rc, (uint32)(stale_gpuva_rc < 0),
            stale_device_final_rc, (uint32)(stale_device_final_rc < 0),
