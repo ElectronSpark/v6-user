@@ -385,6 +385,7 @@ static int validate_fbstat_aggregate_matrix(void)
     uint64 test_only_out_fence_placeholders = 0;
     uint64 out_fence_exports = 0;
     uint64 out_fence_display_correlated = 0;
+    uint64 out_fence_software_scanout_correlated = 0;
     int before = failures;
 
     if (run_child_capture("fbstat_aggregate", fbstat, output,
@@ -465,6 +466,9 @@ static int validate_fbstat_aggregate_matrix(void)
     require_counter("fbstat_kms_atomic_fence_stats", output, atomic_anchor,
                     "out_fence_display_correlated",
                     &out_fence_display_correlated);
+    require_counter("fbstat_kms_atomic_fence_stats", output, atomic_anchor,
+                    "out_fence_software_scanout_correlated",
+                    &out_fence_software_scanout_correlated);
 
     require_counter_min("fbstat_dmabuf_poll_readiness_stats", "attempts",
                         attempts, 2);
@@ -532,6 +536,9 @@ static int validate_fbstat_aggregate_matrix(void)
     require_counter_eq("fbstat_kms_atomic_fence_stats",
                        "out_fence_display_correlated",
                        out_fence_display_correlated, 0);
+    require_counter_min("fbstat_kms_atomic_fence_stats",
+                        "out_fence_software_scanout_correlated",
+                        out_fence_software_scanout_correlated, 1);
 
     if (failures != before)
         return -1;
@@ -554,13 +561,16 @@ static int validate_fbstat_aggregate_matrix(void)
            "sync_file_pending_wakeups=%lu out_fence_prepared=%lu "
            "out_fence_cleanup_closes=%lu "
            "test_only_out_fence_placeholders=%lu out_fence_exports=%lu "
-           "out_fence_display_correlated=%lu native_present_credit=0 "
+           "out_fence_display_correlated=%lu "
+           "out_fence_software_scanout_correlated=%lu "
+           "native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n",
            fd_refs, fd_ref_puts, duplicate_rejects, test_only_validated,
            test_only_waits, sync_file_pending_waits,
            sync_file_pending_wakeups, out_fence_prepared,
            out_fence_cleanup_closes, test_only_out_fence_placeholders,
-           out_fence_exports, out_fence_display_correlated);
+           out_fence_exports, out_fence_display_correlated,
+           out_fence_software_scanout_correlated);
     return 0;
 }
 
@@ -896,6 +906,8 @@ static int validate_drm_syncobj_matrix(void)
     require_output_token("drm_syncobj_wait_matrix", output,
                          "transfer_wakeup=PASS");
     require_output_token("drm_syncobj_wait_matrix", output,
+                         "pending_transfer=PASS");
+    require_output_token("drm_syncobj_wait_matrix", output,
                          "timeout_separate=PASS");
     require_output_token("drm_syncobj_wait_matrix", output,
                          "timeout_waits_delta=");
@@ -913,6 +925,8 @@ static int validate_drm_syncobj_matrix(void)
                          "transfer_wait_queued=PASS");
     require_output_token("drm_syncobj_wakeup_provenance_matrix", output,
                          "transfer_wake=PASS");
+    require_output_token("drm_syncobj_wakeup_provenance_matrix", output,
+                         "pending_transfer_wake=PASS");
     require_output_token("drm_syncobj_wakeup_provenance_matrix", output,
                          "wait_queued_delta=");
     require_output_token("drm_syncobj_wakeup_provenance_matrix", output,
@@ -966,6 +980,26 @@ static int validate_drm_syncobj_matrix(void)
     require_output_token("drm_sync_file_callback_matrix", output,
                          "native_present_credit=0");
     require_output_token("drm_sync_file_callback_matrix", output,
+                         "opengl_submit_credit=0 status=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "syncobj_pending_transfer_matrix");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "transfer_before_signal=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "dst_wait_pending=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "source_signal=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "child_wait_woke=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "dst_wait_after_signal=PASS");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "pending_transfers_delta=");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "pending_transfer_wakeups_delta=");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("drm_syncobj_pending_transfer_matrix", output,
                          "opengl_submit_credit=0 status=PASS");
     require_output_token("drm_syncobj_fd_kind_matrix", output,
                          "syncobj_fd_kind_matrix");
@@ -1105,6 +1139,9 @@ static int validate_drm_syncobj_matrix(void)
                          output, "out_fence_exports_delta=0");
     require_output_token("drm_kms_present_completion_failclosed_matrix",
                          output, "out_fence_display_correlated_delta=0");
+    require_output_token("drm_kms_present_completion_failclosed_matrix",
+                         output,
+                         "out_fence_software_scanout_correlated_delta=0");
     require_output_token("drm_kms_present_completion_failclosed_matrix",
                          output, "display_delta=0/0");
     require_output_token("drm_kms_present_completion_failclosed_matrix",
@@ -1315,9 +1352,13 @@ static int validate_drm_syncobj_matrix(void)
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_out_fence_cleanup_closes_delta=");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "atomic_out_fence_display_correlated=1");
+                             "atomic_out_fence_display_correlated=0");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "out_fence_display_correlated_delta=");
+                             "out_fence_display_correlated_delta=0");
+        require_output_token("drm_atomic_fence_matrix", output,
+                             "atomic_out_fence_software_scanout_correlated=1");
+        require_output_token("drm_atomic_fence_matrix", output,
+                             "out_fence_software_scanout_correlated_delta=");
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_fence_kernel=real");
         require_output_line_token("drm_atomic_fence_matrix", output,
@@ -1356,17 +1397,21 @@ static int validate_drm_syncobj_matrix(void)
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "atomic_out_fence_provenance_matrix");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_source=display_correlated_commit");
+                         "out_fence_source=software_scanout_commit");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "out_fence_software=1");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "out_fence_immediate=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_display_correlated=1");
+                         "out_fence_display_correlated=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_completion_deferred=1");
+                         "out_fence_software_scanout_correlated=1");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_display_correlated_delta=");
+                         "out_fence_completion_deferred=0");
+    require_output_token("drm_atomic_out_fence_provenance_matrix", output,
+                         "out_fence_display_correlated_delta=0");
+    require_output_token("drm_atomic_out_fence_provenance_matrix", output,
+                         "out_fence_software_scanout_correlated_delta=");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "native_present_credit=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
@@ -1408,13 +1453,20 @@ static int validate_drm_syncobj_matrix(void)
            "finite_timeout_rejected=1 stale_handle_rejected=1 "
            "future_timeline_rejected=1 sync_file_resv_attach=PASS "
            "wait_queue_timeout_diag=PASS signal_wakeup=PASS "
-           "transfer_wakeup=PASS wait_callback_lifecycle=PASS "
+           "transfer_wakeup=PASS pending_transfer=PASS "
+           "wait_callback_lifecycle=PASS "
            "timeout_separate=PASS status=PASS\n");
     printf("gpu_core_c_validator drm_syncobj_wakeup_provenance_matrix "
            "signal_wait_queued=PASS signal_wake=PASS "
            "transfer_wait_queued=PASS transfer_wake=PASS "
+           "pending_transfer_wake=PASS "
            "wait_callback_lifecycle=PASS "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator drm_syncobj_pending_transfer_matrix "
+           "transfer_before_signal=PASS dst_wait_pending=PASS "
+           "source_signal=PASS child_wait_woke=PASS "
+           "dst_wait_after_signal=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator drm_sync_file_pending_matrix "
            "pending_export=PASS pending_poll_not_ready=1 "
            "pending_import=PASS imported_wait_pending=PASS "
@@ -1495,7 +1547,8 @@ static int validate_drm_syncobj_matrix(void)
                "atomic_invalid_out_fence_rejected=1 "
                "atomic_out_fence_software=1 "
                "atomic_out_fence_immediate=0 "
-               "atomic_out_fence_display_correlated=1 "
+               "atomic_out_fence_display_correlated=0 "
+               "atomic_out_fence_software_scanout_correlated=1 "
                "native_present_credit=0 opengl_submit_credit=0 "
                "status=PASS\n");
     } else if (contains(output, "atomic_fence_kernel=missing_fields")) {
@@ -1526,10 +1579,13 @@ static int validate_drm_syncobj_matrix(void)
            "native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator drm_atomic_out_fence_provenance_matrix "
-           "out_fence_source=display_correlated_commit out_fence_software=1 "
-           "out_fence_immediate=0 out_fence_display_correlated=1 "
-           "out_fence_completion_deferred=1 "
-           "out_fence_display_correlated_delta=1 native_present_credit=0 "
+           "out_fence_source=software_scanout_commit out_fence_software=1 "
+           "out_fence_immediate=0 out_fence_display_correlated=0 "
+           "out_fence_software_scanout_correlated=1 "
+           "out_fence_completion_deferred=0 "
+           "out_fence_display_correlated_delta=0 "
+           "out_fence_software_scanout_correlated_delta=1 "
+           "native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
     return 0;
 }

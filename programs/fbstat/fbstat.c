@@ -858,13 +858,16 @@ int main(int argc, char *argv[])
            stats.kms_atomic_out_fence_fd_exports);
     printf("kms_atomic_out_fence_display_correlated %lu\n",
            stats.kms_atomic_out_fence_display_correlated);
+    printf("kms_atomic_out_fence_software_scanout_correlated %lu\n",
+           stats.kms_atomic_out_fence_software_scanout_correlated);
     printf("kms_atomic_fence_matrix stats fd_refs=%lu fd_ref_puts=%lu "
            "duplicate_rejects=%lu test_only_validated=%lu "
            "test_only_waits=%lu sync_file_pending_waits=%lu "
            "sync_file_pending_wakeups=%lu out_fence_prepared=%lu "
            "out_fence_cleanup_closes=%lu "
            "test_only_out_fence_placeholders=%lu out_fence_exports=%lu "
-           "out_fence_display_correlated=%lu\n",
+           "out_fence_display_correlated=%lu "
+           "out_fence_software_scanout_correlated=%lu\n",
            stats.kms_atomic_in_fence_fd_refs,
            stats.kms_atomic_in_fence_fd_ref_puts,
            stats.kms_atomic_in_fence_duplicate_rejects,
@@ -876,7 +879,8 @@ int main(int argc, char *argv[])
            stats.kms_atomic_out_fence_cleanup_closes,
            stats.kms_atomic_out_fence_test_only_placeholders,
            stats.kms_atomic_out_fence_fd_exports,
-           stats.kms_atomic_out_fence_display_correlated);
+           stats.kms_atomic_out_fence_display_correlated,
+           stats.kms_atomic_out_fence_software_scanout_correlated);
     printf("ttm_system_bytes %lu\n", stats.ttm_system_bytes);
     printf("ttm_tt_bytes %lu\n", stats.ttm_tt_bytes);
     printf("ttm_vram_bytes %lu\n", stats.ttm_vram_bytes);
@@ -1014,6 +1018,10 @@ int main(int argc, char *argv[])
            stats.syncobj_wait_callbacks_cancelled);
     printf("syncobj_wait_callback_late_fires %lu\n",
            stats.syncobj_wait_callback_late_fires);
+    printf("syncobj_pending_transfers %lu\n",
+           stats.syncobj_pending_transfers);
+    printf("syncobj_pending_transfer_wakeups %lu\n",
+           stats.syncobj_pending_transfer_wakeups);
     printf("syncobj_timeout_waits %lu\n", stats.syncobj_timeout_waits);
     printf("syncobj_stale_wait_rejects %lu\n",
            stats.syncobj_stale_wait_rejects);

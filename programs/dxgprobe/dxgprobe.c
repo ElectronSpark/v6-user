@@ -26,6 +26,7 @@ static int g_shared_exporter_close_lifetime_validate;
 static int g_scanout_pin_lifetime_validate;
 static int g_import_negative_validate;
 static int g_shared_seal_provenance_validate;
+static int g_shared_mutation_validate;
 static int g_qai_admission_validate;
 static int g_create_publication_faults_validate;
 static uint32 g_residency_batch_count = 2;
@@ -8275,6 +8276,185 @@ static int probe_sealed_resource_add_denied(int fd,
     return 0;
 }
 
+static int dxg_shared_diag_same_record(
+    const struct dxg_shared_resource_diag *a,
+    const struct dxg_shared_resource_diag *b)
+{
+    return a != 0 && b != 0 &&
+           a->record_seen && b->record_seen &&
+           a->record_valid && b->record_valid &&
+           a->record_key_process == b->record_key_process &&
+           a->record_key_object == b->record_key_object &&
+           a->record_key_nt == b->record_key_nt &&
+           a->record_source_process == b->record_source_process &&
+           a->record_source_generation == b->record_source_generation &&
+           a->record_resource == b->record_resource &&
+           a->record_allocation == b->record_allocation &&
+           a->record_sealed == b->record_sealed &&
+           a->record_sealed_generation == b->record_sealed_generation &&
+           a->record_allocs == b->record_allocs &&
+           a->record_runtime_size == b->record_runtime_size &&
+           a->record_resource_size == b->record_resource_size &&
+           a->record_total_size == b->record_total_size &&
+           a->record_alloc0_priv == b->record_alloc0_priv &&
+           a->record_runtime_hash == b->record_runtime_hash &&
+           a->record_resource_hash == b->record_resource_hash &&
+           a->record_total_hash == b->record_total_hash &&
+           a->record_alloc0_hash == b->record_alloc0_hash;
+}
+
+static int probe_shared_mutation_create_attempt(int fd,
+                                                struct d3dkmthandle device,
+                                                struct d3dkmthandle resource,
+                                                uint32 heap_size,
+                                                uint32 priv_size)
+{
+    struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    uint32 private_data = 0x5eedc0deU;
+
+    memset(&allocation_info, 0, sizeof(allocation_info));
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size = heap_size;
+    create_allocation.device = device;
+    create_allocation.resource = resource;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)&allocation_info;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.priv_drv_data_size = priv_size;
+    if (priv_size != 0)
+        create_allocation.priv_drv_data = (uint64)&private_data;
+    create_allocation.flags.standard_allocation = 1;
+    return ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation);
+}
+
+static int probe_shared_mutation_contract(int fd,
+                                          struct d3dkmthandle device)
+{
+    struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    struct d3dkmt_destroyallocation2 destroy_allocation;
+    struct d3dkmt_shareobjects share_objects;
+    struct d3dkmthandle objects[1];
+    struct dxg_shared_lifetime_status before;
+    struct dxg_shared_lifetime_status after_append;
+    struct dxg_shared_lifetime_status after_private;
+    struct dxg_shared_lifetime_status after_size;
+    struct dxg_shared_resource_diag before_diag;
+    struct dxg_shared_resource_diag after_diag;
+    uint64 shared_handle = 0;
+    int before_rc;
+    int after_append_rc = -1;
+    int after_private_rc = -1;
+    int after_size_rc = -1;
+    int before_diag_rc = -1;
+    int after_diag_rc = -1;
+    int create_rc = -1;
+    int share_rc = -1;
+    int append_rc = -1;
+    int private_rc = -1;
+    int size_flag_rc = -1;
+    int owner_status = -1;
+    int destroy_rc = -1;
+    int record_same = 0;
+    int record_mutated = 1;
+    int pass;
+
+    memset(&allocation_info, 0, sizeof(allocation_info));
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+    memset(&share_objects, 0, sizeof(share_objects));
+    memset(&before, 0, sizeof(before));
+    memset(&after_append, 0, sizeof(after_append));
+    memset(&after_private, 0, sizeof(after_private));
+    memset(&after_size, 0, sizeof(after_size));
+    memset(&before_diag, 0, sizeof(before_diag));
+    memset(&after_diag, 0, sizeof(after_diag));
+
+    before_rc = read_shared_lifetime_status(&before);
+    create_allocation.device = device;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)&allocation_info;
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size = 0x10000;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.flags.create_resource = 1;
+    create_allocation.flags.create_shared = 1;
+    create_allocation.flags.nt_security_sharing = 1;
+    create_allocation.flags.cross_adapter = 1;
+    create_allocation.flags.standard_allocation = 1;
+    create_rc = ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation);
+    if (create_rc < 0 || create_allocation.resource.v == 0 ||
+        allocation_info.allocation.v == 0)
+        goto print_row;
+
+    objects[0] = create_allocation.resource;
+    share_objects.object_count = 1;
+    share_objects.objects = (uint64)objects;
+    share_objects.shared_handle = (uint64)&shared_handle;
+    share_rc = ioctl(fd, LX_DXSHAREOBJECTS, &share_objects);
+    if (share_rc < 0 || shared_handle == 0)
+        goto cleanup_resource;
+    before_diag_rc = read_dxg_shared_resource_diag(&before_diag);
+
+    append_rc = probe_shared_mutation_create_attempt(
+        fd, device, create_allocation.resource, 0x10000, 0);
+    after_append_rc = read_shared_lifetime_status(&after_append);
+
+    private_rc = probe_shared_mutation_create_attempt(
+        fd, device, create_allocation.resource, 0x10000, sizeof(uint32));
+    after_private_rc = read_shared_lifetime_status(&after_private);
+
+    size_flag_rc = probe_shared_mutation_create_attempt(
+        fd, device, create_allocation.resource, 0x20000, 0);
+    after_size_rc = read_shared_lifetime_status(&after_size);
+    after_diag_rc = read_dxg_shared_resource_diag(&after_diag);
+
+    owner_status = 0;
+    record_same = dxg_shared_diag_same_record(&before_diag, &after_diag);
+    record_mutated = after_diag.record_mutated;
+
+cleanup_resource:
+    if (create_allocation.resource.v != 0) {
+        destroy_allocation.device = device;
+        destroy_allocation.resource = create_allocation.resource;
+        destroy_allocation.flags.assume_not_in_use = 1;
+        destroy_rc = ioctl(fd, LX_DXDESTROYALLOCATION2,
+                           &destroy_allocation);
+    }
+
+print_row:
+    pass = before_rc == 0 && create_rc == 0 && share_rc == 0 &&
+           shared_handle != 0 && before_diag_rc == 0 &&
+           append_rc < 0 && private_rc < 0 && size_flag_rc < 0 &&
+           after_append_rc == 0 && after_private_rc == 0 &&
+           after_size_rc == 0 &&
+           after_append.denied > before.denied &&
+           after_private.denied > after_append.denied &&
+           after_size.denied > after_private.denied &&
+           after_diag_rc == 0 && owner_status == 0 &&
+           record_same && record_mutated == 0 && destroy_rc == 0;
+    printf("shared_mutation_rejection_matrix create_rc=%d share_rc=%d fd=%lu device=0x%x resource=0x%x allocation=0x%x append_rc=%d private_rc=%d size_flag_rc=%d owner_status=%d before_rc=%d after_rc=%d/%d/%d diag_rc=%d/%d denied=%u->%u->%u->%u private_rewrite_rejects=%u->%u size_flag_rewrite_rejects=%u->%u owner_rewrite_rejects=%u->%u record_same=%u record_mutated=%u destroy_rc=%d present_attempted=0 native_present_claim=0 status=%s\n",
+           create_rc, share_rc, shared_handle, device.v,
+           create_allocation.resource.v, allocation_info.allocation.v,
+           append_rc, private_rc, size_flag_rc, owner_status, before_rc,
+           after_append_rc, after_private_rc, after_size_rc, before_diag_rc,
+           after_diag_rc, before.denied, after_append.denied,
+           after_private.denied, after_size.denied,
+           after_append.denied, after_private.denied,
+           after_private.denied, after_size.denied,
+           before.denied, after_size.denied, record_same,
+           record_mutated, destroy_rc, pass ? "PASS" : "FAIL");
+    if (shared_handle != 0)
+        close((int)shared_handle);
+    return pass ? 0 : -1;
+}
+
 static void probe_shared_resource_nt(int fd, struct d3dkmthandle device,
                                      struct d3dkmthandle resource)
 {
@@ -12025,7 +12205,30 @@ out_free:
     return ret;
 }
 
-static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
+static void wsl_trace_replay_packet_matrix(const char *stage, uint32 cmd,
+                                           uint32 cmd_len,
+                                           uint32 result_len,
+                                           uint32 owner, uint32 first,
+                                           int rc, uint32 expected_reject,
+                                           uint32 *seen, uint32 *passed)
+{
+    uint32 ok;
+
+    ok = stage != 0 && cmd != 0 && cmd_len != 0 &&
+         ((expected_reject && rc < 0) ||
+          (!expected_reject && rc == 0)) &&
+         (owner != 0 || first != 0);
+    if (seen != 0)
+        (*seen)++;
+    if (passed != 0 && ok)
+        (*passed)++;
+    printf("wsl_trace_replay_packet_matrix stage=%s cmd:0x%x cmd_len:%u result_len:%u owner:0x%x first:0x%x ret:%d expected_reject:%u status=%s\n",
+           stage != 0 ? stage : "unknown", cmd, cmd_len, result_len,
+           owner, first, rc, expected_reject, ok ? "PASS" : "FAIL");
+}
+
+static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
+                                  struct winluid adapter_luid)
 {
     static unsigned char context_private_data[] = {
         0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
@@ -12069,6 +12272,8 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     int hwqueue_created = 0;
     int context_empty_rejected = 0;
     int hwqueue_synthetic_rejected = 0;
+    uint32 packet_seen = 0;
+    uint32 packet_passed = 0;
     int ret = -1;
 
     memset(&context_handle, 0, sizeof(context_handle));
@@ -12084,6 +12289,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     printf("wsl_trace_replay device=0x%x command_buffer=0x%lx command_size=%u\n",
            create_device.device.v, create_device.command_buffer,
            create_device.command_buffer_size);
+    wsl_trace_replay_packet_matrix(
+        "create_device", LX_DXCREATEDEVICE, sizeof(create_device),
+        sizeof(create_device), adapter.v, create_device.device.v, 0, 0,
+        &packet_seen, &packet_passed);
 
     memset(&create_paging_queue, 0, sizeof(create_paging_queue));
     create_paging_queue.device = create_device.device;
@@ -12100,6 +12309,11 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
            create_paging_queue.paging_queue.v,
            create_paging_queue.sync_object.v,
            create_paging_queue.fence_cpu_virtual_address);
+    wsl_trace_replay_packet_matrix(
+        "create_paging_queue", LX_DXCREATEPAGINGQUEUE,
+        sizeof(create_paging_queue), sizeof(create_paging_queue),
+        create_device.device.v, create_paging_queue.paging_queue.v, 0, 0,
+        &packet_seen, &packet_passed);
 
     memset(&allocation_info, 0, sizeof(allocation_info));
     memset(&create_allocation, 0, sizeof(create_allocation));
@@ -12122,6 +12336,11 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     allocation_created = 1;
     printf("wsl_trace_replay allocation=0x%x resource=0x%x\n",
            allocation_info.allocation.v, create_allocation.resource.v);
+    wsl_trace_replay_packet_matrix(
+        "create_allocation", LX_DXCREATEALLOCATION,
+        sizeof(create_allocation), sizeof(create_allocation),
+        create_device.device.v, allocation_info.allocation.v, 0, 0,
+        &packet_seen, &packet_passed);
 
     allocation_list[0] = allocation_info.allocation;
     priority_list[0] = 0;
@@ -12139,6 +12358,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     allocation_resident = 1;
     printf("wsl_trace_replay resident fence=%lu trim=%lu\n",
            make_resident.paging_fence_value, make_resident.num_bytes_to_trim);
+    wsl_trace_replay_packet_matrix(
+        "make_resident", LX_DXMAKERESIDENT, sizeof(make_resident),
+        sizeof(make_resident), create_paging_queue.paging_queue.v,
+        allocation_info.allocation.v, 0, 0, &packet_seen, &packet_passed);
     (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
                             make_resident.paging_fence_value,
                             "wsl_replay_make_resident");
@@ -12159,6 +12382,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     printf("wsl_trace_replay gpuva=0x%lx pages=0x%lx fence=%lu\n",
            map_gpuva.virtual_address, map_gpuva.size_in_pages,
            map_gpuva.paging_fence_value);
+    wsl_trace_replay_packet_matrix(
+        "map_gpuva", LX_DXMAPGPUVIRTUALADDRESS, sizeof(map_gpuva),
+        sizeof(map_gpuva), create_paging_queue.paging_queue.v,
+        allocation_info.allocation.v, 0, 0, &packet_seen, &packet_passed);
     (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
                             map_gpuva.paging_fence_value,
                             "wsl_replay_map_gpuva");
@@ -12175,6 +12402,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     memset((void *)lock.data, 0, DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
     printf("wsl_trace_replay lock2 data=0x%lx command_len=%u\n",
            lock.data, DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
+    wsl_trace_replay_packet_matrix(
+        "lock2", LX_DXLOCK2, sizeof(lock), sizeof(lock),
+        create_device.device.v, allocation_info.allocation.v, 0, 0,
+        &packet_seen, &packet_passed);
 
     memset(&context_flags, 0, sizeof(context_flags));
     context_flags.hw_queue_supported = 1;
@@ -12196,18 +12427,33 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
         goto cleanup;
     }
     context_created = 1;
+    wsl_trace_replay_packet_matrix(
+        "create_context", LX_DXCREATECONTEXTVIRTUAL,
+        sizeof(struct d3dkmt_createcontextvirtual),
+        sizeof(struct d3dkmt_createcontextvirtual), create_device.device.v,
+        context_handle.v, 0, 0, &packet_seen, &packet_passed);
 
     memset(&submit_context, 0, sizeof(submit_context));
     submit_context.broadcast_context_count = 1;
     submit_context.broadcast_context[0] = context_handle;
-    if (ioctl(fd, LX_DXSUBMITCOMMAND, &submit_context) < 0) {
-        context_empty_rejected = 1;
-        printf("wsl_trace_replay submit_context_empty expected_invalid_parameter context=0x%x\n",
-               context_handle.v);
-    } else {
-        printf("wsl_trace_replay submit_context_empty unexpected_success context=0x%x\n",
-               context_handle.v);
-        goto cleanup;
+    {
+        int submit_context_rc =
+            ioctl(fd, LX_DXSUBMITCOMMAND, &submit_context);
+
+        wsl_trace_replay_packet_matrix(
+            "submit_context_empty", LX_DXSUBMITCOMMAND,
+            sizeof(submit_context), sizeof(submit_context),
+            context_handle.v, context_handle.v, submit_context_rc, 1,
+            &packet_seen, &packet_passed);
+        if (submit_context_rc < 0) {
+            context_empty_rejected = 1;
+            printf("wsl_trace_replay submit_context_empty expected_invalid_parameter context=0x%x\n",
+                   context_handle.v);
+        } else {
+            printf("wsl_trace_replay submit_context_empty unexpected_success context=0x%x\n",
+                   context_handle.v);
+            goto cleanup;
+        }
     }
 
     memset(&hwqueue_flags, 0, sizeof(hwqueue_flags));
@@ -12226,6 +12472,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
            create_hwqueue.queue.v, create_hwqueue.queue_progress_fence.v,
            create_hwqueue.queue_progress_fence_cpu_va,
            create_hwqueue.queue_progress_fence_gpu_va);
+    wsl_trace_replay_packet_matrix(
+        "create_hwqueue", LX_DXCREATEHWQUEUE, sizeof(create_hwqueue),
+        sizeof(create_hwqueue), context_handle.v, create_hwqueue.queue.v,
+        0, 0, &packet_seen, &packet_passed);
 
     make_submit_private(&submit_private, &submit_private_size,
                         map_gpuva.virtual_address,
@@ -12239,16 +12489,26 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter)
     submit_hwqueue.priv_drv_data_size = submit_private_size;
     submit_hwqueue.num_primaries = 1;
     submit_hwqueue.written_primaries = (uint64)allocation_list;
-    if (ioctl(fd, LX_DXSUBMITCOMMANDTOHWQUEUE, &submit_hwqueue) < 0) {
-        hwqueue_synthetic_rejected = 1;
-        printf("wsl_trace_replay submit_hwqueue expected_invalid_parameter queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
-               create_hwqueue.queue.v,
-               submit_hwqueue.hwqueue_progress_fence_id,
-               submit_hwqueue.command_buffer,
-               submit_hwqueue.command_length,
-               submit_hwqueue.priv_drv_data_size);
-        ret = 0;
-        goto cleanup;
+    {
+        int submit_hwqueue_rc =
+            ioctl(fd, LX_DXSUBMITCOMMANDTOHWQUEUE, &submit_hwqueue);
+
+        wsl_trace_replay_packet_matrix(
+            "submit_hwqueue", LX_DXSUBMITCOMMANDTOHWQUEUE,
+            sizeof(submit_hwqueue), sizeof(submit_hwqueue),
+            create_hwqueue.queue.v, allocation_info.allocation.v,
+            submit_hwqueue_rc, 1, &packet_seen, &packet_passed);
+        if (submit_hwqueue_rc < 0) {
+            hwqueue_synthetic_rejected = 1;
+            printf("wsl_trace_replay submit_hwqueue expected_invalid_parameter queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
+                   create_hwqueue.queue.v,
+                   submit_hwqueue.hwqueue_progress_fence_id,
+                   submit_hwqueue.command_buffer,
+                   submit_hwqueue.command_length,
+                   submit_hwqueue.priv_drv_data_size);
+            ret = 0;
+            goto cleanup;
+        }
     }
     printf("wsl_trace_replay submit_hwqueue unexpected_success queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
            create_hwqueue.queue.v,
@@ -12342,6 +12602,17 @@ cleanup:
         printf("wsl_trace_replay missing_expected_rejection context=%d hwqueue=%d\n",
                context_empty_rejected, hwqueue_synthetic_rejected);
         ret = -1;
+    }
+    if (ret == 0) {
+        printf("wsl_trace_replay_signature adapter:%x:%x trace=/tmp/xv6-wsl-probe/mesaglfeature-nvidia-live.trace equivalence=synthetic_invalid_parameter driver_store_hash:%08x umd_type0_size:%u context_priv:%u hwqueue_priv:%u submit_priv:%u packets:%u/%u same_adapter_source=selected_openadapter_luid status=%s\n",
+               adapter_luid.b, adapter_luid.a, 0U, 9300U,
+               (uint32)sizeof(context_private_data),
+               create_hwqueue.priv_drv_data_size, submit_private_size,
+               packet_passed, packet_seen,
+               packet_seen != 0 && packet_seen == packet_passed ?
+               "PASS" : "FAIL");
+        if (packet_seen == 0 || packet_seen != packet_passed)
+            ret = -1;
     }
     if (ret == 0)
         printf("wsl_trace_replay ok equivalence=synthetic_invalid_parameter\n");
@@ -12628,6 +12899,9 @@ int main(int argc, char **argv)
                  strcmp(argv[i],
                         "--shared-seal-provenance-validate") == 0)
             g_shared_seal_provenance_validate = 1;
+        else if (strcmp(argv[i], "--shared-mutation") == 0 ||
+                 strcmp(argv[i], "--shared-mutation-validate") == 0)
+            g_shared_mutation_validate = 1;
         else if (strcmp(argv[i], "--qai-admission") == 0 ||
                  strcmp(argv[i], "--qai-admission-validate") == 0)
             g_qai_admission_validate = 1;
@@ -12885,7 +13159,8 @@ int main(int argc, char **argv)
         goto close_adapter;
     }
     if (wsl_trace_replay) {
-        if (probe_wsl_trace_replay(fd, open_luid.adapter_handle) < 0)
+        if (probe_wsl_trace_replay(fd, open_luid.adapter_handle,
+                                   open_luid.adapter_luid) < 0)
             ret = 1;
         goto close_adapter;
     }
@@ -12995,6 +13270,23 @@ int main(int argc, char **argv)
                                   &validate_device) < 0 ||
             probe_shared_seal_provenance_contract(validate_fd,
                                                   validate_device) < 0)
+            ret = 1;
+        if (validate_fd >= 0)
+            close_dxg_device(validate_fd, validate_adapter,
+                             validate_device);
+        goto close_adapter;
+    }
+    if (g_shared_mutation_validate) {
+        struct d3dkmthandle validate_adapter;
+        struct d3dkmthandle validate_device;
+        int validate_fd = -1;
+
+        memset(&validate_adapter, 0, sizeof(validate_adapter));
+        memset(&validate_device, 0, sizeof(validate_device));
+        if (open_first_dxg_device(&validate_fd, &validate_adapter,
+                                  &validate_device) < 0 ||
+            probe_shared_mutation_contract(validate_fd,
+                                           validate_device) < 0)
             ret = 1;
         if (validate_fd >= 0)
             close_dxg_device(validate_fd, validate_adapter,

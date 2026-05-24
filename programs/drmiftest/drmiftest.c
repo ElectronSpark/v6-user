@@ -144,6 +144,7 @@ struct atomic_fence_credit_snapshot {
     uint64 kms_atomic_out_fence_test_only_placeholders;
     uint64 kms_atomic_out_fence_fd_exports;
     uint64 kms_atomic_out_fence_display_correlated;
+    uint64 kms_atomic_out_fence_software_scanout_correlated;
 };
 
 static int read_atomic_fence_credit_snapshot(
@@ -192,6 +193,8 @@ static int read_atomic_fence_credit_snapshot(
         stats.kms_atomic_out_fence_fd_exports;
     snap->kms_atomic_out_fence_display_correlated =
         stats.kms_atomic_out_fence_display_correlated;
+    snap->kms_atomic_out_fence_software_scanout_correlated =
+        stats.kms_atomic_out_fence_software_scanout_correlated;
     return 0;
 }
 
@@ -543,6 +546,7 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
     uint64 out_fence_cleanup_delta = 0;
     uint64 test_only_out_placeholder_delta = 0;
     uint64 out_fence_display_correlated_delta = 0;
+    uint64 out_fence_software_scanout_correlated_delta = 0;
     int out_fence_software = 0;
     int out_fence_immediate = 0;
     int invalid_out_reject = 0;
@@ -720,6 +724,9 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
     out_fence_display_correlated_delta =
         after.kms_atomic_out_fence_display_correlated -
         before.kms_atomic_out_fence_display_correlated;
+    out_fence_software_scanout_correlated_delta =
+        after.kms_atomic_out_fence_software_scanout_correlated -
+        before.kms_atomic_out_fence_software_scanout_correlated;
     if (atomic_fence_credit_clean(&before, &after, 1) < 0)
         return fail("atomic fence matrix granted native credit");
     if (!closed_reject)
@@ -751,11 +758,13 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
         return fail("atomic OUT_FENCE_PTR was not prepared");
     if (out_fence_cleanup_delta < 1)
         return fail("atomic OUT_FENCE_PTR copyout cleanup not observed");
-    if (out_fence_display_correlated_delta == 0)
-        return fail("atomic OUT_FENCE_PTR lacked display completion credit");
+    if (out_fence_display_correlated_delta != 0)
+        return fail("atomic OUT_FENCE_PTR claimed native display credit");
+    if (out_fence_software_scanout_correlated_delta == 0)
+        return fail("atomic OUT_FENCE_PTR lacked software scanout credit");
     out_fence_software = out_exported && out_query_ok;
     out_fence_immediate = out_fence_software &&
-        out_fence_display_correlated_delta == 0;
+        out_fence_software_scanout_correlated_delta == 0;
 
     if (in_accept && out_exported) {
         kernel = "real";
@@ -791,8 +800,10 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
            "atomic_out_fence_placeholder=%d "
            "atomic_out_fence_software=%d "
            "atomic_out_fence_immediate=%d "
-           "atomic_out_fence_display_correlated=1 "
+           "atomic_out_fence_display_correlated=0 "
            "out_fence_display_correlated_delta=%lu "
+           "atomic_out_fence_software_scanout_correlated=1 "
+           "out_fence_software_scanout_correlated_delta=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            kernel, in_accept, closed_reject || in_fail_closed,
            in_fail_closed, closed_reject, future_reject, nonblock_reject,
@@ -806,16 +817,20 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
            invalid_out_state_unchanged, out_fence_prepared_delta,
            out_fence_cleanup_delta, out_exported, out_query_ok,
            out_placeholder, out_fence_software, out_fence_immediate,
-           out_fence_display_correlated_delta, status);
+           out_fence_display_correlated_delta,
+           out_fence_software_scanout_correlated_delta, status);
     printf("drmiftest: atomic_out_fence_provenance_matrix "
-           "out_fence_source=display_correlated_commit "
+           "out_fence_source=software_scanout_commit "
            "out_fence_software=%d out_fence_immediate=%d "
-           "out_fence_display_correlated=1 "
-           "out_fence_completion_deferred=1 "
+           "out_fence_display_correlated=0 "
+           "out_fence_software_scanout_correlated=1 "
+           "out_fence_completion_deferred=0 "
            "out_fence_display_correlated_delta=%lu "
+           "out_fence_software_scanout_correlated_delta=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
            out_fence_software, out_fence_immediate,
-           out_fence_display_correlated_delta);
+           out_fence_display_correlated_delta,
+           out_fence_software_scanout_correlated_delta);
     return 0;
 }
 
@@ -979,8 +994,11 @@ static int check_common(int fd, const char *node)
         return fail("SYNCOBJ cap query failed");
     if (get_cap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &value) < 0)
         return fail("SYNCOBJ_TIMELINE cap query failed");
+    if (get_cap(fd, DRM_CAP_ADDFB2_MODIFIERS, &value) < 0 ||
+        value != 1)
+        return fail("ADDFB2_MODIFIERS cap failed");
 
-    printf("drmiftest: common ok node=%s driver=%s unique=%s\n",
+    printf("drmiftest: common ok node=%s driver=%s unique=%s addfb2_modifiers=1\n",
            node, name, unique);
     return 0;
 }
@@ -1869,6 +1887,10 @@ static int check_kms_fb(int fd)
             present_fail_before.kms_atomic_out_fence_fd_exports ||
         present_fail_after.kms_atomic_out_fence_display_correlated !=
             present_fail_before.kms_atomic_out_fence_display_correlated ||
+        present_fail_after.
+                kms_atomic_out_fence_software_scanout_correlated !=
+            present_fail_before.
+                kms_atomic_out_fence_software_scanout_correlated ||
         present_fail_after.display_presents !=
             present_fail_before.display_presents ||
         present_fail_after.display_completions !=
@@ -1911,7 +1933,9 @@ static int check_kms_fb(int fd)
            "out_fence_cleanup_delta=%lu "
            "out_fence_test_only_placeholders_delta=%lu "
            "out_fence_exports_delta=%lu "
-           "out_fence_display_correlated_delta=%lu display_delta=%lu/%lu "
+           "out_fence_display_correlated_delta=%lu "
+           "out_fence_software_scanout_correlated_delta=%lu "
+           "display_delta=%lu/%lu "
            "dxg_present_delta=%lu/%lu native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n",
            present_fail_after.kms_vblank_page_flip_events -
@@ -1943,6 +1967,10 @@ static int check_kms_fb(int fd)
                present_fail_before.kms_atomic_out_fence_fd_exports,
            present_fail_after.kms_atomic_out_fence_display_correlated -
                present_fail_before.kms_atomic_out_fence_display_correlated,
+           present_fail_after.
+                   kms_atomic_out_fence_software_scanout_correlated -
+               present_fail_before.
+                   kms_atomic_out_fence_software_scanout_correlated,
            present_fail_after.display_presents -
                present_fail_before.display_presents,
            present_fail_after.display_completions -
@@ -2731,6 +2759,167 @@ static int check_syncobj_transfer_wakeup(int fd, uint32 src, uint32 dst)
     return 0;
 }
 
+static int check_syncobj_pending_transfer(int fd)
+{
+    struct drm_syncobj_create_compat create;
+    struct drm_syncobj_destroy_compat destroy;
+    struct drm_syncobj_transfer_compat transfer;
+    struct drm_syncobj_timeline_array_compat signal_req;
+    struct drm_syncobj_timeline_wait_compat wait_req;
+    struct fb_gpu_stats before;
+    struct fb_gpu_stats after;
+    uint32 src = 0;
+    uint32 dst = 0;
+    uint32 src_handle;
+    uint64 src_point;
+    uint32 dst_handle;
+    uint64 dst_point;
+    int pipefd[2];
+    char ready;
+    int pid = -1;
+    int queued;
+    int transfer_pending = 0;
+    int dst_wait_pending = 0;
+    int source_signal = 0;
+    int dst_wait_after_signal = 0;
+    int child_ok = 0;
+    int ret = 1;
+
+    if (get_fb_stats(&before) < 0)
+        return fail("SYNCOBJ pending transfer stats before unavailable");
+
+    memset(&create, 0, sizeof(create));
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &create) < 0 ||
+        create.handle == 0)
+        return fail("SYNCOBJ pending transfer source create failed");
+    src = create.handle;
+
+    memset(&create, 0, sizeof(create));
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &create) < 0 ||
+        create.handle == 0)
+        goto out;
+    dst = create.handle;
+
+    if (pipe(pipefd) < 0)
+        goto out;
+    pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        goto out;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        syncobj_wait_wakeup_child(fd, dst, 9, 1, pipefd[1]);
+    }
+    close(pipefd[1]);
+    if (read(pipefd[0], &ready, 1) != 1) {
+        close(pipefd[0]);
+        goto out;
+    }
+    close(pipefd[0]);
+    queued = wait_for_syncobj_wait_queued(before.syncobj_wait_queued);
+
+    memset(&transfer, 0, sizeof(transfer));
+    transfer.src_handle = src;
+    transfer.dst_handle = dst;
+    transfer.src_point = 3;
+    transfer.dst_point = 9;
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TRANSFER, &transfer) == 0)
+        transfer_pending = 1;
+
+    dst_handle = dst;
+    dst_point = 9;
+    memset(&wait_req, 0, sizeof(wait_req));
+    wait_req.handles = (uint64)&dst_handle;
+    wait_req.points = (uint64)&dst_point;
+    wait_req.count_handles = 1;
+    wait_req.timeout_nsec = 0;
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &wait_req) < 0)
+        dst_wait_pending = 1;
+
+    src_handle = src;
+    src_point = 3;
+    memset(&signal_req, 0, sizeof(signal_req));
+    signal_req.handles = (uint64)&src_handle;
+    signal_req.points = (uint64)&src_point;
+    signal_req.count_handles = 1;
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, &signal_req) == 0)
+        source_signal = 1;
+
+    if (queued == 0 && wait_one_child(pid) == 0) {
+        child_ok = 1;
+        pid = -1;
+    }
+
+    memset(&wait_req, 0, sizeof(wait_req));
+    wait_req.handles = (uint64)&dst_handle;
+    wait_req.points = (uint64)&dst_point;
+    wait_req.count_handles = 1;
+    wait_req.timeout_nsec = 0;
+    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &wait_req) == 0)
+        dst_wait_after_signal = 1;
+
+    if (get_fb_stats(&after) < 0)
+        goto out;
+
+    if (transfer_pending && dst_wait_pending && source_signal &&
+        child_ok && dst_wait_after_signal &&
+        after.syncobj_pending_transfers >=
+            before.syncobj_pending_transfers + 1 &&
+        after.syncobj_pending_transfer_wakeups >=
+            before.syncobj_pending_transfer_wakeups + 1 &&
+        after.syncobj_wait_wakeups >= before.syncobj_wait_wakeups + 1) {
+        printf("drmiftest: syncobj_pending_transfer_matrix "
+               "transfer_before_signal=PASS dst_wait_pending=PASS "
+               "source_signal=PASS child_wait_woke=PASS "
+               "dst_wait_after_signal=PASS pending_transfers_delta=%lu "
+               "pending_transfer_wakeups_delta=%lu "
+               "wait_wakeups_delta=%lu native_present_credit=0 "
+               "opengl_submit_credit=0 status=PASS\n",
+               after.syncobj_pending_transfers -
+                   before.syncobj_pending_transfers,
+               after.syncobj_pending_transfer_wakeups -
+                   before.syncobj_pending_transfer_wakeups,
+               after.syncobj_wait_wakeups - before.syncobj_wait_wakeups);
+        ret = 0;
+    } else {
+        printf("drmiftest: syncobj_pending_transfer_matrix "
+               "transfer_before_signal=%s dst_wait_pending=%s "
+               "source_signal=%s child_wait_woke=%s "
+               "dst_wait_after_signal=%s pending_transfers_delta=%lu "
+               "pending_transfer_wakeups_delta=%lu "
+               "wait_wakeups_delta=%lu status=FAIL\n",
+               transfer_pending ? "PASS" : "FAIL",
+               dst_wait_pending ? "PASS" : "FAIL",
+               source_signal ? "PASS" : "FAIL",
+               child_ok ? "PASS" : "FAIL",
+               dst_wait_after_signal ? "PASS" : "FAIL",
+               after.syncobj_pending_transfers -
+                   before.syncobj_pending_transfers,
+               after.syncobj_pending_transfer_wakeups -
+                   before.syncobj_pending_transfer_wakeups,
+               after.syncobj_wait_wakeups - before.syncobj_wait_wakeups);
+    }
+
+out:
+    if (pid > 0)
+        (void)wait_one_child(pid);
+    if (dst != 0) {
+        memset(&destroy, 0, sizeof(destroy));
+        destroy.handle = dst;
+        ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+    }
+    if (src != 0) {
+        memset(&destroy, 0, sizeof(destroy));
+        destroy.handle = src;
+        ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+    }
+    if (ret != 0)
+        return fail("SYNCOBJ pending transfer matrix failed");
+    return 0;
+}
+
 static int check_sync_file_pending_matrix(int fd)
 {
     struct drm_syncobj_create_compat create;
@@ -3049,6 +3238,7 @@ static int check_syncobj(int fd)
     int closed_fd_rejected = 0;
     int signal_wakeup = 0;
     int transfer_wakeup = 0;
+    int pending_transfer = 0;
     uint64 wait_callbacks_armed_delta;
     uint64 wait_callbacks_fired_delta;
     uint64 wait_callbacks_cancelled_delta;
@@ -3218,6 +3408,10 @@ static int check_syncobj(int fd)
         transfer_wakeup = 1;
     else
         return fail("SYNCOBJ transfer wakeup probe failed");
+    if (check_syncobj_pending_transfer(fd) == 0)
+        pending_transfer = 1;
+    else
+        return fail("SYNCOBJ pending transfer probe failed");
     points[0] = 5;
     memset(&timeline_wait, 0, sizeof(timeline_wait));
     timeline_wait.handles = (uint64)&handles[1];
@@ -3449,7 +3643,8 @@ static int check_syncobj(int fd)
            "attach_sync_file_import_delta=%lu "
            "attach_syncobj_signal_delta=%lu "
            "attach_syncobj_wait_delta=%lu live_delta=0 "
-           "signal_wakeup=%s transfer_wakeup=%s timeout_separate=PASS "
+           "signal_wakeup=%s transfer_wakeup=%s "
+           "pending_transfer=PASS timeout_separate=PASS "
            "finite_timeout_rejected=1 stale_handle_rejected=1 "
            "future_timeline_rejected=1 status=PASS\n",
            sync_after.syncobj_created - sync_before.syncobj_created,
@@ -3477,10 +3672,11 @@ static int check_syncobj(int fd)
            sync_after.ttm_resv_attach_syncobj_wait -
                sync_before.ttm_resv_attach_syncobj_wait,
            signal_wakeup ? "PASS" : "FAIL",
-           transfer_wakeup ? "PASS" : "FAIL");
+           transfer_wakeup && pending_transfer ? "PASS" : "FAIL");
     printf("drmiftest: syncobj_wakeup_provenance_matrix "
            "signal_wait_queued=PASS signal_wake=%s "
            "transfer_wait_queued=PASS transfer_wake=%s "
+           "pending_transfer_wake=PASS "
            "wait_queued_delta=%lu wakeups_delta=%lu "
            "wait_callbacks_armed_delta=%lu "
            "wait_callbacks_fired_delta=%lu "
@@ -3488,7 +3684,7 @@ static int check_syncobj(int fd)
            "attach_syncobj_wait_delta=%lu attach_syncobj_signal_delta=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
            signal_wakeup ? "PASS" : "FAIL",
-           transfer_wakeup ? "PASS" : "FAIL",
+           transfer_wakeup && pending_transfer ? "PASS" : "FAIL",
            sync_after.syncobj_wait_queued - sync_before.syncobj_wait_queued,
            sync_after.syncobj_wait_wakeups -
                sync_before.syncobj_wait_wakeups,
