@@ -163,6 +163,27 @@ struct dxg_cpu_event_signal_status {
 static int read_cpu_event_signal_status(
     struct dxg_cpu_event_signal_status *out);
 
+struct dxg_async_send_status {
+    uint32 enabled;
+    uint32 attempts;
+    uint32 successes;
+    uint32 fallback_sync;
+    uint32 cmd;
+    uint32 cmd_len;
+    uint32 wire_len;
+    uint32 async_bit;
+    uint32 route_global;
+    uint32 retries;
+    uint32 packet_type;
+    int32 ret;
+    uint32 submit;
+    uint32 signal;
+    uint32 waitgpu;
+    uint32 submithwqueue;
+};
+
+static int read_async_send_status(struct dxg_async_send_status *out);
+
 static int parse_u32_option_value(const char *value, uint32 *out)
 {
     uint64 parsed = 0;
@@ -2924,6 +2945,46 @@ static int read_cpu_event_signal_status(
     dxg_parse_uint_after(line, "active:", &out->active);
     dxg_parse_uint_after(line, "allocs:", &out->allocs);
     dxg_parse_uint_after(line, "removes:", &out->removes);
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_async_send_status(struct dxg_async_send_status *out)
+{
+    char *buf;
+    char *line;
+    uint32 tmp = 0;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    line = dxg_find_text(buf, "dxg_async_send_last=");
+    if (line == 0)
+        goto out_free;
+    dxg_parse_uint_after(line, "enabled:", &out->enabled);
+    dxg_parse_uint_after(line, "attempts:", &out->attempts);
+    dxg_parse_uint_after(line, "successes:", &out->successes);
+    dxg_parse_uint_after(line, "fallback_sync:", &out->fallback_sync);
+    dxg_parse_uint_after(line, "cmd:", &out->cmd);
+    dxg_parse_uint_after(line, "cmd_len:", &out->cmd_len);
+    dxg_parse_uint_after(line, "wire_len:", &out->wire_len);
+    dxg_parse_uint_after(line, "async_bit:", &out->async_bit);
+    dxg_parse_uint_after(line, "route_global:", &out->route_global);
+    dxg_parse_uint_after(line, "retries:", &out->retries);
+    dxg_parse_uint_after(line, "packet_type:", &out->packet_type);
+    if (dxg_parse_uint_after(line, "ret:", &tmp) == 0)
+        out->ret = (int32)tmp;
+    dxg_parse_uint_after(line, "submit:", &out->submit);
+    dxg_parse_uint_after(line, "signal:", &out->signal);
+    dxg_parse_uint_after(line, "waitgpu:", &out->waitgpu);
+    dxg_parse_uint_after(line, "submithwqueue:", &out->submithwqueue);
     ret = 0;
 
 out_free:
@@ -10716,6 +10777,44 @@ sync_probe_done:
                 probe_hwqueue(fd, context_handle, create_sync.sync_object,
                               context_private_data,
                               sizeof(context_private_data));
+            {
+                struct dxg_async_send_status async_status;
+                int async_rc;
+                int pass = 0;
+                const char *state = "FAIL";
+
+                memset(&async_status, 0, sizeof(async_status));
+                async_rc = read_async_send_status(&async_status);
+                if (async_rc == 0 && async_status.enabled == 0 &&
+                    async_status.fallback_sync > 0) {
+                    pass = 1;
+                    state = "DEFERRED";
+                } else if (async_rc == 0 && async_status.enabled != 0) {
+                    pass = async_status.attempts > 0 &&
+                           async_status.successes > 0 &&
+                           async_status.async_bit == 1 &&
+                           async_status.route_global == 1 &&
+                           async_status.packet_type == 6 &&
+                           async_status.ret == 0 &&
+                           async_status.submit > 0 &&
+                           async_status.signal > 0 &&
+                           async_status.waitgpu > 0 &&
+                           (context_sync_only ||
+                            async_status.submithwqueue > 0);
+                    state = pass ? "PASS" : "FAIL";
+                }
+                printf("dxg_async_message_matrix rc=%d enabled=%u attempts=%u successes=%u fallback_sync=%u cmd=%u cmd_len=%u wire_len=%u async_bit=%u route_global=%u packet_type=%u ret=%d submit=%u signal=%u waitgpu=%u submithwqueue=%u status=%s\n",
+                       async_rc, async_status.enabled, async_status.attempts,
+                       async_status.successes, async_status.fallback_sync,
+                       async_status.cmd, async_status.cmd_len,
+                       async_status.wire_len, async_status.async_bit,
+                       async_status.route_global, async_status.packet_type,
+                       async_status.ret, async_status.submit,
+                       async_status.signal, async_status.waitgpu,
+                       async_status.submithwqueue, state);
+                if (!pass)
+                    ret = -1;
+            }
         } else {
             printf("submit_probe skipped; use --try-submit to repro unsupported Hyper-V submit path\n");
         }
