@@ -26,6 +26,7 @@ static int g_shared_exporter_close_lifetime_validate;
 static int g_scanout_pin_lifetime_validate;
 static int g_import_negative_validate;
 static int g_shared_seal_provenance_validate;
+static int g_qai_admission_validate;
 static uint32 g_residency_batch_count = 2;
 static uint32 g_residency_batch_flags = 0x1;
 static uint32 g_requested_adapter_index = D3DKMT_ADAPTERS_MAX;
@@ -720,6 +721,178 @@ static void query_adapter_raw(int fd, struct d3dkmthandle adapter,
            private_data[24], private_data[25], private_data[26],
            private_data[27], private_data[28], private_data[29],
            private_data[30], private_data[31]);
+}
+
+struct qai_admission_row {
+    const char *route;
+    uint32 type;
+    uint32 requested_size;
+    int rc;
+    uint32 result_size;
+    uint32 head_hash;
+    unsigned char head[16];
+};
+
+static uint32 dxgprobe_hash_bytes(const unsigned char *buf, uint32 len)
+{
+    uint32 hash = 2166136261U;
+
+    for (uint32 i = 0; i < len; i++) {
+        hash ^= buf[i];
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static int probe_qai_admission_row(int fd, struct d3dkmthandle adapter,
+                                   const char *route, uint32 type,
+                                   uint32 size,
+                                   struct qai_admission_row *row)
+{
+    static unsigned char private_data[9300];
+    struct d3dkmt_queryadapterinfo query;
+    uint32 head_len;
+
+    memset(row, 0, sizeof(*row));
+    row->route = route;
+    row->type = type;
+    row->requested_size = size;
+    row->result_size = size;
+    memset(private_data, 0, sizeof(private_data));
+    memset(&query, 0, sizeof(query));
+    if (size > sizeof(private_data))
+        size = sizeof(private_data);
+    query.adapter = adapter;
+    query.type = (enum kmtqueryadapterinfotype)type;
+    query.private_data = (uint64)private_data;
+    query.private_data_size = size;
+    row->rc = ioctl(fd, LX_DXQUERYADAPTERINFO, &query);
+    row->result_size = query.private_data_size;
+    head_len = row->result_size;
+    if (head_len > sizeof(row->head))
+        head_len = sizeof(row->head);
+    if (row->rc >= 0 && head_len != 0) {
+        memcpy(row->head, private_data, head_len);
+        row->head_hash = dxgprobe_hash_bytes(private_data,
+                                             row->result_size);
+    }
+    printf("qai_admission_row route=%s type=%u requested_size=%u result_size=%u rc=%d status=%s head_hash=0x%x head=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+           route, type, row->requested_size, row->result_size, row->rc,
+           row->rc < 0 ? "FAIL" : "PASS", row->head_hash,
+           row->head[0], row->head[1], row->head[2], row->head[3],
+           row->head[4], row->head[5], row->head[6], row->head[7],
+           row->head[8], row->head[9], row->head[10], row->head[11],
+           row->head[12], row->head[13], row->head[14], row->head[15]);
+    return row->rc;
+}
+
+static int probe_qai_admission_route(int fd, struct winluid luid,
+                                     const char *route,
+                                     struct qai_admission_row rows[3])
+{
+    struct d3dkmt_openadapterfromluid open_luid;
+    int ret = 0;
+
+    memset(&open_luid, 0, sizeof(open_luid));
+    open_luid.adapter_luid = luid;
+    if (ioctl(fd, LX_DXOPENADAPTERFROMLUID, &open_luid) < 0 ||
+        open_luid.adapter_handle.v == 0) {
+        printf("qai_admission_route route=%s open_adapter=FAIL luid=%x:%x handle=0x%x\n",
+               route, luid.b, luid.a, open_luid.adapter_handle.v);
+        return -2;
+    }
+    printf("qai_admission_route route=%s open_adapter=PASS luid=%x:%x handle=0x%x\n",
+           route, luid.b, luid.a, open_luid.adapter_handle.v);
+    if (probe_qai_admission_row(fd, open_luid.adapter_handle, route,
+                                _KMTQAITYPE_UMDRIVERPRIVATE, 9300,
+                                &rows[0]) < 0)
+        ret = -1;
+    if (probe_qai_admission_row(fd, open_luid.adapter_handle, route, 27, 4,
+                                &rows[1]) < 0)
+        ret = -1;
+    if (probe_qai_admission_row(fd, open_luid.adapter_handle, route,
+                                _KMTQAITYPE_QUERYREGISTRY, 4096,
+                                &rows[2]) < 0)
+        ret = -1;
+    return ret;
+}
+
+static uint32 probe_backend_opengl_submit_flag(void)
+{
+    struct fb_gpu_backend_info backend;
+    int fb_fd;
+    uint32 enabled = 0;
+
+    fb_fd = open("/dev/gpu0", O_RDONLY);
+    if (fb_fd < 0)
+        fb_fd = open("/dev/fb0", O_RDONLY);
+    memset(&backend, 0, sizeof(backend));
+    if (fb_fd >= 0 && ioctl(fb_fd, FB_GPU_BACKEND_QUERY, &backend) == 0)
+        enabled = (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0;
+    if (fb_fd >= 0)
+        close(fb_fd);
+    printf("qai_admission_backend backend=%u flags=0x%x backend_opengl_submit=%u name=%s\n",
+           backend.backend, backend.flags, enabled, backend.name);
+    return enabled;
+}
+
+static int probe_qai_admission_validate(int fd)
+{
+    struct d3dkmt_adapterinfo enum2[D3DKMT_ADAPTERS_MAX];
+    struct d3dkmt_adapterinfo enum3[D3DKMT_ADAPTERS_MAX];
+    struct qai_admission_row direct_rows[3];
+    struct qai_admission_row list_rows[3];
+    uint32 enum2_count = 0;
+    uint32 enum3_count = 0;
+    uint32 enum2_index = D3DKMT_ADAPTERS_MAX;
+    uint32 enum3_index = D3DKMT_ADAPTERS_MAX;
+    uint32 direct_list_luid_match;
+    uint32 backend_submit;
+    int direct_ret;
+    int list_ret;
+
+    if (enum_dxg_adapters2_list(fd, enum2, &enum2_count,
+                                "qai_admission") < 0 ||
+        select_dxg_adapter_index(enum2, enum2_count, &enum2_index,
+                                 "qai-direct-enum2", fd) < 0)
+        return -1;
+    if (enum_dxg_adapters3_list(fd, enum3, &enum3_count) < 0 ||
+        select_dxg_adapter_index(enum3, enum3_count, &enum3_index,
+                                 "qai-list-enum3", fd) < 0)
+        return -1;
+    direct_list_luid_match =
+        enum2[enum2_index].adapter_luid.a == enum3[enum3_index].adapter_luid.a &&
+        enum2[enum2_index].adapter_luid.b == enum3[enum3_index].adapter_luid.b;
+    printf("qai_admission_selection direct_count=%u direct_index=%u direct_handle=0x%x direct_luid=%x:%x direct_sources=%u list_count=%u list_index=%u list_handle=0x%x list_luid=%x:%x list_sources=%u direct_list_luid_match=%u create_adapter_list_d3d12_graphics=modelled-by-enum3\n",
+           enum2_count, enum2_index, enum2[enum2_index].adapter_handle.v,
+           enum2[enum2_index].adapter_luid.b,
+           enum2[enum2_index].adapter_luid.a,
+           enum2[enum2_index].num_sources, enum3_count, enum3_index,
+           enum3[enum3_index].adapter_handle.v,
+           enum3[enum3_index].adapter_luid.b,
+           enum3[enum3_index].adapter_luid.a,
+           enum3[enum3_index].num_sources, direct_list_luid_match);
+    direct_ret = probe_qai_admission_route(fd,
+                                           enum2[enum2_index].adapter_luid,
+                                           "direct-openadapterfromluid",
+                                           direct_rows);
+    list_ret = probe_qai_admission_route(fd,
+                                         enum3[enum3_index].adapter_luid,
+                                         "create-adapter-list-d3d12-graphics",
+                                         list_rows);
+    backend_submit = probe_backend_opengl_submit_flag();
+    printf("qai_admission_matrix direct_count=%u list_count=%u direct_luid=%x:%x list_luid=%x:%x direct_list_luid_match=%u direct_type0_rc=%d direct_type27_rc=%d direct_type48_rc=%d list_type0_rc=%d list_type27_rc=%d list_type48_rc=%d backend_opengl_submit=%u wsl_trace=/tmp/xv6-wsl-probe/wave77-wsl-qai-admission-type0-9300.trace wsl_type0_size=9300 wsl_type27_size=4 wsl_type48_size=4096 divergence_class=nonblocking-admission-proven-before-export status=%s\n",
+           enum2_count, enum3_count, enum2[enum2_index].adapter_luid.b,
+           enum2[enum2_index].adapter_luid.a,
+           enum3[enum3_index].adapter_luid.b,
+           enum3[enum3_index].adapter_luid.a, direct_list_luid_match,
+           direct_rows[0].rc, direct_rows[1].rc, direct_rows[2].rc,
+           list_rows[0].rc, list_rows[1].rc, list_rows[2].rc,
+           backend_submit,
+           direct_list_luid_match && backend_submit == 0 &&
+           direct_ret != -2 && list_ret != -2 ? "PASS" : "FAIL");
+    return direct_list_luid_match && backend_submit == 0 &&
+           direct_ret != -2 && list_ret != -2 ? 0 : -1;
 }
 
 static void query_adapter_dxcore_raw(int fd, struct d3dkmthandle adapter)
@@ -3467,6 +3640,36 @@ struct dxg_shared_resource_diag {
     uint32 open_seal_after;
     uint32 open_fd_kind;
     uint32 open_fd_refs;
+
+    uint32 record_seen;
+    uint32 record_valid;
+    uint32 record_stage;
+    uint32 record_key_process;
+    uint32 record_key_object;
+    uint32 record_key_nt;
+    uint32 record_source_process;
+    uint32 record_source_generation;
+    uint32 record_resource;
+    uint32 record_allocation;
+    uint32 record_sealed;
+    uint32 record_sealed_generation;
+    uint32 record_seal_before_fd;
+    uint32 record_allocs;
+    uint32 record_runtime_size;
+    uint32 record_resource_size;
+    uint32 record_total_size;
+    uint32 record_alloc0_priv;
+    uint32 record_runtime_hash;
+    uint32 record_resource_hash;
+    uint32 record_total_hash;
+    uint32 record_alloc0_hash;
+    uint32 record_refs;
+    uint32 record_query_count;
+    uint32 record_open_count;
+    uint32 record_fd_publish_count;
+    int32 record_local_admit_ret;
+    uint32 record_local_exact;
+    uint32 record_mutated;
 };
 
 struct dxg_present_credit_status {
@@ -5361,6 +5564,32 @@ static int dxg_parse_size_hash_after(char *line, const char *name,
     return 0;
 }
 
+static int dxg_parse_hex_after(char *line, const char *name, uint32 *out)
+{
+    char *p;
+    uint64 value = 0;
+    int seen = 0;
+
+    p = dxg_find_text(line, name);
+    if (p == 0)
+        return -1;
+    p += strlen(name);
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+        p += 2;
+    for (; *p != 0; p++) {
+        int digit = dxg_status_hex_nibble(*p);
+
+        if (digit < 0)
+            break;
+        value = value * 16 + (uint64)digit;
+        seen = 1;
+    }
+    if (!seen)
+        return -1;
+    *out = (uint32)value;
+    return 0;
+}
+
 static int read_dxg_shared_resource_diag(struct dxg_shared_resource_diag *out)
 {
     char *buf;
@@ -5484,6 +5713,84 @@ static int read_dxg_shared_resource_diag(struct dxg_shared_resource_diag *out)
                                   &out->open_seal_after);
         dxg_parse_uint_after(line, "fd_kind:", &out->open_fd_kind);
         dxg_parse_uint_after(line, "fd_refs:", &out->open_fd_refs);
+    }
+
+    line = dxg_find_text(buf, "dxg_sharedresource_record=");
+    if (line != 0) {
+        uint32 admit = 0;
+
+        out->record_seen = 1;
+        dxg_parse_uint_after(line, "valid:", &out->record_valid);
+        dxg_parse_uint_after(line, "stage:", &out->record_stage);
+        dxg_parse_uint_after(line, "/p", &out->record_key_process);
+        dxg_parse_uint_after(line, "/o", &out->record_key_object);
+        dxg_parse_uint_after(line, "/nt", &out->record_key_nt);
+        dxg_parse_uint_after(line, "source:proc",
+                             &out->record_source_process);
+        dxg_parse_uint_after(line, "/gen",
+                             &out->record_source_generation);
+        dxg_parse_uint_after(line, "res:", &out->record_resource);
+        dxg_parse_uint_after(line, "alloc0:", &out->record_allocation);
+        dxg_parse_uint_after(line, "sealed:", &out->record_sealed);
+        dxg_parse_uint_after(line, "gen:",
+                             &out->record_sealed_generation);
+        dxg_parse_uint_after(line, "before_fd:",
+                             &out->record_seal_before_fd);
+        dxg_parse_uint_after(line, "allocs:", &out->record_allocs);
+        dxg_parse_uint_after(line, "sizes:",
+                             &out->record_runtime_size);
+        {
+            char *sizes = dxg_find_text(line, "sizes:");
+
+            if (sizes != 0) {
+                char *slash = dxg_find_text(sizes, "/");
+
+                if (slash != 0) {
+                    dxg_parse_uint_after(slash, "/",
+                                         &out->record_resource_size);
+                    slash = dxg_find_text(slash + 1, "/");
+                }
+                if (slash != 0) {
+                    dxg_parse_uint_after(slash, "/",
+                                         &out->record_total_size);
+                    slash = dxg_find_text(slash + 1, "/");
+                }
+                if (slash != 0)
+                    dxg_parse_uint_after(slash, "/",
+                                         &out->record_alloc0_priv);
+            }
+        }
+        dxg_parse_hex_after(line, "hashes:",
+                             &out->record_runtime_hash);
+        {
+            char *hashes = dxg_find_text(line, "hashes:");
+
+            if (hashes != 0) {
+                char *slash = dxg_find_text(hashes, "/");
+
+                if (slash != 0) {
+                    dxg_parse_hex_after(slash, "/",
+                                         &out->record_resource_hash);
+                    slash = dxg_find_text(slash + 1, "/");
+                }
+                if (slash != 0) {
+                    dxg_parse_hex_after(slash, "/",
+                                         &out->record_total_hash);
+                    slash = dxg_find_text(slash + 1, "/");
+                }
+                if (slash != 0)
+                    dxg_parse_hex_after(slash, "/",
+                                         &out->record_alloc0_hash);
+            }
+        }
+        dxg_parse_uint_after(line, "refs:", &out->record_refs);
+        dxg_parse_uint_after(line, "query:", &out->record_query_count);
+        dxg_parse_uint_after(line, "open:", &out->record_open_count);
+        dxg_parse_uint_after(line, "fd:", &out->record_fd_publish_count);
+        if (dxg_parse_uint_after(line, "admit:", &admit) == 0)
+            out->record_local_admit_ret = (int32)admit;
+        dxg_parse_uint_after(line, "exact:", &out->record_local_exact);
+        dxg_parse_uint_after(line, "mutated:", &out->record_mutated);
     }
 
     free(buf);
@@ -6534,8 +6841,16 @@ static int probe_shared_lifetime_contract(int fd, struct d3dkmthandle device)
     struct d3dkmthandle objects[1];
     struct dxg_shared_lifetime_status before;
     struct dxg_shared_lifetime_status after;
+    struct dxg_shared_resource_diag before_close_diag;
+    struct dxg_shared_resource_diag after_close_diag;
     uint64 shared_handle = 0;
+    uint64 published_handle = 0;
     int original_destroyed = 0;
+    int close_shared_rc = -1;
+    int before_close_diag_rc = -1;
+    int after_close_diag_rc = -1;
+    int record_same = 0;
+    int owner_preserved = 0;
     int create_rc;
     int share_rc;
     int ret = -1;
@@ -6550,6 +6865,8 @@ static int probe_shared_lifetime_contract(int fd, struct d3dkmthandle device)
     memset(&allocation_info, 0, sizeof(allocation_info));
     memset(&create_allocation, 0, sizeof(create_allocation));
     memset(&standard_allocation, 0, sizeof(standard_allocation));
+    memset(&before_close_diag, 0, sizeof(before_close_diag));
+    memset(&after_close_diag, 0, sizeof(after_close_diag));
     create_allocation.device = device;
     create_allocation.alloc_count = 1;
     create_allocation.allocation_info = (uint64)&allocation_info;
@@ -6585,6 +6902,7 @@ static int probe_shared_lifetime_contract(int fd, struct d3dkmthandle device)
                create_allocation.resource.v, shared_handle, share_rc);
         goto out;
     }
+    published_handle = shared_handle;
     printf("shared_lifetime share ok fd=%lu\n", shared_handle);
 
     if (probe_open_resource_nt_once(fd, device, shared_handle,
@@ -6663,11 +6981,76 @@ static int probe_shared_lifetime_contract(int fd, struct d3dkmthandle device)
            before.seals, after.seals, before.reuses, after.reuses,
            before.denied, after.denied,
            before.open_tracked, after.open_tracked);
+    before_close_diag_rc = read_dxg_shared_resource_diag(&before_close_diag);
     ret = 0;
 
 out:
-    if (shared_handle != 0)
-        close((int)shared_handle);
+    if (shared_handle != 0) {
+        close_shared_rc = close((int)shared_handle);
+        shared_handle = 0;
+        if (ret == 0)
+            after_close_diag_rc =
+                read_dxg_shared_resource_diag(&after_close_diag);
+    }
+    if (ret == 0) {
+        record_same =
+            before_close_diag_rc == 0 && after_close_diag_rc == 0 &&
+            before_close_diag.record_seen &&
+            after_close_diag.record_seen &&
+            before_close_diag.record_key_process ==
+                after_close_diag.record_key_process &&
+            before_close_diag.record_key_object ==
+                after_close_diag.record_key_object &&
+            before_close_diag.record_key_nt ==
+                after_close_diag.record_key_nt &&
+            before_close_diag.record_resource ==
+                after_close_diag.record_resource &&
+            before_close_diag.record_allocation ==
+                after_close_diag.record_allocation &&
+            before_close_diag.record_runtime_hash ==
+                after_close_diag.record_runtime_hash &&
+            before_close_diag.record_resource_hash ==
+                after_close_diag.record_resource_hash &&
+            before_close_diag.record_total_hash ==
+                after_close_diag.record_total_hash;
+        owner_preserved =
+            before_close_diag_rc == 0 && after_close_diag_rc == 0 &&
+            before_close_diag.record_source_process != 0 &&
+            before_close_diag.record_source_process ==
+                after_close_diag.record_source_process &&
+            before_close_diag.record_source_generation ==
+                after_close_diag.record_source_generation;
+        printf("shared_lifetime_record_matrix fd=%lu close_rc=%d diag_rc=%d/%d livefd=1->1->0 same_record=%u owner_preserved=%u exporter_destroyed=%u resource=0x%x allocation=0x%x record_resource=0x%x->0x%x record_allocation=0x%x->0x%x record_key=0x%x/0x%x/0x%x->0x%x/0x%x/0x%x record_refs=%u->%u record_counts=q%u/o%u/fd%u->q%u/o%u/fd%u mutated=%u->%u present_attempted=0 native_present_claim=0 status=%s\n",
+               published_handle, close_shared_rc, before_close_diag_rc,
+               after_close_diag_rc, record_same, owner_preserved,
+               original_destroyed, create_allocation.resource.v,
+               allocation_info.allocation.v,
+               before_close_diag.record_resource,
+               after_close_diag.record_resource,
+               before_close_diag.record_allocation,
+               after_close_diag.record_allocation,
+               before_close_diag.record_key_process,
+               before_close_diag.record_key_object,
+               before_close_diag.record_key_nt,
+               after_close_diag.record_key_process,
+               after_close_diag.record_key_object,
+               after_close_diag.record_key_nt,
+               before_close_diag.record_refs,
+               after_close_diag.record_refs,
+               before_close_diag.record_query_count,
+               before_close_diag.record_open_count,
+               before_close_diag.record_fd_publish_count,
+               after_close_diag.record_query_count,
+               after_close_diag.record_open_count,
+               after_close_diag.record_fd_publish_count,
+               before_close_diag.record_mutated,
+               after_close_diag.record_mutated,
+               close_shared_rc == 0 && record_same && owner_preserved &&
+               original_destroyed ? "PASS" : "FAIL");
+        if (close_shared_rc != 0 || !record_same || !owner_preserved ||
+            !original_destroyed)
+            ret = -1;
+    }
     if (!original_destroyed && create_allocation.resource.v != 0) {
         memset(&destroy_allocation, 0, sizeof(destroy_allocation));
         destroy_allocation.device = device;
@@ -7059,6 +7442,8 @@ static int probe_shared_seal_provenance_contract(int fd,
     int seal_before_query;
     int local_resource_admitted;
     int refcounts_coherent;
+    int record_generation_coherent;
+    int canonical_record_coherent;
     int no_present_credit;
     int pass;
 
@@ -7212,6 +7597,51 @@ print_row:
         lifetime_after.seals >= lifetime_before.seals + 1 &&
         lifetime_after.open_tracked >= lifetime_before.open_tracked + 1 &&
         open_diag.query_refs != 0 && open_diag.open_fd_refs != 0;
+    record_generation_coherent =
+        share_diag.record_seen && open_diag.record_seen &&
+        close_diag.record_seen && share_diag.record_valid &&
+        open_diag.record_valid && close_diag.record_valid &&
+        share_diag.record_sealed != 0 && open_diag.record_sealed != 0 &&
+        close_diag.record_sealed != 0 &&
+        share_diag.record_sealed_generation != 0 &&
+        open_diag.record_sealed_generation ==
+            share_diag.record_sealed_generation &&
+        close_diag.record_sealed_generation ==
+            share_diag.record_sealed_generation;
+    canonical_record_coherent =
+        record_generation_coherent &&
+        share_diag.record_key_process == open_diag.record_key_process &&
+        share_diag.record_key_process == close_diag.record_key_process &&
+        share_diag.record_key_object == open_diag.record_key_object &&
+        share_diag.record_key_object == close_diag.record_key_object &&
+        share_diag.record_key_nt == open_diag.record_key_nt &&
+        share_diag.record_key_nt == close_diag.record_key_nt &&
+        share_diag.record_source_process ==
+            open_diag.record_source_process &&
+        share_diag.record_source_process ==
+            close_diag.record_source_process &&
+        share_diag.record_source_generation ==
+            open_diag.record_source_generation &&
+        share_diag.record_source_generation ==
+            close_diag.record_source_generation &&
+        share_diag.record_resource == create_allocation.resource.v &&
+        share_diag.record_resource == open_diag.record_resource &&
+        share_diag.record_resource == close_diag.record_resource &&
+        share_diag.record_allocation == allocation_info.allocation.v &&
+        share_diag.record_allocation == open_diag.record_allocation &&
+        share_diag.record_allocation == close_diag.record_allocation &&
+        share_diag.record_allocs == query_allocations &&
+        share_diag.record_runtime_size == expected_runtime_size &&
+        share_diag.record_resource_size == expected_resource_size &&
+        share_diag.record_total_size == expected_total_size &&
+        share_diag.record_runtime_hash == expected_runtime_hash &&
+        share_diag.record_resource_hash == expected_resource_hash &&
+        share_diag.record_total_hash == expected_total_hash &&
+        close_diag.record_fd_publish_count >=
+            share_diag.record_fd_publish_count &&
+        open_diag.record_query_count >= share_diag.record_query_count &&
+        open_diag.record_open_count >= share_diag.record_open_count &&
+        close_diag.record_mutated == 0;
     no_present_credit =
         present_before.rc == 0 && present_after.rc == 0 &&
         present_before.display_presents == present_after.display_presents &&
@@ -7223,9 +7653,10 @@ print_row:
            query_rc == 0 && open_rc == 0 && close_fd_rc == 0 &&
            destroy_rc == 0 && metadata_stable && seal_before_query &&
            local_resource_admitted && refcounts_coherent &&
+           record_generation_coherent && canonical_record_coherent &&
            no_present_credit;
 
-    printf("shared_resource_seal_provenance_matrix create_rc=%d share_rc=%d fd=%lu fd_valid=%u query_rc=%d open_rc=%d close_fd_rc=%d destroy_rc=%d device=0x%x resource=0x%x allocation=0x%x global=0x%x opened_resource=0x%x opened_allocation=0x%x opened_gpuva=0x%lx create_flags=0x%x alloc_flags=0x%x expected_runtime=%u/%08x expected_resource=%u/%08x expected_total=%u/%08x share_meta=%u/%08x,%u/%08x,%u/%08x open_blob=%u/%08x,%u/%08x,%u/%08x close_meta=%u/%08x,%u/%08x,%u/%08x metadata_stable=%u nt_seal_before_query=%u nt_meta=%u->%u nt_seal=%u->%u nt_host_seal=%u->%u local_resource_admitted=%u runtime_user_obj=0x%x runtime_user_dev=0x%x runtime_entry=%u/%u query_allocs=%u query_sizes=%u,%u,%u open_refs=%u query_refs=%u lifetime_seals=%u->%u lifetime_open_tracked=%u->%u refcounts_coherent=%u present_attempted=0 native_present_claim=0 present_stats_rc=%d/%d present_delta=%lu,%lu,%lu,%lu no_present_credit=%u status=%s\n",
+    printf("shared_resource_seal_provenance_matrix create_rc=%d share_rc=%d fd=%lu fd_valid=%u query_rc=%d open_rc=%d close_fd_rc=%d destroy_rc=%d device=0x%x resource=0x%x allocation=0x%x global=0x%x opened_resource=0x%x opened_allocation=0x%x opened_gpuva=0x%lx create_flags=0x%x alloc_flags=0x%x expected_runtime=%u/%08x expected_resource=%u/%08x expected_total=%u/%08x share_meta=%u/%08x,%u/%08x,%u/%08x open_blob=%u/%08x,%u/%08x,%u/%08x close_meta=%u/%08x,%u/%08x,%u/%08x metadata_stable=%u nt_seal_before_query=%u nt_meta=%u->%u nt_seal=%u->%u nt_host_seal=%u->%u local_resource_admitted=%u runtime_user_obj=0x%x runtime_user_dev=0x%x runtime_entry=%u/%u query_allocs=%u query_sizes=%u,%u,%u open_refs=%u query_refs=%u lifetime_seals=%u->%u lifetime_open_tracked=%u->%u refcounts_coherent=%u record_generation_coherent=%u canonical_record_coherent=%u record_key=0x%x/0x%x/0x%x record_source=0x%x/%u record_counts=q%u/o%u/fd%u record_mutated=%u present_attempted=0 native_present_claim=0 present_stats_rc=%d/%d present_delta=%lu,%lu,%lu,%lu no_present_credit=%u status=%s\n",
            create_rc, share_rc,
            share_fd_valid ? published_handle : (uint64)~0ULL,
            share_fd_valid,
@@ -7261,7 +7692,14 @@ print_row:
            query_total_size, open_diag.open_fd_refs, open_diag.query_refs,
            lifetime_before.seals, lifetime_after.seals,
            lifetime_before.open_tracked, lifetime_after.open_tracked,
-           refcounts_coherent, present_before.rc, present_after.rc,
+           refcounts_coherent, record_generation_coherent,
+           canonical_record_coherent, close_diag.record_key_process,
+           close_diag.record_key_object, close_diag.record_key_nt,
+           close_diag.record_source_process,
+           close_diag.record_source_generation,
+           close_diag.record_query_count, close_diag.record_open_count,
+           close_diag.record_fd_publish_count, close_diag.record_mutated,
+           present_before.rc, present_after.rc,
            present_after.display_presents - present_before.display_presents,
            present_after.display_completions -
                present_before.display_completions,
@@ -7379,6 +7817,674 @@ out:
     if (ret == 0)
         printf("shared_present ok opened_resource=%d\n", opened_resource);
     return ret;
+}
+
+static int probe_present_source_failclosed_contract(
+    int fd, struct d3dkmthandle device, struct winluid adapter_luid)
+{
+    struct d3dddi_allocationinfo2 allocation_info;
+    struct d3dkmt_createallocation create_allocation;
+    struct d3dkmt_createstandardallocation standard_allocation;
+    struct d3dkmt_destroyallocation2 destroy_allocation;
+    struct d3dkmt_shareobjects share_objects;
+    struct d3dkmt_createsynchronizationobject2 create_sync;
+    struct d3dkmt_destroysynchronizationobject destroy_sync;
+    struct d3dkmthandle objects[1];
+    struct fb_gpu_dxg_present_source_register reg;
+    struct fb_gpu_dxg_present_source_commit commit;
+    struct fb_gpu_dxg_present_source_commit wait_commit;
+    struct fb_gpu_dxg_present_source_commit missing_sync_commit;
+    struct fb_gpu_dxg_present_source_commit sync_without_flag_commit;
+    struct fb_gpu_dxg_present_source_commit no_source_commit;
+    struct fb_gpu_dxg_present_source_query query;
+    struct fb_gpu_dxg_present_source_query wait_query;
+    struct fb_gpu_dxg_present_host_bind_contract bind_contract;
+    struct fb_gpu_dxg_present_source_register bad_reg;
+    struct fb_gpu_dxg_present_source_register unverified_reg;
+    struct fb_gpu_dxg_present_source_commit unverified_commit;
+    struct fb_gpu_dxg_present_source_query unverified_query;
+    struct fb_gpu_dxg_present_source_register mismatch_reg;
+    struct fb_gpu_dxg_present_source_commit mismatch_commit;
+    struct fb_gpu_dxg_present_source_query mismatch_query;
+    struct fb_gpu_dxg_present_source_query after_close_query;
+    struct fb_gpu_dxg_present_host_bind_contract after_close_bind_contract;
+    struct fb_gpu_backend_info backend;
+    struct fb_gpu_stats stats_before;
+    struct fb_gpu_stats stats_after;
+    struct fb_gpu_stats stats_wait;
+    struct fb_gpu_stats stats_negative;
+    struct fb_gpu_stats stats_closed;
+    uint64 shared_handle = 0;
+    int fb_fd = -1;
+    int fb_fd_after = -1;
+    int create_rc = -1;
+    int share_rc = -1;
+    int register_rc = -1;
+    int commit_rc = -1;
+    int create_sync_rc = -1;
+    int wait_commit_rc = -1;
+    int wait_query_rc = -1;
+    int zero_dimensions_rc = -1;
+    int bad_pitch_rc = -1;
+    int invalid_resource_fd_rc = -1;
+    int reserved_flags_rc = -1;
+    int missing_sync_commit_rc = -1;
+    int sync_without_flag_commit_rc = -1;
+    int no_source_commit_rc = -1;
+    int unverified_register_rc = -1;
+    int unverified_commit_rc = -1;
+    int unverified_query_rc = -1;
+    int mismatch_register_rc = -1;
+    int mismatch_commit_rc = -1;
+    int mismatch_query_rc = -1;
+    int query_rc = -1;
+    int bind_contract_rc = -1;
+    int after_close_query_rc = -1;
+    int after_close_bind_contract_rc = -1;
+    int stats_before_rc = -1;
+    int stats_after_rc = -1;
+    int stats_wait_rc = -1;
+    int stats_negative_rc = -1;
+    int stats_closed_rc = -1;
+    int backend_rc = -1;
+    int open_after_rc = -1;
+    int no_present_credit = 0;
+    int wait_sync_no_present_credit = 0;
+    int provenance_complete = 0;
+    int failclosed = 0;
+    int bind_contract_failclosed = 0;
+    int stale_bind_contract_failclosed = 0;
+    int wait_sync_failclosed = 0;
+    int wait_sync_metadata = 0;
+    int negative_register_metadata = 0;
+    int negative_commit_metadata = 0;
+    int negative_source_identity = 0;
+    int negative_no_present_credit = 0;
+    int unverified_resource_failclosed = 0;
+    int adapter_mismatch_failclosed = 0;
+    int negative_metadata_pass = 0;
+    int owner_cleanup = 0;
+    int hyperv_gate = 0;
+    int pass = 0;
+
+    memset(&allocation_info, 0, sizeof(allocation_info));
+    memset(&create_allocation, 0, sizeof(create_allocation));
+    memset(&standard_allocation, 0, sizeof(standard_allocation));
+    memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+    memset(&share_objects, 0, sizeof(share_objects));
+    memset(&create_sync, 0, sizeof(create_sync));
+    memset(&destroy_sync, 0, sizeof(destroy_sync));
+    memset(&reg, 0, sizeof(reg));
+    memset(&commit, 0, sizeof(commit));
+    memset(&wait_commit, 0, sizeof(wait_commit));
+    memset(&missing_sync_commit, 0, sizeof(missing_sync_commit));
+    memset(&sync_without_flag_commit, 0, sizeof(sync_without_flag_commit));
+    memset(&no_source_commit, 0, sizeof(no_source_commit));
+    memset(&query, 0, sizeof(query));
+    memset(&wait_query, 0, sizeof(wait_query));
+    memset(&bind_contract, 0, sizeof(bind_contract));
+    memset(&bad_reg, 0, sizeof(bad_reg));
+    memset(&unverified_reg, 0, sizeof(unverified_reg));
+    memset(&unverified_commit, 0, sizeof(unverified_commit));
+    memset(&unverified_query, 0, sizeof(unverified_query));
+    memset(&mismatch_reg, 0, sizeof(mismatch_reg));
+    memset(&mismatch_commit, 0, sizeof(mismatch_commit));
+    memset(&mismatch_query, 0, sizeof(mismatch_query));
+    memset(&after_close_query, 0, sizeof(after_close_query));
+    memset(&after_close_bind_contract, 0, sizeof(after_close_bind_contract));
+    memset(&backend, 0, sizeof(backend));
+    memset(&stats_before, 0, sizeof(stats_before));
+    memset(&stats_after, 0, sizeof(stats_after));
+    memset(&stats_wait, 0, sizeof(stats_wait));
+    memset(&stats_negative, 0, sizeof(stats_negative));
+    memset(&stats_closed, 0, sizeof(stats_closed));
+
+    create_allocation.device = device;
+    create_allocation.alloc_count = 1;
+    create_allocation.allocation_info = (uint64)&allocation_info;
+    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
+    standard_allocation.existing_heap_data.size = 0x10000;
+    create_allocation.standard_allocation = (uint64)&standard_allocation;
+    create_allocation.flags.create_resource = 1;
+    create_allocation.flags.create_shared = 1;
+    create_allocation.flags.nt_security_sharing = 1;
+    create_allocation.flags.cross_adapter = 1;
+    create_allocation.flags.standard_allocation = 1;
+    create_rc = ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation);
+    if (create_rc < 0 || allocation_info.allocation.v == 0 ||
+        create_allocation.resource.v == 0)
+        goto out;
+
+    objects[0] = create_allocation.resource;
+    share_objects.object_count = 1;
+    share_objects.objects = (uint64)objects;
+    share_objects.shared_handle = (uint64)&shared_handle;
+    share_rc = ioctl(fd, LX_DXSHAREOBJECTS, &share_objects);
+    if (share_rc < 0 || shared_handle == 0)
+        goto out;
+
+    fb_fd = open("/dev/gpu0", O_RDWR);
+    if (fb_fd < 0)
+        fb_fd = open("/dev/fb0", O_RDWR);
+    if (fb_fd < 0)
+        goto out;
+    backend_rc = ioctl(fb_fd, FB_GPU_BACKEND_QUERY, &backend);
+    stats_before_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_before);
+    if (backend_rc < 0 || stats_before_rc < 0)
+        goto out;
+
+    reg.dxg_fd = fd;
+    reg.resource_fd = (int32)shared_handle;
+    reg.device = device.v;
+    reg.resource = create_allocation.resource.v;
+    reg.allocation = allocation_info.allocation.v;
+    reg.allocation_count = 1;
+    reg.width = 64;
+    reg.height = 64;
+    reg.pitch = 256;
+    reg.format = FB_GPU_BO_FORMAT_ARGB8888;
+    reg.modifier = 0;
+    reg.adapter_luid_low = adapter_luid.a;
+    reg.adapter_luid_high = adapter_luid.b;
+    reg.provenance_flags = FB_GPU_DXG_PRESENT_PROV_DXG_FD |
+                           FB_GPU_DXG_PRESENT_PROV_RESOURCE_FD |
+                           FB_GPU_DXG_PRESENT_PROV_D3DKMT_HANDLES |
+                           FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
+                           FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID;
+
+    bad_reg = reg;
+    bad_reg.width = 0;
+    zero_dimensions_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &bad_reg);
+    bad_reg = reg;
+    bad_reg.pitch = reg.width * 4U - 4U;
+    bad_pitch_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &bad_reg);
+    bad_reg = reg;
+    bad_reg.resource_fd = -2;
+    invalid_resource_fd_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &bad_reg);
+    bad_reg = reg;
+    bad_reg.flags = 0x80000000U;
+    reserved_flags_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &bad_reg);
+
+    register_rc = ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &reg);
+    if (register_rc < 0 || reg.present_source == 0)
+        goto out;
+
+    commit.present_source = reg.present_source;
+    commit_rc = ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT, &commit);
+
+    no_source_commit.present_source = reg.present_source ^ 0x40000000U;
+    if (no_source_commit.present_source == 0 ||
+        no_source_commit.present_source == reg.present_source)
+        no_source_commit.present_source = reg.present_source + 1U;
+    no_source_commit_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT, &no_source_commit);
+
+    missing_sync_commit.present_source = reg.present_source;
+    missing_sync_commit.flags = FB_GPU_DXG_PRESENT_F_WAIT_SYNC;
+    missing_sync_commit.fence_value = 7;
+    missing_sync_commit_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT,
+              &missing_sync_commit);
+
+    sync_without_flag_commit.present_source = reg.present_source;
+    sync_without_flag_commit.sync_object = 0x12345678U;
+    sync_without_flag_commit.fence_value = 7;
+    sync_without_flag_commit_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT,
+              &sync_without_flag_commit);
+
+    unverified_reg = reg;
+    unverified_reg.present_source = 0;
+    unverified_reg.resource_fd = -1;
+    unverified_register_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &unverified_reg);
+    if (unverified_register_rc == 0 && unverified_reg.present_source != 0) {
+        unverified_commit.present_source = unverified_reg.present_source;
+        unverified_commit_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT,
+                  &unverified_commit);
+        unverified_query.present_source = unverified_reg.present_source;
+        unverified_query_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY,
+                  &unverified_query);
+    }
+
+    mismatch_reg = reg;
+    mismatch_reg.present_source = 0;
+    mismatch_reg.adapter_luid_low ^= 1U;
+    if (mismatch_reg.adapter_luid_low == adapter_luid.a &&
+        mismatch_reg.adapter_luid_high == adapter_luid.b)
+        mismatch_reg.adapter_luid_high ^= 1U;
+    mismatch_register_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_REGISTER, &mismatch_reg);
+    if (mismatch_register_rc == 0 && mismatch_reg.present_source != 0) {
+        mismatch_commit.present_source = mismatch_reg.present_source;
+        mismatch_commit_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT,
+                  &mismatch_commit);
+        mismatch_query.present_source = mismatch_reg.present_source;
+        mismatch_query_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY,
+                  &mismatch_query);
+    }
+    stats_negative_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_negative);
+
+    query.present_source = reg.present_source;
+    query_rc = ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY, &query);
+    bind_contract.version = 1;
+    bind_contract.present_source = reg.present_source;
+    bind_contract.dxg_fd = fd;
+    bind_contract.resource_fd = (int32)shared_handle;
+    bind_contract.device = device.v;
+    bind_contract.resource = create_allocation.resource.v;
+    bind_contract.allocation = allocation_info.allocation.v;
+    bind_contract.allocation_count = 1;
+    bind_contract.width = reg.width;
+    bind_contract.height = reg.height;
+    bind_contract.pitch = reg.pitch;
+    bind_contract.format = reg.format;
+    bind_contract.modifier = reg.modifier;
+    bind_contract.adapter_luid_low = adapter_luid.a;
+    bind_contract.adapter_luid_high = adapter_luid.b;
+    bind_contract.provenance_flags = reg.provenance_flags;
+    bind_contract_rc =
+        ioctl(fb_fd, FB_GPU_DXG_PRESENT_BIND_CONTRACT_QUERY,
+              &bind_contract);
+    stats_after_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_after);
+    if (stats_after_rc < 0)
+        goto out;
+
+    create_sync.device = device;
+    create_sync.info.type = _D3DDDI_MONITORED_FENCE;
+    create_sync.info.monitored_fence.initial_fence_value = 0;
+    create_sync_rc =
+        ioctl(fd, LX_DXCREATESYNCHRONIZATIONOBJECT, &create_sync);
+    if (create_sync_rc == 0 && create_sync.sync_object.v != 0) {
+        wait_commit.present_source = reg.present_source;
+        wait_commit.flags = FB_GPU_DXG_PRESENT_F_WAIT_SYNC;
+        wait_commit.sync_object = create_sync.sync_object.v;
+        wait_commit.fence_value = 7;
+        wait_commit_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT, &wait_commit);
+        wait_query.present_source = reg.present_source;
+        wait_query_rc =
+            ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY, &wait_query);
+        stats_wait_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_wait);
+    }
+
+    close(fb_fd);
+    fb_fd = -1;
+    fb_fd_after = open("/dev/gpu0", O_RDWR);
+    if (fb_fd_after < 0)
+        fb_fd_after = open("/dev/fb0", O_RDWR);
+    open_after_rc = fb_fd_after < 0 ? -1 : 0;
+    if (fb_fd_after >= 0) {
+        after_close_query.present_source = reg.present_source;
+        after_close_query_rc =
+            ioctl(fb_fd_after, FB_GPU_DXG_PRESENT_SOURCE_QUERY,
+                  &after_close_query);
+        after_close_bind_contract = bind_contract;
+        after_close_bind_contract.present_source = reg.present_source;
+        after_close_bind_contract_rc =
+            ioctl(fb_fd_after, FB_GPU_DXG_PRESENT_BIND_CONTRACT_QUERY,
+                  &after_close_bind_contract);
+        stats_closed_rc = ioctl(fb_fd_after, FB_GPU_GET_STATS,
+                                &stats_closed);
+    }
+
+    provenance_complete =
+        (query.provenance_flags &
+         (FB_GPU_DXG_PRESENT_PROV_DXG_FD |
+          FB_GPU_DXG_PRESENT_PROV_RESOURCE_FD |
+          FB_GPU_DXG_PRESENT_PROV_D3DKMT_HANDLES |
+          FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
+          FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID)) ==
+        (FB_GPU_DXG_PRESENT_PROV_DXG_FD |
+         FB_GPU_DXG_PRESENT_PROV_RESOURCE_FD |
+         FB_GPU_DXG_PRESENT_PROV_D3DKMT_HANDLES |
+         FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
+         FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID);
+    no_present_credit =
+        stats_after.display_presents == stats_before.display_presents &&
+        stats_after.display_completions == stats_before.display_completions &&
+        commit.present_id == 0 && commit.completed == 0 &&
+        query.present_id == 0 && query.completed == 0;
+    failclosed =
+        commit_rc < 0 &&
+        query_rc < 0 &&
+        query.source_live == 1 &&
+        query.last_ret == EOPNOTSUPP &&
+        query.requires_host_protocol == 1 &&
+        query.missing_host_abi == FB_GPU_DXG_PRESENT_MISSING_SCANOUT_BIND &&
+        query.helper_contract_version == 1 &&
+        query.helper_transport_present == 0 &&
+        query.helper_requires_completion == 1 &&
+        (query.helper_block_reason &
+         FB_GPU_DXG_PRESENT_BLOCK_NO_COMPLETION) != 0;
+    bind_contract_failclosed =
+        bind_contract_rc < 0 &&
+        bind_contract.version == 1 &&
+        bind_contract.transport == FB_GPU_DXG_PRESENT_HELPER_TRANSPORT_NONE &&
+        bind_contract.operation == FB_GPU_DXG_PRESENT_HELPER_OP_SCANOUT_BIND &&
+        bind_contract.present_id == 0 &&
+        bind_contract.completed == 0 &&
+        bind_contract.present_source == reg.present_source &&
+        bind_contract.source_live == 1 &&
+        bind_contract.source_generation != 0 &&
+        bind_contract.resource_generation != 0 &&
+        bind_contract.completion_source ==
+            FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+        bind_contract.selected_lane ==
+            FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+        bind_contract.adapter_identity == FB_GPU_DXG_PRESENT_ADAPTER_MATCH &&
+        (bind_contract.provenance_flags &
+         (FB_GPU_DXG_PRESENT_PROV_DXG_FD |
+          FB_GPU_DXG_PRESENT_PROV_RESOURCE_FD |
+          FB_GPU_DXG_PRESENT_PROV_D3DKMT_HANDLES |
+          FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
+          FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID)) ==
+        (FB_GPU_DXG_PRESENT_PROV_DXG_FD |
+         FB_GPU_DXG_PRESENT_PROV_RESOURCE_FD |
+         FB_GPU_DXG_PRESENT_PROV_D3DKMT_HANDLES |
+         FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
+         FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID) &&
+        (bind_contract.required_metadata &
+         (FB_GPU_DXG_PRESENT_META_DEVICE |
+          FB_GPU_DXG_PRESENT_META_RESOURCE |
+          FB_GPU_DXG_PRESENT_META_ALLOCATION |
+          FB_GPU_DXG_PRESENT_META_DIMENSIONS |
+          FB_GPU_DXG_PRESENT_META_FORMAT |
+          FB_GPU_DXG_PRESENT_META_MODIFIER |
+          FB_GPU_DXG_PRESENT_META_ADAPTER_LUID)) ==
+        (FB_GPU_DXG_PRESENT_META_DEVICE |
+         FB_GPU_DXG_PRESENT_META_RESOURCE |
+         FB_GPU_DXG_PRESENT_META_ALLOCATION |
+         FB_GPU_DXG_PRESENT_META_DIMENSIONS |
+         FB_GPU_DXG_PRESENT_META_FORMAT |
+         FB_GPU_DXG_PRESENT_META_MODIFIER |
+         FB_GPU_DXG_PRESENT_META_ADAPTER_LUID) &&
+        (bind_contract.lifetime &
+         (FB_GPU_DXG_PRESENT_LIFE_HANDLES_VALID |
+          FB_GPU_DXG_PRESENT_LIFE_HOST_COMPLETION |
+          FB_GPU_DXG_PRESENT_LIFE_NO_CPU_READBACK)) ==
+        (FB_GPU_DXG_PRESENT_LIFE_HANDLES_VALID |
+         FB_GPU_DXG_PRESENT_LIFE_HOST_COMPLETION |
+         FB_GPU_DXG_PRESENT_LIFE_NO_CPU_READBACK) &&
+        (bind_contract.helper_block_reason &
+         (FB_GPU_DXG_PRESENT_BLOCK_NO_TRANSPORT |
+          FB_GPU_DXG_PRESENT_BLOCK_NO_COMPLETION)) ==
+        (FB_GPU_DXG_PRESENT_BLOCK_NO_TRANSPORT |
+         FB_GPU_DXG_PRESENT_BLOCK_NO_COMPLETION);
+    wait_sync_metadata =
+        (wait_query.helper_required_metadata &
+         (FB_GPU_DXG_PRESENT_META_SYNC_OBJECT |
+          FB_GPU_DXG_PRESENT_META_FENCE_VALUE)) ==
+        (FB_GPU_DXG_PRESENT_META_SYNC_OBJECT |
+         FB_GPU_DXG_PRESENT_META_FENCE_VALUE);
+    wait_sync_no_present_credit =
+        wait_commit.present_id == 0 && wait_commit.completed == 0 &&
+        wait_query.present_id == 0 && wait_query.completed == 0 &&
+        stats_wait_rc == 0;
+    wait_sync_failclosed =
+        create_sync_rc == 0 && create_sync.sync_object.v != 0 &&
+        wait_commit_rc < 0 &&
+        wait_query_rc < 0 &&
+        wait_query.source_live == 1 &&
+        wait_query.last_ret == EOPNOTSUPP &&
+        wait_query.last_flags == FB_GPU_DXG_PRESENT_F_WAIT_SYNC &&
+        wait_query.sync_object == create_sync.sync_object.v &&
+        wait_query.fence_value == wait_commit.fence_value &&
+        wait_query.requires_host_protocol == 1 &&
+        wait_query.missing_host_abi == FB_GPU_DXG_PRESENT_MISSING_SCANOUT_BIND &&
+        wait_query.helper_contract_version == 1 &&
+        wait_query.helper_transport_present == 0 &&
+        wait_query.helper_requires_completion == 1 &&
+        (wait_query.helper_lifetime & FB_GPU_DXG_PRESENT_LIFE_SYNC_VALID) != 0 &&
+        wait_sync_metadata &&
+        wait_sync_no_present_credit;
+    negative_register_metadata =
+        zero_dimensions_rc < 0 && bad_pitch_rc < 0 &&
+        invalid_resource_fd_rc < 0 && reserved_flags_rc < 0;
+    negative_commit_metadata =
+        missing_sync_commit_rc < 0 && sync_without_flag_commit_rc < 0;
+    negative_source_identity = no_source_commit_rc < 0;
+    unverified_resource_failclosed =
+        unverified_register_rc == 0 &&
+        unverified_commit_rc < 0 &&
+        unverified_query_rc < 0 &&
+        unverified_query.source_live == 1 &&
+        unverified_query.resource_fd == -1 &&
+        stats_negative_rc == 0 &&
+        stats_negative.dxg_present_commit_resource_fd_unverified >
+        stats_before.dxg_present_commit_resource_fd_unverified &&
+        unverified_query.present_id == 0 &&
+        unverified_query.completed == 0;
+    adapter_mismatch_failclosed =
+        mismatch_register_rc == 0 &&
+        mismatch_commit_rc < 0 &&
+        mismatch_query_rc < 0 &&
+        mismatch_query.source_live == 1 &&
+        mismatch_query.adapter_identity ==
+        FB_GPU_DXG_PRESENT_ADAPTER_MISMATCH &&
+        (mismatch_query.helper_block_reason &
+         FB_GPU_DXG_PRESENT_BLOCK_ADAPTER_MISMATCH) != 0 &&
+        mismatch_query.present_id == 0 &&
+        mismatch_query.completed == 0;
+    negative_no_present_credit =
+        stats_negative_rc == 0 &&
+        stats_negative.display_presents == stats_before.display_presents &&
+        stats_negative.display_completions ==
+        stats_before.display_completions &&
+        no_source_commit.present_id == 0 &&
+        no_source_commit.completed == 0 &&
+        missing_sync_commit.present_id == 0 &&
+        missing_sync_commit.completed == 0 &&
+        sync_without_flag_commit.present_id == 0 &&
+        sync_without_flag_commit.completed == 0 &&
+        unverified_commit.present_id == 0 &&
+        unverified_commit.completed == 0 &&
+        mismatch_commit.present_id == 0 &&
+        mismatch_commit.completed == 0;
+    negative_metadata_pass =
+        negative_register_metadata && negative_commit_metadata &&
+        negative_source_identity && unverified_resource_failclosed &&
+        adapter_mismatch_failclosed && negative_no_present_credit;
+    owner_cleanup =
+        open_after_rc == 0 &&
+        after_close_query_rc < 0 &&
+        after_close_query.last_ret == EOPNOTSUPP &&
+        after_close_query.source_live == 0 &&
+        stats_closed_rc == 0;
+    stale_bind_contract_failclosed =
+        open_after_rc == 0 &&
+        after_close_bind_contract_rc < 0 &&
+        after_close_bind_contract.present_source == reg.present_source &&
+        after_close_bind_contract.source_live == 0 &&
+        after_close_bind_contract.present_id == 0 &&
+        after_close_bind_contract.completed == 0 &&
+        after_close_bind_contract.completion_source ==
+            FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+        (after_close_bind_contract.helper_block_reason &
+         FB_GPU_DXG_PRESENT_BLOCK_NO_REGISTERED_SOURCE) != 0;
+    hyperv_gate =
+        backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    pass = provenance_complete && no_present_credit && failclosed &&
+           bind_contract_failclosed &&
+           wait_sync_failclosed && negative_metadata_pass &&
+           owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
+
+out:
+    printf("present_source_failclosed_matrix create_rc=%d share_rc=%d "
+           "register_rc=%d commit_rc=%d query_rc=%d after_close_query_rc=%d "
+           "bind_contract_rc=%d stats_rc=%d/%d/%d backend_rc=%d "
+           "source=0x%x source_live=%u->%u "
+           "device=0x%x resource=0x%x allocation=0x%x fd=%lu "
+           "luid=%x:%x query_luid=%x:%x adapter_identity=%u "
+           "provenance=0x%x provenance_complete=%u "
+           "requires_host_protocol=%lu missing_host_abi=%lu "
+           "transport_present=%lu selected_lane=%u block_reason=0x%x "
+           "host_candidates=0x%lx host_rejects=0x%lx "
+           "present_id=%lu/%lu completed=%lu/%lu display_delta=%lu/%lu "
+           "register_delta=%lu commit_delta=%lu release_delta=%lu "
+           "backend=%u backend_flags=0x%x hyperv_opengl_submit=%u "
+           "failclosed=%u no_present_credit=%u owner_cleanup=%u "
+           "native_present_claim=0 status=%s\n",
+           create_rc, share_rc, register_rc, commit_rc, query_rc,
+           after_close_query_rc, bind_contract_rc,
+           stats_before_rc, stats_after_rc,
+           stats_closed_rc, backend_rc, reg.present_source,
+           query.source_live, after_close_query.source_live, device.v,
+           create_allocation.resource.v, allocation_info.allocation.v,
+           shared_handle, adapter_luid.b, adapter_luid.a,
+           query.adapter_luid_high, query.adapter_luid_low,
+           query.adapter_identity, query.provenance_flags,
+           provenance_complete, query.requires_host_protocol,
+           query.missing_host_abi, query.helper_transport_present,
+           query.selected_lane, query.helper_block_reason,
+           query.host_candidates, query.host_rejects, commit.present_id,
+           query.present_id, commit.completed, query.completed,
+           stats_after.display_presents - stats_before.display_presents,
+           stats_after.display_completions -
+               stats_before.display_completions,
+           stats_after.dxg_present_register_attempts -
+               stats_before.dxg_present_register_attempts,
+           stats_after.dxg_present_commit_attempts -
+               stats_before.dxg_present_commit_attempts,
+           stats_closed.dxg_present_release_sources -
+               stats_before.dxg_present_release_sources,
+           backend.backend, backend.flags,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           failclosed, no_present_credit, owner_cleanup,
+           pass ? "PASS" : "FAIL");
+    printf("present_bind_contract_skeleton_matrix "
+           "ioctl_rc=%d version=%u transport=%u operation=%u "
+           "source=0x%x source_live=%u source_generation=%lu "
+           "resource_generation=%lu completion_source=%lu "
+           "selected_lane=%lu block_reason=0x%lx required_metadata=0x%lx "
+           "lifetime=0x%lx host_candidates=0x%lx host_rejects=0x%lx "
+           "device=0x%x resource=0x%x allocation=0x%x allocation_count=%u "
+           "sync=0x%x fence=%lu dimensions=%ux%u pitch=%u fmt=0x%x "
+           "luid=%x:%x adapter_identity=%u provenance=0x%lx "
+           "present_id=%lu completed=%lu native_present_claim=0 "
+           "status=%s\n",
+           bind_contract_rc, bind_contract.version, bind_contract.transport,
+           bind_contract.operation, bind_contract.present_source,
+           bind_contract.source_live, bind_contract.source_generation,
+           bind_contract.resource_generation, bind_contract.completion_source,
+           bind_contract.selected_lane,
+           bind_contract.helper_block_reason,
+           bind_contract.required_metadata, bind_contract.lifetime,
+           bind_contract.host_candidates, bind_contract.host_rejects,
+           bind_contract.device, bind_contract.resource,
+           bind_contract.allocation, bind_contract.allocation_count,
+           bind_contract.sync_object, bind_contract.fence_value,
+           bind_contract.width, bind_contract.height, bind_contract.pitch,
+           bind_contract.format, bind_contract.adapter_luid_high,
+           bind_contract.adapter_luid_low, bind_contract.adapter_identity,
+           bind_contract.provenance_flags, bind_contract.present_id,
+           bind_contract.completed,
+           bind_contract_failclosed ? "PASS" : "FAIL");
+    printf("present_bind_contract_stale_source_matrix "
+           "ioctl_rc=%d source=0x%x source_live=%u block_reason=0x%lx "
+           "completion_source=%lu present_id=%lu completed=%lu "
+           "native_present_claim=0 status=%s\n",
+           after_close_bind_contract_rc,
+           after_close_bind_contract.present_source,
+           after_close_bind_contract.source_live,
+           after_close_bind_contract.helper_block_reason,
+           after_close_bind_contract.completion_source,
+           after_close_bind_contract.present_id,
+           after_close_bind_contract.completed,
+           stale_bind_contract_failclosed ? "PASS" : "FAIL");
+    printf("present_source_waitsync_failclosed_matrix "
+           "create_resource=PASS share_resource=PASS register=PASS "
+           "sync_create_rc=%d sync_object=0x%x "
+           "commit_rc=%d query_rc=%d stats_wait_rc=%d "
+           "source=0x%x source_live=%u "
+           "wait_sync_metadata=%s required_metadata=0x%lx "
+           "lifetime=0x%lx sync_object=0x%x query_sync=0x%x "
+           "fence=%lu query_fence=%lu commit_present_id=%lu "
+           "query_present_id=%lu commit_completed=%lu query_completed=%lu "
+           "missing_host_abi=%lu transport_present=%lu "
+           "present_id=0 completed=0 no_present_credit=%u "
+           "native_present_claim=0 status=%s\n",
+           create_sync_rc, create_sync.sync_object.v,
+           wait_commit_rc, wait_query_rc, stats_wait_rc,
+           reg.present_source,
+           wait_query.source_live,
+           wait_sync_metadata ? "PASS" : "FAIL",
+           wait_query.helper_required_metadata,
+           wait_query.helper_lifetime,
+           create_sync.sync_object.v, wait_query.sync_object,
+           wait_commit.fence_value, wait_query.fence_value,
+           wait_commit.present_id, wait_query.present_id,
+           wait_commit.completed, wait_query.completed,
+           wait_query.missing_host_abi,
+           wait_query.helper_transport_present,
+           wait_sync_no_present_credit,
+           wait_sync_failclosed ? "PASS" : "FAIL");
+    printf("present_source_negative_metadata_matrix "
+           "zero_dimensions=%s bad_pitch=%s invalid_resource_fd=%s "
+           "reserved_register_flags=%s no_source_commit=%s "
+           "wait_sync_missing_sync=%s sync_without_wait_flag=%s "
+           "unverified_resource_fd=%s adapter_mismatch=%s "
+           "register_rejects_delta=%lu commit_bad_flags_delta=%lu "
+           "commit_no_source_delta=%lu commit_resource_fd_unverified_delta=%lu "
+           "commit_adapter_mismatch_delta=%lu display_delta=%lu/%lu "
+           "present_id=0 completed=0 no_present_credit=%u "
+           "native_present_claim=0 opengl_submit_credit=0 status=%s\n",
+           zero_dimensions_rc < 0 ? "PASS" : "FAIL",
+           bad_pitch_rc < 0 ? "PASS" : "FAIL",
+           invalid_resource_fd_rc < 0 ? "PASS" : "FAIL",
+           reserved_flags_rc < 0 ? "PASS" : "FAIL",
+           negative_source_identity ? "PASS" : "FAIL",
+           missing_sync_commit_rc < 0 ? "PASS" : "FAIL",
+           sync_without_flag_commit_rc < 0 ? "PASS" : "FAIL",
+           unverified_resource_failclosed ? "PASS" : "FAIL",
+           adapter_mismatch_failclosed ? "PASS" : "FAIL",
+           stats_negative.dxg_present_register_rejects -
+               stats_before.dxg_present_register_rejects,
+           stats_negative.dxg_present_commit_bad_flags -
+               stats_before.dxg_present_commit_bad_flags,
+           stats_negative.dxg_present_commit_no_source -
+               stats_before.dxg_present_commit_no_source,
+           stats_negative.dxg_present_commit_resource_fd_unverified -
+               stats_before.dxg_present_commit_resource_fd_unverified,
+           stats_negative.dxg_present_commit_adapter_mismatch -
+               stats_before.dxg_present_commit_adapter_mismatch,
+           stats_negative.display_presents - stats_before.display_presents,
+           stats_negative.display_completions -
+               stats_before.display_completions,
+           negative_no_present_credit,
+           negative_metadata_pass ? "PASS" : "FAIL");
+
+    if (fb_fd >= 0)
+        close(fb_fd);
+    if (fb_fd_after >= 0)
+        close(fb_fd_after);
+    if (shared_handle != 0)
+        close((int)shared_handle);
+    if (create_sync.sync_object.v != 0) {
+        destroy_sync.sync_object = create_sync.sync_object;
+        if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                  &destroy_sync) < 0)
+            printf("present_source_failclosed sync_destroy_failed sync=0x%x\n",
+                   create_sync.sync_object.v);
+    }
+    if (create_allocation.resource.v != 0) {
+        destroy_allocation.device = device;
+        destroy_allocation.resource = create_allocation.resource;
+        destroy_allocation.flags.assume_not_in_use = 1;
+        if (ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy_allocation) < 0)
+            printf("present_source_failclosed destroy_failed resource=0x%x\n",
+                   create_allocation.resource.v);
+    }
+    return pass ? 0 : -1;
 }
 
 static void probe_misc_unsupported(int fd, struct d3dkmthandle adapter,
@@ -9124,6 +10230,7 @@ int main(int argc, char **argv)
     int wsl_trace_replay = 0;
     int wddm_payload_validate = 0;
     int shared_present_validate = 0;
+    int present_source_failclosed_validate = 0;
     int shared_lifetime_validate = 0;
     int shared_private_validate = 0;
     int raw_runtime_validate = 0;
@@ -9174,6 +10281,9 @@ int main(int argc, char **argv)
             wddm_payload_validate = 1;
         else if (strcmp(argv[i], "--shared-present-validate") == 0)
             shared_present_validate = 1;
+        else if (strcmp(argv[i],
+                        "--present-source-failclosed-validate") == 0)
+            present_source_failclosed_validate = 1;
         else if (strcmp(argv[i], "--shared-lifetime-validate") == 0)
             shared_lifetime_validate = 1;
         else if (strcmp(argv[i], "--shared-exporter-close-lifetime") == 0 ||
@@ -9184,6 +10294,9 @@ int main(int argc, char **argv)
                  strcmp(argv[i],
                         "--shared-seal-provenance-validate") == 0)
             g_shared_seal_provenance_validate = 1;
+        else if (strcmp(argv[i], "--qai-admission") == 0 ||
+                 strcmp(argv[i], "--qai-admission-validate") == 0)
+            g_qai_admission_validate = 1;
         else if (strcmp(argv[i], "--shared-private-validate") == 0)
             shared_private_validate = 1;
         else if (strcmp(argv[i], "--raw-runtime-validate") == 0)
@@ -9347,6 +10460,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (g_qai_admission_validate) {
+        ret = probe_qai_admission_validate(fd) < 0 ? 1 : 0;
+        close(fd);
+        return ret;
+    }
+
     if (enum_dxg_adapters2_list(fd, adapters, &adapter_count,
                                 "dxgprobe") < 0) {
         close(fd);
@@ -9456,6 +10575,24 @@ int main(int argc, char **argv)
         if (open_first_dxg_device(&validate_fd, &validate_adapter,
                                   &validate_device) < 0 ||
             probe_shared_present_contract(validate_fd, validate_device) < 0)
+            ret = 1;
+        if (validate_fd >= 0)
+            close_dxg_device(validate_fd, validate_adapter,
+                             validate_device);
+        goto close_adapter;
+    }
+    if (present_source_failclosed_validate) {
+        struct d3dkmthandle validate_adapter;
+        struct d3dkmthandle validate_device;
+        int validate_fd = -1;
+
+        memset(&validate_adapter, 0, sizeof(validate_adapter));
+        memset(&validate_device, 0, sizeof(validate_device));
+        if (open_first_dxg_device(&validate_fd, &validate_adapter,
+                                  &validate_device) < 0 ||
+            probe_present_source_failclosed_contract(validate_fd,
+                                                    validate_device,
+                                                    enum2_selected_luid) < 0)
             ret = 1;
         if (validate_fd >= 0)
             close_dxg_device(validate_fd, validate_adapter,
