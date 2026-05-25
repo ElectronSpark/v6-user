@@ -1,4 +1,5 @@
 #include "kernel/inc/types.h"
+#include "kernel/inc/errno.h"
 #include "kernel/inc/dev/fb.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
@@ -2125,6 +2126,35 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_native_completion_zero_credit_matrix",
                               "status=PASS");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output,
+                         "d3d12_display_bind_backend_boundary_matrix");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "backend=gpup_dxg_scanout_bind");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "contract_version=1");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "transport=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "transport_present=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "operation=1");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "completion_source=3");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "present_id=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "completed=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "custom_host_tool=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_display_bind_backend_boundary_matrix",
+                              output,
+                              "d3d12_display_bind_backend_boundary_matrix",
+                              "status=PASS");
     require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
                          output,
                          "d3d12_present_commit_result_copyout_contract_matrix");
@@ -2771,6 +2801,41 @@ static int validate_backend(void)
            stats.dxg_present_helper_transport_present ? "PRESENT" :
                "ABSENT",
            stats.dxg_present_helper_transport_present);
+    printf("gpu_core_c_validator d3d12_display_bind_backend_boundary_matrix "
+           "backend=%lu contract_version=%lu transport=%lu "
+           "transport_present=%lu operation=%lu completion_source=%lu "
+           "required_metadata=0x%lx lifetime=0x%lx block_reason=0x%lx "
+           "present_id=%lu completed=%lu source_generation=%lu "
+           "resource_generation=%lu status_code=%lu custom_host_tool=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_backend,
+           stats.dxg_display_bind_contract_version,
+           stats.dxg_display_bind_transport,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_operation,
+           stats.dxg_display_bind_completion_source,
+           stats.dxg_display_bind_required_metadata,
+           stats.dxg_display_bind_lifetime,
+           stats.dxg_display_bind_block_reason,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_status,
+           stats.dxg_display_bind_contract_version == 1 &&
+                   stats.dxg_display_bind_backend ==
+                       FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+                   stats.dxg_display_bind_transport ==
+                       FB_GPU_DXG_PRESENT_GPUP_DDA_TRANSPORT_NONE &&
+                   stats.dxg_display_bind_transport_present == 0 &&
+                   stats.dxg_display_bind_operation ==
+                       FB_GPU_DXG_PRESENT_GPUP_DDA_OP_SCANOUT_BIND &&
+                   stats.dxg_display_bind_completion_source ==
+                       FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+                   stats.dxg_display_bind_present_id == 0 &&
+                   stats.dxg_display_bind_completed_id == 0 &&
+                   stats.dxg_display_bind_status == EOPNOTSUPP ?
+               "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator dxg_syncfile_not_kms_completion_matrix "
            "syncfile_only=%lu weak_evidence_rejects=%lu "
            "scanout_successes=%lu completion_successes=%lu "

@@ -1,4 +1,5 @@
 #include "kernel/inc/types.h"
+#include "kernel/inc/errno.h"
 #include "kernel/inc/dev/fb.h"
 #include "kernel/inc/uabi/drm.h"
 #include "kernel/inc/uabi/fcntl.h"
@@ -357,6 +358,7 @@ int main(int argc, char *argv[])
     int have_backend = 0;
     int backend_opengl_submit = 0;
     int scanout_bind_skeleton_ok = 0;
+    int display_bind_boundary_ok = 0;
     int fd;
 
     if (argc == 2) {
@@ -398,6 +400,20 @@ int main(int argc, char *argv[])
         (stats.dxg_scanout_bind_completion_queries == 0 ||
          stats.dxg_scanout_bind_completion_pending >=
              stats.dxg_scanout_bind_completion_queries);
+    display_bind_boundary_ok =
+        stats.dxg_display_bind_contract_version == 1 &&
+        stats.dxg_display_bind_backend ==
+            FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+        stats.dxg_display_bind_transport ==
+            FB_GPU_DXG_PRESENT_GPUP_DDA_TRANSPORT_NONE &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_operation ==
+            FB_GPU_DXG_PRESENT_GPUP_DDA_OP_SCANOUT_BIND &&
+        stats.dxg_display_bind_completion_source ==
+            FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_display_bind_status == EOPNOTSUPP;
 
     if (have_backend) {
         printf("backend %s flags 0x%x renderer %s\n",
@@ -2203,6 +2219,58 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_last_dirty_sequence);
     printf("dxg_scanout_bind_last_dirty_rects %lu\n",
            stats.dxg_scanout_bind_last_dirty_rects);
+    printf("dxg_display_bind_contract_version %lu\n",
+           stats.dxg_display_bind_contract_version);
+    printf("dxg_display_bind_backend %lu\n",
+           stats.dxg_display_bind_backend);
+    printf("dxg_display_bind_backend_name %s\n",
+           present_lane_name(stats.dxg_display_bind_backend));
+    printf("dxg_display_bind_transport %lu\n",
+           stats.dxg_display_bind_transport);
+    printf("dxg_display_bind_transport_present %lu\n",
+           stats.dxg_display_bind_transport_present);
+    printf("dxg_display_bind_operation %lu\n",
+           stats.dxg_display_bind_operation);
+    printf("dxg_display_bind_required_metadata 0x%lx\n",
+           stats.dxg_display_bind_required_metadata);
+    printf("dxg_display_bind_lifetime 0x%lx\n",
+           stats.dxg_display_bind_lifetime);
+    printf("dxg_display_bind_block_reason 0x%lx\n",
+           stats.dxg_display_bind_block_reason);
+    printf("dxg_display_bind_completion_source %lu\n",
+           stats.dxg_display_bind_completion_source);
+    printf("dxg_display_bind_present_id %lu\n",
+           stats.dxg_display_bind_present_id);
+    printf("dxg_display_bind_completed_id %lu\n",
+           stats.dxg_display_bind_completed_id);
+    printf("dxg_display_bind_source_generation %lu\n",
+           stats.dxg_display_bind_source_generation);
+    printf("dxg_display_bind_resource_generation %lu\n",
+           stats.dxg_display_bind_resource_generation);
+    printf("dxg_display_bind_status %lu\n",
+           stats.dxg_display_bind_status);
+    printf("d3d12_display_bind_backend_boundary_matrix "
+           "backend=%s contract_version=%lu transport=%lu "
+           "transport_present=%lu operation=%lu completion_source=%lu "
+           "required_metadata=0x%lx lifetime=0x%lx block_reason=0x%lx "
+           "present_id=%lu completed=%lu source_generation=%lu "
+           "resource_generation=%lu status_code=%lu custom_host_tool=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           present_lane_name(stats.dxg_display_bind_backend),
+           stats.dxg_display_bind_contract_version,
+           stats.dxg_display_bind_transport,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_operation,
+           stats.dxg_display_bind_completion_source,
+           stats.dxg_display_bind_required_metadata,
+           stats.dxg_display_bind_lifetime,
+           stats.dxg_display_bind_block_reason,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_status,
+           display_bind_boundary_ok ? "PASS" : "DIAGNOSTIC");
     printf("dxg_scanout_bind_skeleton_matrix "
            "attempts=%lu rejects=%lu successes=%lu "
            "completion_queries=%lu completion_successes=%lu "

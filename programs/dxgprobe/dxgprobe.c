@@ -10944,6 +10944,41 @@ out:
                    bind_contract.present_id == 0 &&
                    bind_contract.completed == 0 ?
                "PASS" : "FAIL");
+    printf("d3d12_display_bind_backend_boundary_matrix "
+           "backend=gpup_dxg_scanout_bind contract_version=%lu "
+           "transport=%lu transport_present=%lu operation=%lu "
+           "completion_source=%lu required_metadata=0x%lx "
+           "lifetime=0x%lx block_reason=0x%lx present_id=%lu "
+           "completed=%lu source_generation=%lu resource_generation=%lu "
+           "status_code=%lu custom_host_tool=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_display_bind_contract_version,
+           stats_after.dxg_display_bind_transport,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_operation,
+           stats_after.dxg_display_bind_completion_source,
+           stats_after.dxg_display_bind_required_metadata,
+           stats_after.dxg_display_bind_lifetime,
+           stats_after.dxg_display_bind_block_reason,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           stats_after.dxg_display_bind_source_generation,
+           stats_after.dxg_display_bind_resource_generation,
+           stats_after.dxg_display_bind_status,
+           stats_after.dxg_display_bind_contract_version == 1 &&
+                   stats_after.dxg_display_bind_backend ==
+                       FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+                   stats_after.dxg_display_bind_transport ==
+                       FB_GPU_DXG_PRESENT_GPUP_DDA_TRANSPORT_NONE &&
+                   stats_after.dxg_display_bind_transport_present == 0 &&
+                   stats_after.dxg_display_bind_operation ==
+                       FB_GPU_DXG_PRESENT_GPUP_DDA_OP_SCANOUT_BIND &&
+                   stats_after.dxg_display_bind_completion_source ==
+                       FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+                   stats_after.dxg_display_bind_present_id == 0 &&
+                   stats_after.dxg_display_bind_completed_id == 0 &&
+                   stats_after.dxg_display_bind_status == EOPNOTSUPP ?
+               "PASS" : "FAIL");
     printf("d3d12_present_commit_result_copyout_contract_matrix "
            "commit_ioctl_delta=%lu copyout_failures_delta=%lu "
            "copyout_on_success=IMPLEMENTED failure_returns_errno=PASS "
