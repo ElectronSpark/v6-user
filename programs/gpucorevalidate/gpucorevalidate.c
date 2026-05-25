@@ -1962,6 +1962,41 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_present_bind_contract_failclosed_matrix",
                               "status=PASS");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output,
+                         "dxg_resource_scanout_bind_host_abi_matrix");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "selected_lane=gpup_dxg_scanout_bind");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "custom_host_tool=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "wsl_dxg_display_bind_ioctl=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "synthvid_vram_bridge=gpa_dirty_only");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "dxg_resource_fd=PASS");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "d3dkmt_handles=PASS");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "same_adapter_luid=PASS");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "missing_host_abi=1");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "transport_present=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "display_target_kind=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "present_id=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "completed=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("dxg_resource_scanout_bind_host_abi_matrix",
+                              output,
+                              "dxg_resource_scanout_bind_host_abi_matrix",
+                              "status=PASS");
 
     if (failures != before)
         return -1;
@@ -2005,6 +2040,14 @@ static int validate_present_source_matrix(void)
            "foreign_source=PASS stale_source=PASS "
            "software_paths_rejected=PASS transport_present=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "dxg_resource_scanout_bind_host_abi_matrix "
+           "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
+           "wsl_dxg_display_bind_ioctl=0 "
+           "synthvid_vram_bridge=gpa_dirty_only missing_host_abi=1 "
+           "transport_present=0 display_target_kind=0 present_id=0 "
+           "completed=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS\n");
     return 0;
 }
 

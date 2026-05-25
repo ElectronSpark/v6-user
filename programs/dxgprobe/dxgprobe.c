@@ -10580,6 +10580,28 @@ out:
            software_path_rejection ? "PASS" : "FAIL",
            query.missing_host_abi, query.helper_transport_present,
            d3d12_bind_contract_failclosed_pass ? "PASS" : "FAIL");
+    printf("dxg_resource_scanout_bind_host_abi_matrix "
+           "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
+           "wsl_dxg_display_bind_ioctl=0 "
+           "synthvid_vram_bridge=gpa_dirty_only "
+           "dxg_resource_fd=PASS d3dkmt_handles=PASS "
+           "same_adapter_luid=%s required_metadata=0x%lx "
+           "host_candidates=0x%lx host_rejects=0x%lx "
+           "missing_host_abi=%lu transport_present=%lu "
+           "display_target_kind=%u present_id=0 completed=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           query.adapter_identity == FB_GPU_DXG_PRESENT_ADAPTER_MATCH ?
+               "PASS" : "FAIL",
+           bind_contract.required_metadata,
+           bind_contract.host_candidates, bind_contract.host_rejects,
+           query.missing_host_abi, query.helper_transport_present,
+           query.display_target_kind,
+           d3d12_bind_contract_failclosed_pass &&
+               query.missing_host_abi ==
+                   FB_GPU_DXG_PRESENT_MISSING_SCANOUT_BIND &&
+               query.helper_transport_present == 0 &&
+               query.display_target_kind == FB_GPU_DXG_DISPLAY_TARGET_NONE ?
+               "PASS" : "FAIL");
 
     if (fb_fd >= 0)
         close(fb_fd);
