@@ -815,6 +815,18 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_bar_claim_failures);
     printf("nouveau_pci_bar_releases %lu\n",
            stats.nouveau_pci_bar_releases);
+    printf("nouveau_pci_resource_claims %lu\n",
+           stats.nouveau_pci_resource_claims);
+    printf("nouveau_pci_resource_releases %lu\n",
+           stats.nouveau_pci_resource_releases);
+    printf("nouveau_pci_resource_iomaps %lu\n",
+           stats.nouveau_pci_resource_iomaps);
+    printf("nouveau_pci_resource_owner_mismatches %lu\n",
+           stats.nouveau_pci_resource_owner_mismatches);
+    printf("nouveau_pci_unclaimed_iomaps %lu\n",
+           stats.nouveau_pci_unclaimed_iomaps);
+    printf("nouveau_pci_unclaimed_releases %lu\n",
+           stats.nouveau_pci_unclaimed_releases);
     printf("nouveau_pci_irq_request_failures %lu\n",
            stats.nouveau_pci_irq_request_failures);
     printf("nouveau_pci_irq_mode %lu\n", stats.nouveau_pci_irq_mode);
@@ -840,7 +852,10 @@ int main(int argc, char *argv[])
            "dma_mask_bits=%lu coherent_configured=%lu "
            "coherent_bits=%lu bar0_len=%lu bar1_len=%lu "
            "bar0_claimed=%lu bar1_claimed=%lu claim_failures=%lu "
-           "releases=%lu irq_mode=%lu irq_failures=%lu "
+           "releases=%lu resource_claims=%lu resource_releases=%lu "
+           "resource_iomaps=%lu owner_mismatches=%lu "
+           "unclaimed_iomaps=%lu unclaimed_releases=%lu "
+           "irq_mode=%lu irq_failures=%lu "
            "msi_requested=%lu msi_fail_closed=%lu "
            "irq_vector_valid=%lu irq_handler_registered=%lu "
            "irq_delivery_enabled=%lu irq_delivery_claimed=%lu "
@@ -862,6 +877,12 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_bar1_claimed,
            stats.nouveau_pci_bar_claim_failures,
            stats.nouveau_pci_bar_releases,
+           stats.nouveau_pci_resource_claims,
+           stats.nouveau_pci_resource_releases,
+           stats.nouveau_pci_resource_iomaps,
+           stats.nouveau_pci_resource_owner_mismatches,
+           stats.nouveau_pci_unclaimed_iomaps,
+           stats.nouveau_pci_unclaimed_releases,
            stats.nouveau_pci_irq_mode,
            stats.nouveau_pci_irq_request_failures,
            stats.nouveau_pci_msi_requested,
@@ -892,6 +913,15 @@ int main(int argc, char *argv[])
               (stats.nouveau_pci_bar1_len == 0 ||
                stats.nouveau_pci_bar1_claimed)) ? "PASS" : "FAIL") :
             "NOT_ATTEMPTED";
+        const char *resource_owner =
+            stats.nouveau_pci_resource_owner_mismatches == 0 ?
+                (accepts ? "PASS" : "GPU_P_FAIL_CLOSED") : "FAIL";
+        const char *claim_before_iomap =
+            stats.nouveau_pci_unclaimed_iomaps == 0 ?
+                (accepts ? "PASS" : "GPU_P_FAIL_CLOSED") : "FAIL";
+        const char *release_balance =
+            stats.nouveau_pci_unclaimed_releases == 0 ?
+                (accepts ? "PASS" : "GPU_P_FAIL_CLOSED") : "FAIL";
         const char *msi_msix = stats.nouveau_pci_msi_fail_closed ?
             "FAIL_CLOSED" : "NOT_ATTEMPTED";
         const char *legacy_irq = accepts ?
@@ -925,6 +955,9 @@ int main(int argc, char *argv[])
                "accepts=%lu resource_tree=%s dma_mapping_api=%s "
                "msi_msix_programming=%s legacy_irq_fallback=%s "
                "irq_delivery=%s runtime_pm=%s remove_path=%s "
+               "resource_owner=%s claim_before_iomap=%s "
+               "release_balance=%s owner_mismatch=%lu "
+               "unclaimed_iomap=%lu unclaimed_release=%lu "
                "hot_remove=%s native_engine=%s native_present_credit=%lu "
                "opengl_submit_credit=0 status=%s\n",
                stats.nouveau_pci_probe_accepts,
@@ -935,6 +968,12 @@ int main(int argc, char *argv[])
                irq_delivery,
                runtime_pm,
                remove_path,
+               resource_owner,
+               claim_before_iomap,
+               release_balance,
+               stats.nouveau_pci_resource_owner_mismatches,
+               stats.nouveau_pci_unclaimed_iomaps,
+               stats.nouveau_pci_unclaimed_releases,
                accepts ? "DIAGNOSTIC" : "DEFERRED",
                accepts ? "DIAGNOSTIC" : "ABSENT",
                stats.nouveau_pci_native_present_credit,

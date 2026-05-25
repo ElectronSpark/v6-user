@@ -2321,6 +2321,9 @@ static int validate_backend(void)
            "dma_mask_bits=%lu coherent_configured=%lu coherent_bits=%lu "
            "bar0_len=%lu bar1_len=%lu bar0_claimed=%lu "
            "bar1_claimed=%lu claim_failures=%lu releases=%lu "
+           "resource_claims=%lu resource_releases=%lu "
+           "resource_iomaps=%lu owner_mismatches=%lu "
+           "unclaimed_iomaps=%lu unclaimed_releases=%lu "
            "irq_mode=%lu irq_failures=%lu msi_requested=%lu "
            "msi_fail_closed=%lu irq_vector_valid=%lu "
            "irq_handler_registered=%lu irq_delivery_enabled=%lu "
@@ -2342,6 +2345,12 @@ static int validate_backend(void)
            stats.nouveau_pci_bar1_claimed,
            stats.nouveau_pci_bar_claim_failures,
            stats.nouveau_pci_bar_releases,
+           stats.nouveau_pci_resource_claims,
+           stats.nouveau_pci_resource_releases,
+           stats.nouveau_pci_resource_iomaps,
+           stats.nouveau_pci_resource_owner_mismatches,
+           stats.nouveau_pci_unclaimed_iomaps,
+           stats.nouveau_pci_unclaimed_releases,
            stats.nouveau_pci_irq_mode,
            stats.nouveau_pci_irq_request_failures,
            stats.nouveau_pci_msi_requested,
@@ -2384,7 +2393,10 @@ static int validate_backend(void)
     printf("gpu_core_c_validator nouveau_pci_runtime_interface_matrix "
            "accepts=%lu resource_tree=%s dma_mapping_api=%s "
            "msi_msix_programming=%s legacy_irq_fallback=%s "
-           "irq_delivery=%s runtime_pm=%s remove_path=%s hot_remove=%s "
+           "irq_delivery=%s runtime_pm=%s remove_path=%s "
+           "resource_owner=%s claim_before_iomap=%s "
+           "release_balance=%s owner_mismatch=%lu unclaimed_iomap=%lu "
+           "unclaimed_release=%lu hot_remove=%s "
            "native_engine=%s native_present_credit=%lu "
            "opengl_submit_credit=0 status=PENDING\n",
            stats.nouveau_pci_probe_accepts,
@@ -2401,6 +2413,18 @@ static int validate_backend(void)
            stats.nouveau_pci_probe_accepts == 0 ? "DEFERRED" :
                "DIAGNOSTIC",
            stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED",
+           stats.nouveau_pci_resource_owner_mismatches == 0 ?
+               (stats.nouveau_pci_probe_accepts == 0 ?
+                    "GPU_P_FAIL_CLOSED" : "PASS") : "FAIL",
+           stats.nouveau_pci_unclaimed_iomaps == 0 ?
+               (stats.nouveau_pci_probe_accepts == 0 ?
+                    "GPU_P_FAIL_CLOSED" : "PASS") : "FAIL",
+           stats.nouveau_pci_unclaimed_releases == 0 ?
+               (stats.nouveau_pci_probe_accepts == 0 ?
+                    "GPU_P_FAIL_CLOSED" : "PASS") : "FAIL",
+           stats.nouveau_pci_resource_owner_mismatches,
+           stats.nouveau_pci_unclaimed_iomaps,
+           stats.nouveau_pci_unclaimed_releases,
            stats.nouveau_pci_probe_accepts == 0 ? "DEFERRED" :
                "DIAGNOSTIC",
            stats.nouveau_pci_probe_accepts == 0 ? "ABSENT" :
@@ -2521,11 +2545,23 @@ static int validate_backend(void)
             note_fail("backend", "dda_nouveau_bar1_not_claimed");
             ok = 0;
         }
+        if (stats.nouveau_pci_resource_owner_mismatches != 0 ||
+            stats.nouveau_pci_unclaimed_iomaps != 0 ||
+            stats.nouveau_pci_unclaimed_releases != 0) {
+            note_fail("backend", "dda_nouveau_resource_ownership_broken");
+            ok = 0;
+        }
         if (stats.nouveau_pci_runtime_suspended != 0 ||
             stats.nouveau_pci_runtime_pm_balanced == 0 ||
             stats.nouveau_pci_suspend_count !=
                 stats.nouveau_pci_resume_count) {
             note_fail("backend", "dda_nouveau_runtime_pm_unbalanced");
+            ok = 0;
+        }
+        if (stats.nouveau_pci_irq_vector_valid == 0 ||
+            stats.nouveau_pci_irq_handler_registered == 0 ||
+            stats.nouveau_pci_irq_delivery_enabled == 0) {
+            note_fail("backend", "dda_nouveau_irq_path_not_armed");
             ok = 0;
         }
         if (stats.nouveau_pci_irq_delivery_claimed != 0 &&
@@ -2574,6 +2610,9 @@ static int validate_backend(void)
             stats.nouveau_pci_irq_delivery_enabled != 0 ||
             stats.nouveau_pci_irq_delivery_claimed != 0 ||
             stats.nouveau_pci_legacy_irq_fallback != 0 ||
+            stats.nouveau_pci_resource_owner_mismatches != 0 ||
+            stats.nouveau_pci_unclaimed_iomaps != 0 ||
+            stats.nouveau_pci_unclaimed_releases != 0 ||
             stats.nouveau_pci_suspend_count != 0 ||
             stats.nouveau_pci_resume_count != 0 ||
             stats.nouveau_pci_runtime_suspended != 0) {
@@ -2629,6 +2668,9 @@ static int validate_backend(void)
     if (ok) {
         printf("gpu_core_c_validator nouveau_pci_dma_resource_matrix "
                "bar_claim=PASS dma_mask=PASS irq_diagnostics=PASS "
+               "resource_owner=PASS claim_before_iomap=PASS "
+               "release_balance=PASS owner_mismatch=0 "
+               "unclaimed_iomap=0 unclaimed_release=0 "
                "irq_handler_registered=%lu irq_delivery_enabled=%lu "
                "irq_delivery_claimed=%lu "
                "runtime_pm=PASS "
@@ -2661,6 +2703,10 @@ static int validate_backend(void)
                    "msi_msix_programming=NOT_ATTEMPTED "
                    "legacy_irq_fallback=NOT_CLAIMED irq_delivery=ABSENT "
                    "runtime_pm=DEFERRED remove_path=DEFERRED "
+                   "resource_owner=GPU_P_FAIL_CLOSED "
+                   "claim_before_iomap=GPU_P_FAIL_CLOSED "
+                   "release_balance=GPU_P_FAIL_CLOSED owner_mismatch=0 "
+                   "unclaimed_iomap=0 unclaimed_release=0 "
                    "hot_remove=DEFERRED native_engine=ABSENT "
                    "native_present_credit=0 opengl_submit_credit=0 "
                    "status=PASS\n");
@@ -2690,7 +2736,10 @@ static int validate_backend(void)
                    "accepts=%lu resource_tree=PASS dma_mapping_api=PASS "
                    "msi_msix_programming=%s legacy_irq_fallback=%s "
                    "irq_delivery=%s runtime_pm=DIAGNOSTIC "
-                   "remove_path=%s hot_remove=DIAGNOSTIC "
+                   "remove_path=%s resource_owner=PASS "
+                   "claim_before_iomap=PASS release_balance=PASS "
+                   "owner_mismatch=0 unclaimed_iomap=0 "
+                   "unclaimed_release=0 hot_remove=DIAGNOSTIC "
                    "native_engine=DIAGNOSTIC native_present_credit=0 "
                    "opengl_submit_credit=0 status=DIAGNOSTIC\n",
                    stats.nouveau_pci_probe_accepts,
