@@ -1839,6 +1839,26 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_completion_pending);
     printf("dxg_scanout_bind_weak_evidence_rejects %lu\n",
            stats.dxg_scanout_bind_weak_evidence_rejects);
+    printf("dxg_scanout_bind_candidate_cmds_known %lu\n",
+           stats.dxg_scanout_bind_candidate_cmds_known);
+    printf("dxg_scanout_bind_candidate_sender_contracts %lu\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts);
+    printf("dxg_scanout_bind_candidate_completion_contracts %lu\n",
+           stats.dxg_scanout_bind_candidate_completion_contracts);
+    printf("dxg_scanout_bind_candidate_rejects %lu\n",
+           stats.dxg_scanout_bind_candidate_rejects);
+    printf("dxg_scanout_bind_weak_dxg_ready_only %lu\n",
+           stats.dxg_scanout_bind_weak_dxg_ready_only);
+    printf("dxg_scanout_bind_weak_d3dkmt_handles_only %lu\n",
+           stats.dxg_scanout_bind_weak_d3dkmt_handles_only);
+    printf("dxg_scanout_bind_weak_same_adapter_resource_only %lu\n",
+           stats.dxg_scanout_bind_weak_same_adapter_resource_only);
+    printf("dxg_scanout_bind_weak_syncfile_only %lu\n",
+           stats.dxg_scanout_bind_weak_syncfile_only);
+    printf("dxg_scanout_bind_weak_synthvid_gpa_dirty_only %lu\n",
+           stats.dxg_scanout_bind_weak_synthvid_gpa_dirty_only);
+    printf("dxg_scanout_bind_weak_software_or_readback_path %lu\n",
+           stats.dxg_scanout_bind_weak_software_or_readback_path);
     printf("dxg_scanout_bind_last_transport %lu\n",
            stats.dxg_scanout_bind_last_transport);
     printf("dxg_scanout_bind_last_status %lu\n",
@@ -1879,6 +1899,44 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_last_dirty_sequence,
            stats.dxg_scanout_bind_last_dirty_rects,
            scanout_bind_skeleton_ok ? "PASS" : "FAIL");
+    printf("dxg_scanout_bind_candidate_command_matrix "
+           "presenthistory_cmd=34 redirected_flip_fence_cmd=35 blt_cmd=38 "
+           "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
+           "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_cmds_known,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_scanout_bind_candidate_rejects,
+           stats.dxg_present_helper_transport_present,
+           stats.dxg_scanout_bind_candidate_cmds_known == 3 &&
+                   stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                   stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                   stats.dxg_present_helper_transport_present == 0 &&
+                   stats.dxg_scanout_bind_last_present_id == 0 &&
+                   stats.dxg_scanout_bind_last_completed == 0 ?
+               "PASS" : "DIAGNOSTIC");
+    printf("dxg_scanout_bind_weak_evidence_matrix "
+           "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
+           "same_adapter_resource_only=%lu syncfile_only=%lu "
+           "synthvid_gpa_dirty_only=%lu software_or_readback_path=%lu "
+           "weak_evidence_rejects=%lu successes=%lu present_id=0 "
+           "completed=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats.dxg_scanout_bind_weak_dxg_ready_only,
+           stats.dxg_scanout_bind_weak_d3dkmt_handles_only,
+           stats.dxg_scanout_bind_weak_same_adapter_resource_only,
+           stats.dxg_scanout_bind_weak_syncfile_only,
+           stats.dxg_scanout_bind_weak_synthvid_gpa_dirty_only,
+           stats.dxg_scanout_bind_weak_software_or_readback_path,
+           stats.dxg_scanout_bind_weak_evidence_rejects,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_weak_evidence_rejects > 0 &&
+                   stats.dxg_scanout_bind_successes == 0 &&
+                   stats.dxg_scanout_bind_last_present_id == 0 &&
+                   stats.dxg_scanout_bind_last_completed == 0 ?
+               "PASS" : "DIAGNOSTIC");
     printf("dxg_present_release_sources %lu\n",
            stats.dxg_present_release_sources);
     printf("display_presents %lu\n", stats.display_presents);

@@ -10985,6 +10985,55 @@ out:
            stats_after.dxg_scanout_bind_last_dirty_sequence,
            stats_after.dxg_scanout_bind_last_dirty_rects,
            d3d12_scanout_bind_skeleton_pass ? "PASS" : "FAIL");
+    printf("dxg_scanout_bind_candidate_command_matrix "
+           "presenthistory_cmd=34 redirected_flip_fence_cmd=35 blt_cmd=38 "
+           "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
+           "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_cmds_known,
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_scanout_bind_candidate_rejects -
+               stats_before.dxg_scanout_bind_candidate_rejects,
+           query.helper_transport_present,
+           stats_after.dxg_scanout_bind_candidate_cmds_known == 3 &&
+                   stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                   query.helper_transport_present == 0 &&
+                   bind_contract.present_id == 0 &&
+                   bind_contract.completed == 0 ?
+               "PASS" : "FAIL");
+    printf("dxg_scanout_bind_weak_evidence_matrix "
+           "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
+           "same_adapter_resource_only=%lu syncfile_only=%lu "
+           "synthvid_gpa_dirty_only=%lu software_or_readback_path=%lu "
+           "weak_evidence_rejects=%lu successes=%lu present_id=0 "
+           "completed=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats_after.dxg_scanout_bind_weak_dxg_ready_only -
+               stats_before.dxg_scanout_bind_weak_dxg_ready_only,
+           stats_after.dxg_scanout_bind_weak_d3dkmt_handles_only -
+               stats_before.dxg_scanout_bind_weak_d3dkmt_handles_only,
+           stats_after.dxg_scanout_bind_weak_same_adapter_resource_only -
+               stats_before.dxg_scanout_bind_weak_same_adapter_resource_only,
+           stats_after.dxg_scanout_bind_weak_syncfile_only -
+               stats_before.dxg_scanout_bind_weak_syncfile_only,
+           stats_after.dxg_scanout_bind_weak_synthvid_gpa_dirty_only -
+               stats_before.dxg_scanout_bind_weak_synthvid_gpa_dirty_only,
+           stats_after.dxg_scanout_bind_weak_software_or_readback_path -
+               stats_before.dxg_scanout_bind_weak_software_or_readback_path,
+           stats_after.dxg_scanout_bind_weak_evidence_rejects -
+               stats_before.dxg_scanout_bind_weak_evidence_rejects,
+           stats_after.dxg_scanout_bind_successes -
+               stats_before.dxg_scanout_bind_successes,
+           stats_after.dxg_scanout_bind_weak_evidence_rejects >
+                   stats_before.dxg_scanout_bind_weak_evidence_rejects &&
+                   stats_after.dxg_scanout_bind_successes ==
+                       stats_before.dxg_scanout_bind_successes &&
+                   bind_contract.present_id == 0 &&
+                   bind_contract.completed == 0 ?
+               "PASS" : "FAIL");
     printf("wsl_standard_alloc_surface_abi_matrix "
            "shared_primary_size=%lu shadow_size=%lu staging_size=%lu "
            "gdi_size=%lu command_union=sharedprimary,shadow,staging,gdi "
