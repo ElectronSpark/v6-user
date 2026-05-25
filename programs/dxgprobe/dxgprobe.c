@@ -11049,7 +11049,9 @@ out:
            "completed=%lu source_generation=%lu resource_generation=%lu "
            "status_code=%lu provider_submits=%lu lock_dropped_submits=%lu "
            "revalidate_attempts=%lu revalidate_successes=%lu "
-           "revalidate_failures=%lu custom_host_tool=0 native_present_credit=0 "
+           "revalidate_failures=%lu provider_pin_revalidated=%lu "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu custom_host_tool=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats_after.dxg_display_bind_contract_version,
            stats_after.dxg_display_bind_transport,
@@ -11074,6 +11076,10 @@ out:
                stats_before.dxg_display_bind_revalidate_successes,
            stats_after.dxg_display_bind_revalidate_failures -
                stats_before.dxg_display_bind_revalidate_failures,
+           stats_after.dxg_display_bind_provider_pin_revalidated,
+           stats_after.dxg_display_bind_provider_no_host_abi,
+           stats_after.dxg_display_bind_provider_no_sender,
+           stats_after.dxg_display_bind_provider_no_completion,
            stats_after.dxg_display_bind_contract_version == 1 &&
                    stats_after.dxg_display_bind_backend ==
                        FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
@@ -11096,9 +11102,47 @@ out:
                    stats_after.dxg_display_bind_revalidate_successes >
                        stats_before.dxg_display_bind_revalidate_successes &&
                    stats_after.dxg_display_bind_revalidate_failures ==
-                       stats_before.dxg_display_bind_revalidate_failures ?
+                       stats_before.dxg_display_bind_revalidate_failures &&
+                   stats_after.dxg_display_bind_provider_pin_revalidated == 1 &&
+                   stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
+                   stats_after.dxg_display_bind_provider_no_sender == 1 &&
+                   stats_after.dxg_display_bind_provider_no_completion == 1 ?
                "PASS" : "FAIL");
-    printf("d3d12_display_bind_pin_lifetime_matrix "
+    {
+        uint64 pin_attempt_delta =
+            stats_pin->dxg_display_bind_pin_attempts -
+            stats_before.dxg_display_bind_pin_attempts;
+        uint64 pin_success_delta =
+            stats_pin->dxg_display_bind_pin_successes -
+            stats_before.dxg_display_bind_pin_successes;
+        uint64 unpin_delta =
+            stats_pin->dxg_display_bind_unpins -
+            stats_before.dxg_display_bind_unpins;
+        int pin_refs_proven =
+            pin_attempt_delta != 0 &&
+            pin_success_delta != 0 &&
+            stats_pin->dxg_display_bind_pin_failures ==
+                stats_before.dxg_display_bind_pin_failures &&
+            stats_pin->dxg_display_bind_pinned_dxg_file == 1 &&
+            stats_pin->dxg_display_bind_pinned_resource_file == 1 &&
+            stats_pin->dxg_display_bind_pinned_resource_generation != 0 &&
+            stats_pin->dxg_display_bind_pinned_process_generation != 0 &&
+            stats_pin->dxg_display_bind_pinned_process_refs != 0 &&
+            stats_pin->dxg_display_bind_pinned_shared_parent != 0 &&
+            stats_pin->dxg_display_bind_pinned_parent_refs != 0 &&
+            stats_pin->dxg_display_bind_pinned_parent_children != 0 &&
+            stats_pin->dxg_display_bind_present_id == 0 &&
+            stats_pin->dxg_display_bind_completed_id == 0;
+        int cleanup_balanced = unpin_delta == pin_success_delta;
+
+        /*
+         * Source close may run before the process finishes closing its DXG
+         * fds and shared handles, so the in-process snapshot can see the
+         * pinned refs before the final unpin counter catches up. The parent
+         * C validator samples fbstat after this process exits and requires
+         * the balanced cleanup state there.
+         */
+        printf("d3d12_display_bind_pin_lifetime_matrix "
            "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
            "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
            "pinned_resource_generation=%lu pinned_process_generation=%lu "
@@ -11106,15 +11150,12 @@ out:
            "pinned_parent_refs=%lu pinned_parent_children=%lu "
            "source_generation=%lu "
            "resource_generation=%lu native_present_credit=0 "
-           "opengl_submit_credit=0 status=%s\n",
-           stats_pin->dxg_display_bind_pin_attempts -
-               stats_before.dxg_display_bind_pin_attempts,
-           stats_pin->dxg_display_bind_pin_successes -
-               stats_before.dxg_display_bind_pin_successes,
+           "opengl_submit_credit=0 cleanup_state=%s status=%s\n",
+           pin_attempt_delta,
+           pin_success_delta,
            stats_pin->dxg_display_bind_pin_failures -
                stats_before.dxg_display_bind_pin_failures,
-           stats_pin->dxg_display_bind_unpins -
-               stats_before.dxg_display_bind_unpins,
+           unpin_delta,
            stats_pin->dxg_display_bind_pinned_dxg_file,
            stats_pin->dxg_display_bind_pinned_resource_file,
            stats_pin->dxg_display_bind_pinned_resource_generation,
@@ -11125,25 +11166,9 @@ out:
            stats_pin->dxg_display_bind_pinned_parent_children,
            stats_pin->dxg_display_bind_source_generation,
            stats_pin->dxg_display_bind_resource_generation,
-           stats_pin->dxg_display_bind_pin_attempts >
-                       stats_before.dxg_display_bind_pin_attempts &&
-                   stats_pin->dxg_display_bind_pin_successes >
-                       stats_before.dxg_display_bind_pin_successes &&
-                   stats_pin->dxg_display_bind_unpins -
-                           stats_before.dxg_display_bind_unpins ==
-                       stats_pin->dxg_display_bind_pin_successes -
-                           stats_before.dxg_display_bind_pin_successes &&
-                   stats_pin->dxg_display_bind_pinned_dxg_file == 1 &&
-                   stats_pin->dxg_display_bind_pinned_resource_file == 1 &&
-                   stats_pin->dxg_display_bind_pinned_resource_generation != 0 &&
-                   stats_pin->dxg_display_bind_pinned_process_generation != 0 &&
-                   stats_pin->dxg_display_bind_pinned_process_refs != 0 &&
-                   stats_pin->dxg_display_bind_pinned_shared_parent != 0 &&
-                   stats_pin->dxg_display_bind_pinned_parent_refs != 0 &&
-                   stats_pin->dxg_display_bind_pinned_parent_children != 0 &&
-                   stats_pin->dxg_display_bind_present_id == 0 &&
-                   stats_pin->dxg_display_bind_completed_id == 0 ?
-               "PASS" : "FAIL");
+           cleanup_balanced ? "balanced" : "deferred_until_process_exit",
+           pin_refs_proven && owner_cleanup ? "PASS" : "FAIL");
+    }
     printf("d3d12_present_commit_result_copyout_contract_matrix "
            "commit_ioctl_delta=%lu copyout_failures_delta=%lu "
            "copyout_on_success=IMPLEMENTED failure_returns_errno=PASS "

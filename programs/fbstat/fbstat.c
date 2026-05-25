@@ -413,7 +413,11 @@ int main(int argc, char *argv[])
             FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
-        stats.dxg_display_bind_status == EOPNOTSUPP;
+        stats.dxg_display_bind_status == EOPNOTSUPP &&
+        (stats.dxg_display_bind_provider_submits == 0 ||
+         (stats.dxg_display_bind_provider_no_host_abi == 1 &&
+          stats.dxg_display_bind_provider_no_sender == 1 &&
+          stats.dxg_display_bind_provider_no_completion == 1));
 
     if (have_backend) {
         printf("backend %s flags 0x%x renderer %s\n",
@@ -2265,6 +2269,14 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_status);
     printf("dxg_display_bind_provider_submits %lu\n",
            stats.dxg_display_bind_provider_submits);
+    printf("dxg_display_bind_provider_pin_revalidated %lu\n",
+           stats.dxg_display_bind_provider_pin_revalidated);
+    printf("dxg_display_bind_provider_no_host_abi %lu\n",
+           stats.dxg_display_bind_provider_no_host_abi);
+    printf("dxg_display_bind_provider_no_sender %lu\n",
+           stats.dxg_display_bind_provider_no_sender);
+    printf("dxg_display_bind_provider_no_completion %lu\n",
+           stats.dxg_display_bind_provider_no_completion);
     printf("dxg_display_bind_lock_dropped_submits %lu\n",
            stats.dxg_display_bind_lock_dropped_submits);
     printf("dxg_display_bind_revalidate_attempts %lu\n",
@@ -2304,7 +2316,10 @@ int main(int argc, char *argv[])
            "present_id=%lu completed=%lu source_generation=%lu "
            "resource_generation=%lu status_code=%lu provider_submits=%lu "
            "lock_dropped_submits=%lu revalidate_attempts=%lu "
-           "revalidate_successes=%lu revalidate_failures=%lu custom_host_tool=0 "
+           "revalidate_successes=%lu revalidate_failures=%lu "
+           "provider_pin_revalidated=%lu provider_no_host_abi=%lu "
+           "provider_no_sender=%lu provider_no_completion=%lu "
+           "custom_host_tool=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            present_lane_name(stats.dxg_display_bind_backend),
            stats.dxg_display_bind_contract_version,
@@ -2325,6 +2340,10 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_revalidate_attempts,
            stats.dxg_display_bind_revalidate_successes,
            stats.dxg_display_bind_revalidate_failures,
+           stats.dxg_display_bind_provider_pin_revalidated,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
            display_bind_boundary_ok ? "PASS" : "DIAGNOSTIC");
     printf("d3d12_display_bind_pin_lifetime_matrix "
            "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
