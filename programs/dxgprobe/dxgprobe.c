@@ -10022,6 +10022,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_acquire_fence_lifetime_pass = 0;
     int d3d12_present_syncfile_preopen_pass = 0;
     int d3d12_bind_contract_failclosed_pass = 0;
+    int d3d12_scanout_bind_skeleton_pass = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10593,11 +10594,32 @@ static int probe_present_source_failclosed_contract(
         stale_bind_contract_failclosed && software_path_rejection &&
         bind_contract.present_id == 0 && bind_contract.completed == 0 &&
         hyperv_gate;
+    d3d12_scanout_bind_skeleton_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_scanout_bind_attempts >
+            stats_before.dxg_scanout_bind_attempts &&
+        stats_after.dxg_scanout_bind_rejects -
+            stats_before.dxg_scanout_bind_rejects >=
+            stats_after.dxg_scanout_bind_attempts -
+            stats_before.dxg_scanout_bind_attempts &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_weak_evidence_rejects -
+            stats_before.dxg_scanout_bind_weak_evidence_rejects >=
+            stats_after.dxg_scanout_bind_attempts -
+            stats_before.dxg_scanout_bind_attempts &&
+        stats_after.dxg_scanout_bind_last_present_id == 0 &&
+        stats_after.dxg_scanout_bind_last_completed == 0 &&
+        bind_contract.source_generation != 0 &&
+        bind_contract.resource_generation != 0 &&
+        stats_after.dxg_scanout_bind_last_dirty_sequence == 0 &&
+        stats_after.dxg_scanout_bind_last_dirty_rects == 0 &&
+        no_present_credit && hyperv_gate;
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
            software_path_rejection && d3d12_present_syncfile_preopen_pass &&
-           owner_cleanup &&
+           d3d12_scanout_bind_skeleton_pass && owner_cleanup &&
            stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -10932,6 +10954,37 @@ out:
                query.helper_transport_present == 0 &&
                query.display_target_kind == FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                "PASS" : "FAIL");
+    printf("dxg_scanout_bind_skeleton_matrix "
+           "attempts=%lu rejects=%lu successes=%lu "
+           "completion_queries=%lu completion_successes=%lu "
+           "completion_pending=%lu weak_evidence_rejects=%lu "
+           "transport=%lu status_code=%lu present_id=%lu completed=%lu "
+           "source_generation=%lu resource_generation=%lu "
+           "dirty_sequence=%lu dirty_rects=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_attempts -
+               stats_before.dxg_scanout_bind_attempts,
+           stats_after.dxg_scanout_bind_rejects -
+               stats_before.dxg_scanout_bind_rejects,
+           stats_after.dxg_scanout_bind_successes -
+               stats_before.dxg_scanout_bind_successes,
+           stats_after.dxg_scanout_bind_completion_queries -
+               stats_before.dxg_scanout_bind_completion_queries,
+           stats_after.dxg_scanout_bind_completion_successes -
+               stats_before.dxg_scanout_bind_completion_successes,
+           stats_after.dxg_scanout_bind_completion_pending -
+               stats_before.dxg_scanout_bind_completion_pending,
+           stats_after.dxg_scanout_bind_weak_evidence_rejects -
+               stats_before.dxg_scanout_bind_weak_evidence_rejects,
+           stats_after.dxg_scanout_bind_last_transport,
+           stats_after.dxg_scanout_bind_last_status,
+           stats_after.dxg_scanout_bind_last_present_id,
+           stats_after.dxg_scanout_bind_last_completed,
+           bind_contract.source_generation,
+           bind_contract.resource_generation,
+           stats_after.dxg_scanout_bind_last_dirty_sequence,
+           stats_after.dxg_scanout_bind_last_dirty_rects,
+           d3d12_scanout_bind_skeleton_pass ? "PASS" : "FAIL");
     printf("wsl_standard_alloc_surface_abi_matrix "
            "shared_primary_size=%lu shadow_size=%lu staging_size=%lu "
            "gdi_size=%lu command_union=sharedprimary,shadow,staging,gdi "

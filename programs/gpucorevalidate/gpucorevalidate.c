@@ -2073,6 +2073,26 @@ static int validate_present_source_matrix(void)
                               output,
                               "dxg_resource_scanout_bind_host_abi_matrix",
                               "status=PASS");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "dxg_scanout_bind_skeleton_matrix");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "attempts=");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "successes=0");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "weak_evidence_rejects=");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "present_id=0");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "completed=0");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("dxg_scanout_bind_skeleton_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("dxg_scanout_bind_skeleton_matrix",
+                              output,
+                              "dxg_scanout_bind_skeleton_matrix",
+                              "status=PASS");
     require_output_token("wsl_standard_alloc_surface_abi_matrix",
                          output, "wsl_standard_alloc_surface_abi_matrix");
     require_output_token("wsl_standard_alloc_surface_abi_matrix",
@@ -2163,6 +2183,14 @@ static int validate_present_source_matrix(void)
            "completed=0 native_present_credit=0 opengl_submit_credit=0 "
            "status=PASS\n");
     printf("gpu_core_c_validator "
+           "dxg_scanout_bind_skeleton_matrix "
+           "attempts=0 rejects=0 successes=0 completion_queries=0 "
+           "completion_successes=0 completion_pending=0 "
+           "weak_evidence_rejects=0 transport=0 status_code=0 "
+           "present_id=0 completed=0 source_generation=0 "
+           "resource_generation=0 dirty_sequence=0 dirty_rects=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
            "wsl_standard_alloc_surface_abi_matrix "
            "shared_primary_size=24 shadow_size=16 staging_size=12 "
            "gdi_size=24 command_union=sharedprimary,shadow,staging,gdi "
@@ -2225,6 +2253,7 @@ static int validate_backend(void)
     const char *nouveau_dma_map_state;
     const char *nouveau_dma_mask_state;
     const char *nouveau_coherent_dma_mask_state;
+    const char *dxg_scanout_bind_state;
 
     fd = open("/dev/gpu0", O_RDONLY);
     if (fd < 0)
@@ -2270,6 +2299,18 @@ static int validate_backend(void)
          stats.nouveau_pci_coherent_dma_mask_bits ==
              stats.nouveau_pci_coherent_dma_mask_effective_bits ? "PASS" :
                                                                   "FAIL");
+    dxg_scanout_bind_state =
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_last_present_id == 0 &&
+        stats.dxg_scanout_bind_last_completed == 0 &&
+        (stats.dxg_scanout_bind_attempts == 0 ||
+         (stats.dxg_scanout_bind_rejects >=
+              stats.dxg_scanout_bind_attempts &&
+          stats.dxg_scanout_bind_weak_evidence_rejects >=
+              stats.dxg_scanout_bind_attempts)) &&
+        (stats.dxg_scanout_bind_completion_queries == 0 ||
+         stats.dxg_scanout_bind_completion_pending >=
+             stats.dxg_scanout_bind_completion_queries) ? "PASS" : "FAIL";
 
     printf("gpu_core_c_validator backend id=%u flags=0x%x name=%s renderer=%s "
            "dxg_global_open=%u dxg_vgpu_open=%u dxg_d3dkmt=%u\n",
@@ -2926,6 +2967,13 @@ static int validate_backend(void)
         note_fail("backend", "dda_d3d12_present_path_fabricated");
         ok = 0;
     }
+    if (stats.dxg_scanout_bind_successes != 0 ||
+        stats.dxg_scanout_bind_last_present_id != 0 ||
+        stats.dxg_scanout_bind_last_completed != 0 ||
+        strcmp(dxg_scanout_bind_state, "PASS") != 0) {
+        note_fail("backend", "dxg_scanout_bind_fabricated_native_present");
+        ok = 0;
+    }
     if (stats.dxg_present_dxg_adapter_type_wsl != 0 &&
         stats.dxg_present_dxg_adapter_display_supported != 0) {
         note_fail("backend", "wsl_dxg_display_bit_not_suppressed");
@@ -2954,6 +3002,31 @@ static int validate_backend(void)
                "callback_release_order=blocked "
                "per_client_generation=required native_present_credit=0 "
                "opengl_submit_credit=0 status=PASS\n");
+        printf("gpu_core_c_validator "
+               "dxg_scanout_bind_skeleton_matrix "
+               "attempts=%lu rejects=%lu successes=%lu "
+               "completion_queries=%lu completion_successes=%lu "
+               "completion_pending=%lu weak_evidence_rejects=%lu "
+               "transport=%lu status_code=%lu present_id=%lu completed=%lu "
+               "source_generation=%lu resource_generation=%lu "
+               "dirty_sequence=%lu dirty_rects=%lu native_present_credit=0 "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.dxg_scanout_bind_attempts,
+               stats.dxg_scanout_bind_rejects,
+               stats.dxg_scanout_bind_successes,
+               stats.dxg_scanout_bind_completion_queries,
+               stats.dxg_scanout_bind_completion_successes,
+               stats.dxg_scanout_bind_completion_pending,
+               stats.dxg_scanout_bind_weak_evidence_rejects,
+               stats.dxg_scanout_bind_last_transport,
+               stats.dxg_scanout_bind_last_status,
+               stats.dxg_scanout_bind_last_present_id,
+               stats.dxg_scanout_bind_last_completed,
+               stats.dxg_scanout_bind_last_source_generation,
+               stats.dxg_scanout_bind_last_resource_generation,
+               stats.dxg_scanout_bind_last_dirty_sequence,
+               stats.dxg_scanout_bind_last_dirty_rects,
+               dxg_scanout_bind_state);
         if (stats.nouveau_pci_probe_accepts == 0) {
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=0 gpup_only=PASS dma_mask=NOT_CONFIGURED "

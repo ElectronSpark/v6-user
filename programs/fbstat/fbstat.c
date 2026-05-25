@@ -356,6 +356,7 @@ int main(int argc, char *argv[])
     struct fb_gpu_backend_info backend;
     int have_backend = 0;
     int backend_opengl_submit = 0;
+    int scanout_bind_skeleton_ok = 0;
     int fd;
 
     if (argc == 2) {
@@ -385,6 +386,18 @@ int main(int argc, char *argv[])
         backend_opengl_submit =
             (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0;
     }
+    scanout_bind_skeleton_ok =
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_last_present_id == 0 &&
+        stats.dxg_scanout_bind_last_completed == 0 &&
+        (stats.dxg_scanout_bind_attempts == 0 ||
+         (stats.dxg_scanout_bind_rejects >=
+              stats.dxg_scanout_bind_attempts &&
+          stats.dxg_scanout_bind_weak_evidence_rejects >=
+              stats.dxg_scanout_bind_attempts)) &&
+        (stats.dxg_scanout_bind_completion_queries == 0 ||
+         stats.dxg_scanout_bind_completion_pending >=
+             stats.dxg_scanout_bind_completion_queries);
 
     if (have_backend) {
         printf("backend %s flags 0x%x renderer %s\n",
@@ -1812,6 +1825,60 @@ int main(int argc, char *argv[])
            stats.dxg_present_bind_contract_rejects);
     printf("dxg_present_bind_contract_successes %lu\n",
            stats.dxg_present_bind_contract_successes);
+    printf("dxg_scanout_bind_attempts %lu\n",
+           stats.dxg_scanout_bind_attempts);
+    printf("dxg_scanout_bind_rejects %lu\n",
+           stats.dxg_scanout_bind_rejects);
+    printf("dxg_scanout_bind_successes %lu\n",
+           stats.dxg_scanout_bind_successes);
+    printf("dxg_scanout_bind_completion_queries %lu\n",
+           stats.dxg_scanout_bind_completion_queries);
+    printf("dxg_scanout_bind_completion_successes %lu\n",
+           stats.dxg_scanout_bind_completion_successes);
+    printf("dxg_scanout_bind_completion_pending %lu\n",
+           stats.dxg_scanout_bind_completion_pending);
+    printf("dxg_scanout_bind_weak_evidence_rejects %lu\n",
+           stats.dxg_scanout_bind_weak_evidence_rejects);
+    printf("dxg_scanout_bind_last_transport %lu\n",
+           stats.dxg_scanout_bind_last_transport);
+    printf("dxg_scanout_bind_last_status %lu\n",
+           stats.dxg_scanout_bind_last_status);
+    printf("dxg_scanout_bind_last_present_id %lu\n",
+           stats.dxg_scanout_bind_last_present_id);
+    printf("dxg_scanout_bind_last_completed %lu\n",
+           stats.dxg_scanout_bind_last_completed);
+    printf("dxg_scanout_bind_last_source_generation %lu\n",
+           stats.dxg_scanout_bind_last_source_generation);
+    printf("dxg_scanout_bind_last_resource_generation %lu\n",
+           stats.dxg_scanout_bind_last_resource_generation);
+    printf("dxg_scanout_bind_last_dirty_sequence %lu\n",
+           stats.dxg_scanout_bind_last_dirty_sequence);
+    printf("dxg_scanout_bind_last_dirty_rects %lu\n",
+           stats.dxg_scanout_bind_last_dirty_rects);
+    printf("dxg_scanout_bind_skeleton_matrix "
+           "attempts=%lu rejects=%lu successes=%lu "
+           "completion_queries=%lu completion_successes=%lu "
+           "completion_pending=%lu weak_evidence_rejects=%lu "
+           "transport=%lu status_code=%lu present_id=%lu completed=%lu "
+           "source_generation=%lu resource_generation=%lu "
+           "dirty_sequence=%lu dirty_rects=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_attempts,
+           stats.dxg_scanout_bind_rejects,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_queries,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.dxg_scanout_bind_completion_pending,
+           stats.dxg_scanout_bind_weak_evidence_rejects,
+           stats.dxg_scanout_bind_last_transport,
+           stats.dxg_scanout_bind_last_status,
+           stats.dxg_scanout_bind_last_present_id,
+           stats.dxg_scanout_bind_last_completed,
+           stats.dxg_scanout_bind_last_source_generation,
+           stats.dxg_scanout_bind_last_resource_generation,
+           stats.dxg_scanout_bind_last_dirty_sequence,
+           stats.dxg_scanout_bind_last_dirty_rects,
+           scanout_bind_skeleton_ok ? "PASS" : "FAIL");
     printf("dxg_present_release_sources %lu\n",
            stats.dxg_present_release_sources);
     printf("display_presents %lu\n", stats.display_presents);
@@ -1842,6 +1909,7 @@ int main(int argc, char *argv[])
     printf("d3d12_display_bind_absent_matrix "
            "selected=%s display_bind=%s missing_host_abi=%lu "
            "transport_present=%lu helper_requires_completion=%lu "
+           "scanout_bind_attempts=%lu weak_evidence_rejects=%lu "
            "present_id=0 completed=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            present_lane_name(stats.dxg_present_selected_lane),
@@ -1850,6 +1918,8 @@ int main(int argc, char *argv[])
            stats.dxg_present_missing_host_abi,
            stats.dxg_present_helper_transport_present,
            stats.dxg_present_helper_requires_completion,
+           stats.dxg_scanout_bind_attempts,
+           stats.dxg_scanout_bind_weak_evidence_rejects,
            stats.dxg_present_selected_lane ==
                    FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
                    stats.dxg_present_helper_transport_present == 0 &&
