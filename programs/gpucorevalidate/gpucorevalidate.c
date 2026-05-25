@@ -2161,6 +2161,40 @@ static int validate_present_source_matrix(void)
                               output,
                               "dxg_scanout_bind_candidate_command_matrix",
                               "status=PASS");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output,
+                         "dxg_native_present_lane_rejection_matrix");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "wsl_presenthistory_enum_only=REJECTED");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "wsl_presenthistory_sender_contract=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "wsl_presenthistory_completion_contract=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "synthvid_gpa_dirty_only=REJECTED");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output,
+                         "linux_hyperv_drm_shadow_blit_only=REJECTED");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "dda_d3d12_resource_import=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "dda_scanout_bind=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "custom_host_tool=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "transport_present=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "present_id=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "completed=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("dxg_native_present_lane_rejection_matrix",
+                              output,
+                              "dxg_native_present_lane_rejection_matrix",
+                              "status=PASS");
     require_output_token("dxg_scanout_bind_weak_evidence_matrix",
                          output, "dxg_scanout_bind_weak_evidence_matrix");
     require_output_token("dxg_scanout_bind_weak_evidence_matrix",
@@ -2292,6 +2326,18 @@ static int validate_present_source_matrix(void)
            "candidate_rejects=0 custom_host_tool=0 transport_present=0 "
            "present_id=0 completed=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "dxg_native_present_lane_rejection_matrix "
+           "wsl_presenthistory_enum_only=REJECTED "
+           "wsl_presenthistory_sender_contract=0 "
+           "wsl_presenthistory_completion_contract=0 "
+           "synthvid_gpa_dirty_only=REJECTED "
+           "linux_hyperv_drm_shadow_blit_only=REJECTED "
+           "dda_nouveau_separate_pci_path=ABSENT "
+           "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "custom_host_tool=0 transport_present=0 present_id=0 "
+           "completed=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS\n");
     printf("gpu_core_c_validator "
            "dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=0 d3dkmt_handles_only=0 "
@@ -3182,6 +3228,33 @@ static int validate_backend(void)
                        stats.dxg_present_helper_transport_present == 0 &&
                        stats.dxg_scanout_bind_last_present_id == 0 &&
                        stats.dxg_scanout_bind_last_completed == 0 ?
+                   "PASS" : "FAIL");
+        printf("gpu_core_c_validator "
+               "dxg_native_present_lane_rejection_matrix "
+               "wsl_presenthistory_enum_only=REJECTED "
+               "wsl_presenthistory_sender_contract=%lu "
+               "wsl_presenthistory_completion_contract=%lu "
+               "synthvid_gpa_dirty_only=REJECTED "
+               "linux_hyperv_drm_shadow_blit_only=REJECTED "
+               "dda_nouveau_separate_pci_path=%s "
+               "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+               "custom_host_tool=0 transport_present=%lu present_id=0 "
+               "completed=0 native_present_credit=0 "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.dxg_scanout_bind_candidate_sender_contracts,
+               stats.dxg_scanout_bind_candidate_completion_contracts,
+               stats.dxg_present_dda_nouveau_present != 0 ?
+                   "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+               stats.dxg_present_dda_nouveau_import_path_present,
+               stats.dxg_present_dda_nouveau_scanout_bind_present,
+               stats.dxg_present_helper_transport_present,
+               stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                       stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                       stats.dxg_present_helper_transport_present == 0 &&
+                       stats.dxg_scanout_bind_last_present_id == 0 &&
+                       stats.dxg_scanout_bind_last_completed == 0 &&
+                       stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+                       stats.dxg_present_dda_nouveau_scanout_bind_present == 0 ?
                    "PASS" : "FAIL");
         printf("gpu_core_c_validator "
                "dxg_scanout_bind_weak_evidence_matrix "

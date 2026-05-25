@@ -11027,6 +11027,29 @@ out:
                    bind_contract.present_id == 0 &&
                    bind_contract.completed == 0 ?
                "PASS" : "FAIL");
+    printf("dxg_native_present_lane_rejection_matrix "
+           "wsl_presenthistory_enum_only=REJECTED "
+           "wsl_presenthistory_sender_contract=0 "
+           "wsl_presenthistory_completion_contract=0 "
+           "synthvid_gpa_dirty_only=REJECTED "
+           "linux_hyperv_drm_shadow_blit_only=REJECTED "
+           "dda_nouveau_separate_pci_path=%s "
+           "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "custom_host_tool=0 transport_present=%lu present_id=0 "
+           "completed=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           (stats_after.dxg_present_host_candidates &
+            FB_GPU_DXG_PRESENT_HOST_DDA_NOUVEAU) != 0 ?
+               "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+           query.helper_transport_present,
+           stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                   query.helper_transport_present == 0 &&
+                   bind_contract.present_id == 0 &&
+                   bind_contract.completed == 0 &&
+                   stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
+                   stats_after.dxg_present_dda_nouveau_scanout_bind_present == 0 ?
+               "PASS" : "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
            "same_adapter_resource_only=%lu syncfile_only=%lu "
