@@ -358,6 +358,11 @@ static int validate_fbstat_aggregate_matrix(void)
     const char *atomic_anchor = "kms_atomic_fence_matrix stats";
     const char *backend_separation_anchor =
         "opengl_submit_backend_separation_matrix";
+    const char *id_shape_anchor = "d3d12_display_bind_id_shape_matrix";
+    const char *provider_gate_anchor = "d3d12_provider_credit_gate_matrix";
+    const char *not_kms_anchor = "d3d12_native_completion_not_kms_matrix";
+    const char *standard_alloc_anchor =
+        "wsl_standard_alloc_not_display_bind_matrix";
     uint64 attempts = 0;
     uint64 ready = 0;
     uint64 not_ready = 0;
@@ -428,6 +433,42 @@ static int validate_fbstat_aggregate_matrix(void)
                               "opengl_submit_credit=0");
     require_output_line_token("fbstat_backend_gating", output,
                               backend_separation_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_native_completion_shape", output,
+                              id_shape_anchor,
+                              "zero_ids_required_when_failclosed=1");
+    require_output_line_token("fbstat_native_completion_shape", output,
+                              id_shape_anchor,
+                              "completed_ge_present_if_nonzero=1");
+    require_output_line_token("fbstat_native_completion_shape", output,
+                              id_shape_anchor,
+                              "stale_id_rejected=1");
+    require_output_line_token("fbstat_native_completion_shape", output,
+                              id_shape_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_provider_credit_gate", output,
+                              provider_gate_anchor,
+                              "credit_requires_provider_clear=1");
+    require_output_line_token("fbstat_provider_credit_gate", output,
+                              provider_gate_anchor,
+                              "backend_opengl_submit=0");
+    require_output_line_token("fbstat_provider_credit_gate", output,
+                              provider_gate_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_native_completion_not_kms", output,
+                              not_kms_anchor,
+                              "display_wait_is_native=0");
+    require_output_line_token("fbstat_native_completion_not_kms", output,
+                              not_kms_anchor,
+                              "kms_generic_display_credit=0");
+    require_output_line_token("fbstat_native_completion_not_kms", output,
+                              not_kms_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_standard_alloc_not_display_bind",
+                              output, standard_alloc_anchor,
+                              "standard_alloc_native_present_credit=0");
+    require_output_line_token("fbstat_standard_alloc_not_display_bind",
+                              output, standard_alloc_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
                               "nouveau_display_kms_registration_matrix",
@@ -2606,6 +2647,10 @@ static int validate_backend(void)
     int kms_atomic_plane_state_ok;
     int kms_atomic_prepare_cleanup_fb_ok;
     int kms_page_flip_feature_gate_ok;
+    int display_bind_id_shape_ok;
+    int provider_credit_gate_ok;
+    int generic_completion_not_native_ok;
+    int standard_alloc_not_display_bind_ok;
 
     fd = open("/dev/gpu0", O_RDONLY);
     if (fd < 0)
@@ -2734,6 +2779,49 @@ static int validate_backend(void)
         stats.kms_present_nouveau_hw == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
         backend_opengl_submit == 0;
+    display_bind_id_shape_ok =
+        ((stats.dxg_display_bind_present_id == 0 &&
+          stats.dxg_display_bind_completed_id == 0) ||
+         (stats.dxg_display_bind_present_id != 0 &&
+          stats.dxg_display_bind_completed_id >=
+              stats.dxg_display_bind_present_id &&
+          stats.dxg_display_bind_source_generation != 0 &&
+          stats.dxg_display_bind_resource_generation != 0)) &&
+        ((stats.dxg_scanout_bind_last_present_id == 0 &&
+          stats.dxg_scanout_bind_last_completed == 0) ||
+         (stats.dxg_scanout_bind_last_present_id != 0 &&
+          stats.dxg_scanout_bind_last_completed >=
+              stats.dxg_scanout_bind_last_present_id &&
+          stats.dxg_scanout_bind_last_source_generation != 0 &&
+          stats.dxg_scanout_bind_last_resource_generation != 0));
+    provider_credit_gate_ok =
+        (backend_opengl_submit == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
+         stats.dxg_scanout_bind_successes == 0 &&
+         stats.dxg_scanout_bind_completion_successes == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         stats.dxg_present_helper_transport_present == 0 &&
+         stats.dxg_present_display_target_kind ==
+             FB_GPU_DXG_DISPLAY_TARGET_NONE) ||
+        (stats.dxg_display_bind_provider_no_host_abi == 0 &&
+         stats.dxg_display_bind_provider_no_sender == 0 &&
+         stats.dxg_display_bind_provider_no_completion == 0);
+    generic_completion_not_native_ok =
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.dxg_scanout_bind_last_present_id == 0 &&
+        stats.dxg_scanout_bind_last_completed == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.kms_vblank_source_nouveau_hw == 0 &&
+        stats.kms_page_flip_events_native_hw == 0;
+    standard_alloc_not_display_bind_ok =
+        (stats.dxg_scanout_bind_standard_alloc_private_data == 0 ||
+         stats.dxg_scanout_bind_standard_alloc_display_bind_absent != 0) &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0;
 
     printf("gpu_core_c_validator backend id=%u flags=0x%x name=%s renderer=%s "
            "dxg_global_open=%u dxg_vgpu_open=%u dxg_d3dkmt=%u\n",
@@ -2863,11 +2951,84 @@ static int validate_backend(void)
            "backend=%u display_bind=%s transport_present=%lu "
            "completion_source=required present_id=0 completed=0 "
            "callback_release_order=blocked per_client_generation=required "
+           "id_shape=%s provider_credit_gate=%s "
            "native_present_credit=0 opengl_submit_credit=0 status=PENDING\n",
            backend.backend,
            stats.dxg_present_helper_transport_present ? "PRESENT" :
                "ABSENT",
-           stats.dxg_present_helper_transport_present);
+           stats.dxg_present_helper_transport_present,
+           display_bind_id_shape_ok ? "PASS" : "FAIL",
+           provider_credit_gate_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_display_bind_id_shape_matrix "
+           "bind_present_id=%lu bind_completed_id=%lu "
+           "bind_source_generation=%lu bind_resource_generation=%lu "
+           "scanout_present_id=%lu scanout_completed_id=%lu "
+           "scanout_source_generation=%lu scanout_resource_generation=%lu "
+           "zero_ids_required_when_failclosed=1 "
+           "completed_ge_present_if_nonzero=1 stale_id_rejected=1 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_scanout_bind_last_present_id,
+           stats.dxg_scanout_bind_last_completed,
+           stats.dxg_scanout_bind_last_source_generation,
+           stats.dxg_scanout_bind_last_resource_generation,
+           display_bind_id_shape_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_provider_credit_gate_matrix "
+           "provider_submits=%lu provider_no_host_abi=%lu "
+           "provider_no_sender=%lu provider_no_completion=%lu "
+           "transport_present=%lu display_target_kind=%lu "
+           "scanout_successes=%lu completion_successes=%lu "
+           "native_present_credit=%lu backend_opengl_submit=%u "
+           "credit_requires_provider_clear=1 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_present_helper_transport_present,
+           stats.dxg_present_display_target_kind,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           provider_credit_gate_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_native_completion_not_kms_matrix "
+           "generic_display_last_complete=%lu "
+           "kms_vblank_display_correlated=%lu "
+           "kms_vblank_source_software_display=%lu "
+           "kms_vblank_source_native_hw=%lu "
+           "kms_atomic_out_fence_display_correlated=%lu "
+           "kms_atomic_out_fence_software_scanout_correlated=%lu "
+           "kms_page_flip_events=%lu page_flip_events_software_blit=%lu "
+           "page_flip_events_native_hw=%lu display_wait_is_native=0 "
+           "kms_generic_display_credit=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.display_last_complete,
+           stats.kms_vblank_display_correlated,
+           stats.kms_vblank_source_software_display,
+           stats.kms_vblank_source_nouveau_hw,
+           stats.kms_atomic_out_fence_display_correlated,
+           stats.kms_atomic_out_fence_software_scanout_correlated,
+           stats.kms_vblank_page_flip_events,
+           stats.kms_page_flip_events_software_blit,
+           stats.kms_page_flip_events_native_hw,
+           generic_completion_not_native_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator wsl_standard_alloc_not_display_bind_matrix "
+           "standard_alloc_private_data=%lu "
+           "standard_alloc_display_bind_absent=%lu "
+           "standard_alloc_role=private_driver_data "
+           "standard_alloc_native_present_credit=0 "
+           "display_bind_transport_present=%lu present_id=%lu "
+           "completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_standard_alloc_private_data,
+           stats.dxg_scanout_bind_standard_alloc_display_bind_absent,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           standard_alloc_not_display_bind_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator d3d12_display_bind_backend_boundary_matrix "
            "backend=%lu contract_version=%lu transport=%lu "
            "transport_present=%lu operation=%lu completion_source=%lu "
@@ -3506,6 +3667,22 @@ static int validate_backend(void)
         note_fail("backend", "kms_page_flip_feature_gate_not_failclosed");
         ok = 0;
     }
+    if (!display_bind_id_shape_ok) {
+        note_fail("backend", "d3d12_display_bind_id_shape_forged");
+        ok = 0;
+    }
+    if (!provider_credit_gate_ok) {
+        note_fail("backend", "d3d12_credit_without_provider_clear");
+        ok = 0;
+    }
+    if (!generic_completion_not_native_ok) {
+        note_fail("backend", "generic_kms_completion_used_as_native");
+        ok = 0;
+    }
+    if (!standard_alloc_not_display_bind_ok) {
+        note_fail("backend", "standard_alloc_used_as_display_bind");
+        ok = 0;
+    }
     if ((backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0) {
         note_fail("backend", "hyperv_advertises_virgl_opengl");
         ok = 0;
@@ -3780,8 +3957,46 @@ static int validate_backend(void)
                "display_bind=ABSENT transport_present=0 "
                "completion_source=required present_id=0 completed=0 "
                "callback_release_order=blocked "
-               "per_client_generation=required native_present_credit=0 "
+               "per_client_generation=required id_shape=PASS "
+               "provider_credit_gate=PASS native_present_credit=0 "
                "opengl_submit_credit=0 status=PASS\n");
+        printf("gpu_core_c_validator "
+               "d3d12_display_bind_id_shape_matrix "
+               "bind_present_id=%lu bind_completed_id=%lu "
+               "bind_source_generation=%lu bind_resource_generation=%lu "
+               "scanout_present_id=%lu scanout_completed_id=%lu "
+               "scanout_source_generation=%lu "
+               "scanout_resource_generation=%lu "
+               "zero_ids_required_when_failclosed=1 "
+               "completed_ge_present_if_nonzero=1 stale_id_rejected=1 "
+               "native_present_credit=0 opengl_submit_credit=0 "
+               "status=PASS\n",
+               stats.dxg_display_bind_present_id,
+               stats.dxg_display_bind_completed_id,
+               stats.dxg_display_bind_source_generation,
+               stats.dxg_display_bind_resource_generation,
+               stats.dxg_scanout_bind_last_present_id,
+               stats.dxg_scanout_bind_last_completed,
+               stats.dxg_scanout_bind_last_source_generation,
+               stats.dxg_scanout_bind_last_resource_generation);
+        printf("gpu_core_c_validator "
+               "d3d12_provider_credit_gate_matrix "
+               "provider_submits=%lu provider_no_host_abi=%lu "
+               "provider_no_sender=%lu provider_no_completion=%lu "
+               "transport_present=%lu display_target_kind=%lu "
+               "scanout_successes=%lu completion_successes=%lu "
+               "native_present_credit=%lu backend_opengl_submit=%u "
+               "credit_requires_provider_clear=1 status=PASS\n",
+               stats.dxg_display_bind_provider_submits,
+               stats.dxg_display_bind_provider_no_host_abi,
+               stats.dxg_display_bind_provider_no_sender,
+               stats.dxg_display_bind_provider_no_completion,
+               stats.dxg_present_helper_transport_present,
+               stats.dxg_present_display_target_kind,
+               stats.dxg_scanout_bind_successes,
+               stats.dxg_scanout_bind_completion_successes,
+               stats.nouveau_pci_native_present_credit,
+               backend_opengl_submit);
         printf("gpu_core_c_validator "
                "opengl_submit_backend_separation_matrix "
                "backend=%u dxg_transport=1 d3dkmt=1 virgl_opengl=0 "
@@ -3978,6 +4193,20 @@ static int validate_backend(void)
                        stats.kms_vblank_source_nouveau_hw == 0 &&
                        stats.kms_page_flip_events_native_hw == 0 ?
                    "PASS" : "FAIL");
+        printf("gpu_core_c_validator "
+               "wsl_standard_alloc_not_display_bind_matrix "
+               "standard_alloc_private_data=%lu "
+               "standard_alloc_display_bind_absent=%lu "
+               "standard_alloc_role=private_driver_data "
+               "standard_alloc_native_present_credit=0 "
+               "display_bind_transport_present=%lu present_id=%lu "
+               "completed=%lu native_present_credit=0 "
+               "opengl_submit_credit=0 status=PASS\n",
+               stats.dxg_scanout_bind_standard_alloc_private_data,
+               stats.dxg_scanout_bind_standard_alloc_display_bind_absent,
+               stats.dxg_display_bind_transport_present,
+               stats.dxg_display_bind_present_id,
+               stats.dxg_display_bind_completed_id);
         if (stats.nouveau_pci_probe_accepts == 0) {
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=0 gpup_only=PASS dma_mask=NOT_CONFIGURED "
