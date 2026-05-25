@@ -11009,18 +11009,39 @@ out:
            stats_after.dxg_scanout_bind_last_dirty_rects,
            d3d12_scanout_bind_skeleton_pass ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_candidate_command_matrix "
-           "presenthistory_cmd=34 redirected_flip_fence_cmd=35 blt_cmd=38 "
+           "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
+           "blt_cmd=%lu "
            "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
            "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
+           "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "reject_reasons=0x%lx "
            "present_id=0 completed=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_presenthistory_cmd,
+           stats_after.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
+           stats_after.dxg_scanout_bind_candidate_blt_cmd,
            stats_after.dxg_scanout_bind_candidate_cmds_known,
            stats_after.dxg_scanout_bind_candidate_sender_contracts,
            stats_after.dxg_scanout_bind_candidate_completion_contracts,
            stats_after.dxg_scanout_bind_candidate_rejects -
                stats_before.dxg_scanout_bind_candidate_rejects,
            query.helper_transport_present,
+           stats_after.dxg_scanout_bind_candidate_vmbus_enum_known,
+           stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_scanout_bind_candidate_reject_reasons,
            stats_after.dxg_scanout_bind_candidate_cmds_known == 3 &&
+                   stats_after.dxg_scanout_bind_candidate_presenthistory_cmd == 34 &&
+                   stats_after.dxg_scanout_bind_candidate_redirected_flip_fence_cmd == 35 &&
+                   stats_after.dxg_scanout_bind_candidate_blt_cmd == 38 &&
+                   stats_after.dxg_scanout_bind_candidate_vmbus_enum_known == 1 &&
+                   stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_reject_reasons ==
+                       FB_GPU_DXG_SCANOUT_CANDIDATE_REJECT_ALL &&
                    stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
                    query.helper_transport_present == 0 &&
@@ -11029,21 +11050,37 @@ out:
                "PASS" : "FAIL");
     printf("dxg_native_present_lane_rejection_matrix "
            "wsl_presenthistory_enum_only=REJECTED "
-           "wsl_presenthistory_sender_contract=0 "
-           "wsl_presenthistory_completion_contract=0 "
+           "wsl_presenthistory_sender_contract=%lu "
+           "wsl_presenthistory_completion_contract=%lu "
            "synthvid_gpa_dirty_only=REJECTED "
            "linux_hyperv_drm_shadow_blit_only=REJECTED "
            "dda_nouveau_separate_pci_path=%s "
            "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "reject_reasons=0x%lx "
            "custom_host_tool=0 transport_present=%lu present_id=0 "
            "completed=0 native_present_credit=0 opengl_submit_credit=0 "
            "status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
            (stats_after.dxg_present_host_candidates &
             FB_GPU_DXG_PRESENT_HOST_DDA_NOUVEAU) != 0 ?
                "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+           stats_after.dxg_scanout_bind_candidate_vmbus_enum_known,
+           stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_scanout_bind_candidate_reject_reasons,
            query.helper_transport_present,
            stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_vmbus_enum_known == 1 &&
+                   stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+                   stats_after.dxg_scanout_bind_candidate_reject_reasons ==
+                       FB_GPU_DXG_SCANOUT_CANDIDATE_REJECT_ALL &&
                    query.helper_transport_present == 0 &&
                    bind_contract.present_id == 0 &&
                    bind_contract.completed == 0 &&

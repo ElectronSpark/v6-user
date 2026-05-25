@@ -1925,16 +1925,28 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_last_dirty_rects,
            scanout_bind_skeleton_ok ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_candidate_command_matrix "
-           "presenthistory_cmd=34 redirected_flip_fence_cmd=35 blt_cmd=38 "
+           "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
+           "blt_cmd=%lu "
            "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
            "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
+           "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "reject_reasons=0x%lx "
            "present_id=0 completed=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_presenthistory_cmd,
+           stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
+           stats.dxg_scanout_bind_candidate_blt_cmd,
            stats.dxg_scanout_bind_candidate_cmds_known,
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_scanout_bind_candidate_rejects,
            stats.dxg_present_helper_transport_present,
+           stats.dxg_scanout_bind_candidate_vmbus_enum_known,
+           stats.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_scanout_bind_candidate_reject_reasons,
            stats.dxg_scanout_bind_candidate_cmds_known == 3 &&
                    stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
@@ -1944,17 +1956,27 @@ int main(int argc, char *argv[])
                "PASS" : "DIAGNOSTIC");
     printf("dxg_native_present_lane_rejection_matrix "
            "wsl_presenthistory_enum_only=REJECTED "
-           "wsl_presenthistory_sender_contract=0 "
-           "wsl_presenthistory_completion_contract=0 "
+           "wsl_presenthistory_sender_contract=%lu "
+           "wsl_presenthistory_completion_contract=%lu "
            "synthvid_gpa_dirty_only=REJECTED "
            "linux_hyperv_drm_shadow_blit_only=REJECTED "
            "dda_nouveau_separate_pci_path=%s "
            "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "reject_reasons=0x%lx "
            "custom_host_tool=0 transport_present=%lu present_id=0 "
            "completed=0 native_present_credit=0 opengl_submit_credit=0 "
            "status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_present_dda_nouveau_present != 0 ?
                "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+           stats.dxg_scanout_bind_candidate_vmbus_enum_known,
+           stats.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_scanout_bind_candidate_reject_reasons,
            stats.dxg_present_helper_transport_present,
            stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
