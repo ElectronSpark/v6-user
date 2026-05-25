@@ -2249,12 +2249,24 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_resource_generation);
     printf("dxg_display_bind_status %lu\n",
            stats.dxg_display_bind_status);
+    printf("dxg_display_bind_provider_submits %lu\n",
+           stats.dxg_display_bind_provider_submits);
+    printf("dxg_display_bind_lock_dropped_submits %lu\n",
+           stats.dxg_display_bind_lock_dropped_submits);
+    printf("dxg_display_bind_revalidate_attempts %lu\n",
+           stats.dxg_display_bind_revalidate_attempts);
+    printf("dxg_display_bind_revalidate_successes %lu\n",
+           stats.dxg_display_bind_revalidate_successes);
+    printf("dxg_display_bind_revalidate_failures %lu\n",
+           stats.dxg_display_bind_revalidate_failures);
     printf("d3d12_display_bind_backend_boundary_matrix "
            "backend=%s contract_version=%lu transport=%lu "
            "transport_present=%lu operation=%lu completion_source=%lu "
            "required_metadata=0x%lx lifetime=0x%lx block_reason=0x%lx "
            "present_id=%lu completed=%lu source_generation=%lu "
-           "resource_generation=%lu status_code=%lu custom_host_tool=0 "
+           "resource_generation=%lu status_code=%lu provider_submits=%lu "
+           "lock_dropped_submits=%lu revalidate_attempts=%lu "
+           "revalidate_successes=%lu revalidate_failures=%lu custom_host_tool=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            present_lane_name(stats.dxg_display_bind_backend),
            stats.dxg_display_bind_contract_version,
@@ -2270,6 +2282,11 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_source_generation,
            stats.dxg_display_bind_resource_generation,
            stats.dxg_display_bind_status,
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_lock_dropped_submits,
+           stats.dxg_display_bind_revalidate_attempts,
+           stats.dxg_display_bind_revalidate_successes,
+           stats.dxg_display_bind_revalidate_failures,
            display_bind_boundary_ok ? "PASS" : "DIAGNOSTIC");
     printf("dxg_scanout_bind_skeleton_matrix "
            "attempts=%lu rejects=%lu successes=%lu "

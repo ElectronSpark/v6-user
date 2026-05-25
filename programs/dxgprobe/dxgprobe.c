@@ -10950,7 +10950,9 @@ out:
            "completion_source=%lu required_metadata=0x%lx "
            "lifetime=0x%lx block_reason=0x%lx present_id=%lu "
            "completed=%lu source_generation=%lu resource_generation=%lu "
-           "status_code=%lu custom_host_tool=0 native_present_credit=0 "
+           "status_code=%lu provider_submits=%lu lock_dropped_submits=%lu "
+           "revalidate_attempts=%lu revalidate_successes=%lu "
+           "revalidate_failures=%lu custom_host_tool=0 native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats_after.dxg_display_bind_contract_version,
            stats_after.dxg_display_bind_transport,
@@ -10965,6 +10967,16 @@ out:
            stats_after.dxg_display_bind_source_generation,
            stats_after.dxg_display_bind_resource_generation,
            stats_after.dxg_display_bind_status,
+           stats_after.dxg_display_bind_provider_submits -
+               stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_lock_dropped_submits -
+               stats_before.dxg_display_bind_lock_dropped_submits,
+           stats_after.dxg_display_bind_revalidate_attempts -
+               stats_before.dxg_display_bind_revalidate_attempts,
+           stats_after.dxg_display_bind_revalidate_successes -
+               stats_before.dxg_display_bind_revalidate_successes,
+           stats_after.dxg_display_bind_revalidate_failures -
+               stats_before.dxg_display_bind_revalidate_failures,
            stats_after.dxg_display_bind_contract_version == 1 &&
                    stats_after.dxg_display_bind_backend ==
                        FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
@@ -10977,7 +10989,17 @@ out:
                        FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
                    stats_after.dxg_display_bind_present_id == 0 &&
                    stats_after.dxg_display_bind_completed_id == 0 &&
-                   stats_after.dxg_display_bind_status == EOPNOTSUPP ?
+                   stats_after.dxg_display_bind_status == EOPNOTSUPP &&
+                   stats_after.dxg_display_bind_provider_submits >
+                       stats_before.dxg_display_bind_provider_submits &&
+                   stats_after.dxg_display_bind_lock_dropped_submits >
+                       stats_before.dxg_display_bind_lock_dropped_submits &&
+                   stats_after.dxg_display_bind_revalidate_attempts >
+                       stats_before.dxg_display_bind_revalidate_attempts &&
+                   stats_after.dxg_display_bind_revalidate_successes >
+                       stats_before.dxg_display_bind_revalidate_successes &&
+                   stats_after.dxg_display_bind_revalidate_failures ==
+                       stats_before.dxg_display_bind_revalidate_failures ?
                "PASS" : "FAIL");
     printf("d3d12_present_commit_result_copyout_contract_matrix "
            "commit_ioctl_delta=%lu copyout_failures_delta=%lu "

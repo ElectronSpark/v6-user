@@ -2146,6 +2146,16 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
                          output, "completed=0");
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "provider_submits=");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "lock_dropped_submits=");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "revalidate_attempts=");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "revalidate_successes=");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
+                         output, "revalidate_failures=0");
+    require_output_token("d3d12_display_bind_backend_boundary_matrix",
                          output, "custom_host_tool=0");
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
                          output, "native_present_credit=0");
@@ -2806,7 +2816,9 @@ static int validate_backend(void)
            "transport_present=%lu operation=%lu completion_source=%lu "
            "required_metadata=0x%lx lifetime=0x%lx block_reason=0x%lx "
            "present_id=%lu completed=%lu source_generation=%lu "
-           "resource_generation=%lu status_code=%lu custom_host_tool=0 "
+           "resource_generation=%lu status_code=%lu provider_submits=%lu "
+           "lock_dropped_submits=%lu revalidate_attempts=%lu "
+           "revalidate_successes=%lu revalidate_failures=%lu custom_host_tool=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_backend,
            stats.dxg_display_bind_contract_version,
@@ -2822,6 +2834,11 @@ static int validate_backend(void)
            stats.dxg_display_bind_source_generation,
            stats.dxg_display_bind_resource_generation,
            stats.dxg_display_bind_status,
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_lock_dropped_submits,
+           stats.dxg_display_bind_revalidate_attempts,
+           stats.dxg_display_bind_revalidate_successes,
+           stats.dxg_display_bind_revalidate_failures,
            stats.dxg_display_bind_contract_version == 1 &&
                    stats.dxg_display_bind_backend ==
                        FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
@@ -2834,7 +2851,8 @@ static int validate_backend(void)
                        FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
                    stats.dxg_display_bind_present_id == 0 &&
                    stats.dxg_display_bind_completed_id == 0 &&
-                   stats.dxg_display_bind_status == EOPNOTSUPP ?
+                   stats.dxg_display_bind_status == EOPNOTSUPP &&
+                   stats.dxg_display_bind_revalidate_failures == 0 ?
                "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator dxg_syncfile_not_kms_completion_matrix "
            "syncfile_only=%lu weak_evidence_rejects=%lu "
