@@ -846,6 +846,22 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_msi_requested);
     printf("nouveau_pci_msi_fail_closed %lu\n",
            stats.nouveau_pci_msi_fail_closed);
+    printf("nouveau_pci_irq_alloc_requests %lu\n",
+           stats.nouveau_pci_irq_alloc_requests);
+    printf("nouveau_pci_irq_alloc_failures %lu\n",
+           stats.nouveau_pci_irq_alloc_failures);
+    printf("nouveau_pci_msi_program_attempts %lu\n",
+           stats.nouveau_pci_msi_program_attempts);
+    printf("nouveau_pci_msi_program_unsupported %lu\n",
+           stats.nouveau_pci_msi_program_unsupported);
+    printf("nouveau_pci_msix_program_attempts %lu\n",
+           stats.nouveau_pci_msix_program_attempts);
+    printf("nouveau_pci_msix_program_unsupported %lu\n",
+           stats.nouveau_pci_msix_program_unsupported);
+    printf("nouveau_pci_legacy_irq_requests %lu\n",
+           stats.nouveau_pci_legacy_irq_requests);
+    printf("nouveau_pci_legacy_irq_grants %lu\n",
+           stats.nouveau_pci_legacy_irq_grants);
     printf("nouveau_pci_irq_vector_valid %lu\n",
            stats.nouveau_pci_irq_vector_valid);
     printf("nouveau_pci_irq_handler_registered %lu\n",
@@ -856,6 +872,16 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_irq_delivery_claimed);
     printf("nouveau_pci_legacy_irq_fallback %lu\n",
            stats.nouveau_pci_legacy_irq_fallback);
+    printf("nouveau_pci_irq_handler_invocations %lu\n",
+           stats.nouveau_pci_irq_handler_invocations);
+    printf("nouveau_pci_irq_cause_reads %lu\n",
+           stats.nouveau_pci_irq_cause_reads);
+    printf("nouveau_pci_irq_cause_valid %lu\n",
+           stats.nouveau_pci_irq_cause_valid);
+    printf("nouveau_pci_irq_cause_acks %lu\n",
+           stats.nouveau_pci_irq_cause_acks);
+    printf("nouveau_pci_irq_spurious %lu\n",
+           stats.nouveau_pci_irq_spurious);
     printf("nouveau_pci_dma_map_api_present %lu\n",
            stats.nouveau_pci_dma_map_api_present);
     printf("nouveau_pci_dma_map_attempts %lu\n",
@@ -887,9 +913,15 @@ int main(int argc, char *argv[])
            "unclaimed_iomaps=%lu unclaimed_releases=%lu "
            "irq_mode=%lu irq_failures=%lu "
            "msi_requested=%lu msi_fail_closed=%lu "
+           "irq_alloc_requests=%lu irq_alloc_failures=%lu "
+           "msi_program_attempts=%lu msi_program_unsupported=%lu "
+           "msix_program_attempts=%lu msix_program_unsupported=%lu "
+           "legacy_irq_requests=%lu legacy_irq_grants=%lu "
            "irq_vector_valid=%lu irq_handler_registered=%lu "
            "irq_delivery_enabled=%lu irq_delivery_claimed=%lu "
-           "legacy_irq_fallback=%lu dma_map_api=%lu "
+           "legacy_irq_fallback=%lu irq_handler_invocations=%lu "
+           "irq_cause_reads=%lu irq_cause_valid=%lu "
+           "irq_cause_acks=%lu irq_spurious=%lu dma_map_api=%lu "
            "dma_map_attempts=%lu dma_map_successes=%lu "
            "dma_map_failures=%lu dma_unmaps=%lu dma_last_size=%lu "
            "dma_last_addr=0x%lx dma_last_ret=%lu "
@@ -926,11 +958,24 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_irq_request_failures,
            stats.nouveau_pci_msi_requested,
            stats.nouveau_pci_msi_fail_closed,
+           stats.nouveau_pci_irq_alloc_requests,
+           stats.nouveau_pci_irq_alloc_failures,
+           stats.nouveau_pci_msi_program_attempts,
+           stats.nouveau_pci_msi_program_unsupported,
+           stats.nouveau_pci_msix_program_attempts,
+           stats.nouveau_pci_msix_program_unsupported,
+           stats.nouveau_pci_legacy_irq_requests,
+           stats.nouveau_pci_legacy_irq_grants,
            stats.nouveau_pci_irq_vector_valid,
            stats.nouveau_pci_irq_handler_registered,
            stats.nouveau_pci_irq_delivery_enabled,
            stats.nouveau_pci_irq_delivery_claimed,
            stats.nouveau_pci_legacy_irq_fallback,
+           stats.nouveau_pci_irq_handler_invocations,
+           stats.nouveau_pci_irq_cause_reads,
+           stats.nouveau_pci_irq_cause_valid,
+           stats.nouveau_pci_irq_cause_acks,
+           stats.nouveau_pci_irq_spurious,
            stats.nouveau_pci_dma_map_api_present,
            stats.nouveau_pci_dma_map_attempts,
            stats.nouveau_pci_dma_map_successes,
@@ -995,6 +1040,9 @@ int main(int argc, char *argv[])
             stats.nouveau_pci_irq_delivery_enabled ||
                     stats.nouveau_pci_irq_delivery_claimed ?
                 "PRESENT" : "ABSENT";
+        const char *irq_cause =
+            accepts ? (stats.nouveau_pci_irq_cause_acks != 0 ?
+                           "PASS" : "DIAGNOSTIC") : "GPU_P_FAIL_CLOSED";
         const char *runtime_pm = accepts ? "DIAGNOSTIC" : "DEFERRED";
         const char *remove_path =
             stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED";
@@ -1040,6 +1088,29 @@ int main(int argc, char *argv[])
                accepts ? "DIAGNOSTIC" : "ABSENT",
                stats.nouveau_pci_native_present_credit,
                status);
+        printf("nouveau_pci_irq_provenance_matrix "
+               "accepts=%lu msi_attempts=%lu msi_unsupported=%lu "
+               "msix_attempts=%lu msix_unsupported=%lu "
+               "legacy_requests=%lu legacy_grants=%lu "
+               "handler_invocations=%lu cause_reads=%lu "
+               "cause_valid=%lu cause_acks=%lu spurious=%lu "
+               "device_cause=%s native_present_credit=%lu "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               stats.nouveau_pci_msi_program_attempts,
+               stats.nouveau_pci_msi_program_unsupported,
+               stats.nouveau_pci_msix_program_attempts,
+               stats.nouveau_pci_msix_program_unsupported,
+               stats.nouveau_pci_legacy_irq_requests,
+               stats.nouveau_pci_legacy_irq_grants,
+               stats.nouveau_pci_irq_handler_invocations,
+               stats.nouveau_pci_irq_cause_reads,
+               stats.nouveau_pci_irq_cause_valid,
+               stats.nouveau_pci_irq_cause_acks,
+               stats.nouveau_pci_irq_spurious,
+               irq_cause,
+               stats.nouveau_pci_native_present_credit,
+               accepts ? "DIAGNOSTIC" : "PASS");
     }
     printf("nouveau_getparam_provenance_matrix stats "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
@@ -1075,9 +1146,22 @@ int main(int argc, char *argv[])
             stats.nouveau_pci_dma_unmaps == 0;
         int no_fake_irq =
             stats.nouveau_pci_irq_vector_valid == 0 &&
+            stats.nouveau_pci_irq_alloc_requests == 0 &&
+            stats.nouveau_pci_irq_alloc_failures == 0 &&
+            stats.nouveau_pci_msi_program_attempts == 0 &&
+            stats.nouveau_pci_msi_program_unsupported == 0 &&
+            stats.nouveau_pci_msix_program_attempts == 0 &&
+            stats.nouveau_pci_msix_program_unsupported == 0 &&
+            stats.nouveau_pci_legacy_irq_requests == 0 &&
+            stats.nouveau_pci_legacy_irq_grants == 0 &&
             stats.nouveau_pci_irq_handler_registered == 0 &&
             stats.nouveau_pci_irq_delivery_enabled == 0 &&
-            stats.nouveau_pci_irq_delivery_claimed == 0;
+            stats.nouveau_pci_irq_delivery_claimed == 0 &&
+            stats.nouveau_pci_irq_handler_invocations == 0 &&
+            stats.nouveau_pci_irq_cause_reads == 0 &&
+            stats.nouveau_pci_irq_cause_valid == 0 &&
+            stats.nouveau_pci_irq_cause_acks == 0 &&
+            stats.nouveau_pci_irq_spurious == 0;
         int no_fake_getparams =
             stats.nouveau_getparams == 0 &&
             stats.nouveau_getparam_dda_facts == 0 &&
@@ -1092,6 +1176,7 @@ int main(int argc, char *argv[])
             stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
             (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) == 0;
         int rejected =
+            stats.nouveau_pci_probes == 0 ||
             stats.nouveau_pci_probe_reject_dxg_present != 0 ||
             stats.nouveau_pci_probe_reject_no_bars != 0;
 
