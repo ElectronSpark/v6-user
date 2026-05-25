@@ -9843,6 +9843,7 @@ static int probe_present_source_failclosed_contract(
     int unverified_resource_failclosed = 0;
     int adapter_mismatch_failclosed = 0;
     int negative_metadata_pass = 0;
+    int software_path_rejection = 0;
     int owner_cleanup = 0;
     int hyperv_gate = 0;
     int pass = 0;
@@ -10256,6 +10257,20 @@ static int probe_present_source_failclosed_contract(
         negative_register_metadata && negative_commit_metadata &&
         negative_source_identity && unverified_resource_failclosed &&
         adapter_mismatch_failclosed && negative_no_present_credit;
+    software_path_rejection =
+        query.display_target_kind == FB_GPU_DXG_DISPLAY_TARGET_NONE &&
+        bind_contract.completion_source ==
+            FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+        bind_contract.selected_lane ==
+            FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+        query.helper_transport_present == 0 &&
+        query.missing_host_abi ==
+            FB_GPU_DXG_PRESENT_MISSING_SCANOUT_BIND &&
+        commit.present_id == 0 &&
+        query.present_id == 0 &&
+        commit.completed == 0 &&
+        query.completed == 0 &&
+        negative_no_present_credit;
     owner_cleanup =
         open_after_rc == 0 &&
         after_close_query_rc < 0 &&
@@ -10279,7 +10294,8 @@ static int probe_present_source_failclosed_contract(
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
-           owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
+           software_path_rejection && owner_cleanup &&
+           stale_bind_contract_failclosed && hyperv_gate;
 
 out:
     printf("present_source_failclosed_matrix create_rc=%d share_rc=%d "
@@ -10439,6 +10455,19 @@ out:
                stats_before.display_completions,
            negative_no_present_credit,
            negative_metadata_pass ? "PASS" : "FAIL");
+    printf("present_source_software_path_rejection_matrix "
+           "framebuffer_blit=REJECTED cpu_map_readback=REJECTED "
+           "dri_software_present=REJECTED copy_export_fallback=REJECTED "
+           "callback_only=REJECTED release_only=REJECTED "
+           "display_target_kind=%u selected_lane=%lu "
+           "missing_host_abi=%lu transport_present=%lu "
+           "present_id=0 completed=0 no_present_credit=%u "
+           "native_present_claim=0 opengl_submit_credit=0 status=%s\n",
+           query.display_target_kind, bind_contract.selected_lane,
+           query.missing_host_abi,
+           query.helper_transport_present,
+           negative_no_present_credit,
+           software_path_rejection ? "PASS" : "FAIL");
 
     if (fb_fd >= 0)
         close(fb_fd);

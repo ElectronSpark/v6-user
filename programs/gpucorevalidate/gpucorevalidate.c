@@ -1814,6 +1814,35 @@ static int validate_present_source_matrix(void)
                               output,
                               "present_source_negative_metadata_matrix",
                               "status=PASS");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output,
+                         "present_source_software_path_rejection_matrix");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "framebuffer_blit=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "cpu_map_readback=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "dri_software_present=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "copy_export_fallback=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "callback_only=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "release_only=REJECTED");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "display_target_kind=0");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "present_id=0");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "completed=0");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "native_present_claim=0");
+    require_output_token("present_source_software_path_rejection_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("present_source_software_path_rejection_matrix",
+                              output,
+                              "present_source_software_path_rejection_matrix",
+                              "status=PASS");
 
     if (failures != before)
         return -1;
@@ -1829,6 +1858,12 @@ static int validate_present_source_matrix(void)
            "register_rejects=PASS commit_sync_rules=PASS "
            "unverified_resource_fd=PASS adapter_mismatch=PASS "
            "no_present_credit=1 native_present_claim=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator present_source_software_path_rejection_matrix "
+           "framebuffer_blit=REJECTED cpu_map_readback=REJECTED "
+           "dri_software_present=REJECTED copy_export_fallback=REJECTED "
+           "callback_only=REJECTED release_only=REJECTED "
+           "display_target_kind=0 native_present_claim=0 "
            "opengl_submit_credit=0 status=PASS\n");
     return 0;
 }
