@@ -1811,10 +1811,18 @@ static int check_kms_fb(int fd)
                vblank_negative_before.kms_page_flips);
     printf("drmiftest: kms_vblank_native_present_separation_matrix "
            "vblank_source=display display_correlated=1 synthetic=0 "
+           "page_flip_events_software_blit=%lu "
+           "page_flip_events_native_hw=%lu "
+           "vblank_source_software_display=%lu "
+           "vblank_source_native_hw=%lu "
            "display_completion_is_native_present=0 "
            "page_flip_native_present_credit=0 "
            "vblank_native_present_credit=0 "
-           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
+           vblank_after.kms_page_flip_events_software_blit,
+           vblank_after.kms_page_flip_events_native_hw,
+           vblank_after.kms_vblank_source_software_display,
+           vblank_after.kms_vblank_source_nouveau_hw);
 
     memset(&atomic, 0, sizeof(atomic));
     atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;

@@ -1175,6 +1175,10 @@ static int validate_drm_syncobj_matrix(void)
     require_output_token("drm_vblank_native_present_separation_matrix",
                          output, "page_flip_native_present_credit=0");
     require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "page_flip_events_native_hw=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "vblank_source_native_hw=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
                          output, "vblank_native_present_credit=0");
     require_output_token("drm_vblank_native_present_separation_matrix",
                          output, "opengl_submit_credit=0");
@@ -1640,6 +1644,10 @@ static int validate_drm_syncobj_matrix(void)
            "native_present_credit=0 status=PASS\n");
     printf("gpu_core_c_validator "
            "drm_vblank_native_present_separation_matrix "
+           "page_flip_events_software_blit=1 "
+           "page_flip_events_native_hw=0 "
+           "vblank_source_software_display=1 "
+           "vblank_source_native_hw=0 "
            "display_completion_is_native_present=0 "
            "page_flip_native_present_credit=0 "
            "vblank_native_present_credit=0 "
@@ -3008,6 +3016,7 @@ static int validate_backend(void)
     printf("gpu_core_c_validator nouveau_kms_vblank_irq_source_matrix "
            "kms_vblank_sequence=%lu kms_vblank_samples=%lu "
            "kms_display_correlated=%lu kms_synthetic=%lu "
+           "kms_source_software_display=%lu kms_source_native_hw=%lu "
            "nouveau_vblank_supported=%lu nouveau_vblank_irqs=%lu "
            "nouveau_irq_claimed=%lu flip_completions=%lu irq_source=%s "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -3015,6 +3024,8 @@ static int validate_backend(void)
            stats.kms_vblank_samples,
            stats.kms_vblank_display_correlated,
            stats.kms_vblank_synthetic,
+           stats.kms_vblank_source_software_display,
+           stats.kms_vblank_source_nouveau_hw,
            stats.nouveau_display_vblank_supported,
            stats.nouveau_display_vblank_irqs,
            stats.nouveau_pci_irq_delivery_claimed,

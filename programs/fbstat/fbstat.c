@@ -500,7 +500,8 @@ int main(int argc, char *argv[])
            "d3d12_present=dxg-present webkit_policy=separate "
            "ioctl_trace_label=fb-gpu-trace "
            "generic_scanout_native_present_credit=0 "
-           "d3d12_native_present_credit=%lu "
+           "generic_display_last_complete=%lu "
+           "d3d12_native_present_credit=0 "
            "opengl_submit_credit=0 backend_opengl_submit=%u status=PASS\n",
            stats.display_last_complete,
            backend_opengl_submit);
@@ -1137,6 +1138,7 @@ int main(int argc, char *argv[])
         printf("nouveau_kms_vblank_irq_source_matrix "
                "kms_vblank_sequence=%lu kms_vblank_samples=%lu "
                "kms_display_correlated=%lu kms_synthetic=%lu "
+               "kms_source_software_display=%lu kms_source_native_hw=%lu "
                "nouveau_vblank_supported=%lu nouveau_vblank_irqs=%lu "
                "nouveau_irq_claimed=%lu flip_completions=%lu "
                "irq_source=%s native_present_credit=0 "
@@ -1145,6 +1147,8 @@ int main(int argc, char *argv[])
                stats.kms_vblank_samples,
                stats.kms_vblank_display_correlated,
                stats.kms_vblank_synthetic,
+               stats.kms_vblank_source_software_display,
+               stats.kms_vblank_source_nouveau_hw,
                stats.nouveau_display_vblank_supported,
                stats.nouveau_display_vblank_irqs,
                stats.nouveau_pci_irq_delivery_claimed,
@@ -1754,6 +1758,10 @@ int main(int argc, char *argv[])
            "vblank_source=%s display_correlated=%lu synthetic=%lu "
            "vblank_sequence=%lu display_last_complete=%lu "
            "page_flip_events=%lu kms_page_flips=%lu "
+           "page_flip_events_software_blit=%lu "
+           "page_flip_events_native_hw=%lu "
+           "vblank_source_software_display=%lu "
+           "vblank_source_native_hw=%lu "
            "display_completion_is_native_present=0 "
            "page_flip_native_present_credit=0 "
            "vblank_native_present_credit=0 "
@@ -1767,6 +1775,10 @@ int main(int argc, char *argv[])
            stats.display_last_complete,
            stats.kms_vblank_page_flip_events,
            stats.kms_page_flips,
+           stats.kms_page_flip_events_software_blit,
+           stats.kms_page_flip_events_native_hw,
+           stats.kms_vblank_source_software_display,
+           stats.kms_vblank_source_nouveau_hw,
            stats.kms_atomic_out_fence_display_correlated,
            stats.kms_atomic_out_fence_software_scanout_correlated);
     printf("ttm_system_bytes %lu\n", stats.ttm_system_bytes);
