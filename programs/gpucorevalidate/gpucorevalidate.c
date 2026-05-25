@@ -1962,6 +1962,33 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_present_bind_contract_failclosed_matrix",
                               "status=PASS");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output,
+                         "d3d12_native_completion_zero_credit_matrix");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "display_bind=ABSENT");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "transport_present=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "completion_source=");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "present_id=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "completed=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "callbacks_after_completion=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "releases_after_completion=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "per_client_generation=required");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_native_completion_zero_credit_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_native_completion_zero_credit_matrix",
+                              output,
+                              "d3d12_native_completion_zero_credit_matrix",
+                              "status=PASS");
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
                          output,
                          "dxg_resource_scanout_bind_host_abi_matrix");
@@ -2064,6 +2091,13 @@ static int validate_present_source_matrix(void)
            "foreign_source=PASS stale_source=PASS "
            "software_paths_rejected=PASS transport_present=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "d3d12_native_completion_zero_credit_matrix "
+           "display_bind=ABSENT transport_present=0 "
+           "completion_source=required present_id=0 completed=0 "
+           "callbacks_after_completion=0 releases_after_completion=0 "
+           "per_client_generation=required native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator "
            "dxg_resource_scanout_bind_host_abi_matrix "
            "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
@@ -2216,6 +2250,15 @@ static int validate_backend(void)
                    stats.dxg_present_display_target_kind ==
                        FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                "PASS" : "DIAGNOSTIC");
+    printf("gpu_core_c_validator d3d12_native_completion_zero_credit_matrix "
+           "backend=%u display_bind=%s transport_present=%lu "
+           "completion_source=required present_id=0 completed=0 "
+           "callback_release_order=blocked per_client_generation=required "
+           "native_present_credit=0 opengl_submit_credit=0 status=PENDING\n",
+           backend.backend,
+           stats.dxg_present_helper_transport_present ? "PRESENT" :
+               "ABSENT",
+           stats.dxg_present_helper_transport_present);
     printf("gpu_core_c_validator nouveau_pci_dma_resource_matrix "
            "registered=%lu accepts=%lu reject_dxg_present=%lu "
            "reject_no_bars=%lu dma_mask_configured=%lu "
@@ -2282,6 +2325,31 @@ static int validate_backend(void)
                "DIAGNOSTIC",
            stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED",
            stats.nouveau_pci_native_present_credit);
+    printf("gpu_core_c_validator nouveau_pci_runtime_interface_matrix "
+           "accepts=%lu resource_tree=%s dma_mapping_api=%s "
+           "msi_msix_programming=%s legacy_irq_fallback=%s "
+           "irq_delivery=%s runtime_pm=%s remove_path=%s hot_remove=%s "
+           "native_engine=%s native_present_credit=%lu "
+           "opengl_submit_credit=0 status=PENDING\n",
+           stats.nouveau_pci_probe_accepts,
+           stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
+               "NOT_ATTEMPTED",
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CLAIMED" :
+               "DIAGNOSTIC",
+           (stats.nouveau_pci_irq_delivery_enabled ||
+            stats.nouveau_pci_irq_delivery_claimed) ? "PRESENT" : "ABSENT",
+           stats.nouveau_pci_probe_accepts == 0 ? "DEFERRED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED",
+           stats.nouveau_pci_probe_accepts == 0 ? "DEFERRED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_probe_accepts == 0 ? "ABSENT" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
            "driver_caps=%lu "
@@ -2346,6 +2414,12 @@ static int validate_backend(void)
     }
     if ((backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0) {
         note_fail("backend", "hyperv_opengl_submit_ungated");
+        ok = 0;
+    }
+    if (stats.dxg_present_helper_transport_present != 0 ||
+        stats.dxg_present_display_target_kind !=
+            FB_GPU_DXG_DISPLAY_TARGET_NONE) {
+        note_fail("backend", "d3d12_native_completion_claim_without_bind");
         ok = 0;
     }
     if ((backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0) {
@@ -2506,6 +2580,13 @@ static int validate_backend(void)
                stats.nouveau_pci_irq_handler_registered,
                stats.nouveau_pci_irq_delivery_enabled,
                stats.nouveau_pci_irq_delivery_claimed);
+        printf("gpu_core_c_validator "
+               "d3d12_native_completion_zero_credit_matrix "
+               "display_bind=ABSENT transport_present=0 "
+               "completion_source=required present_id=0 completed=0 "
+               "callback_release_order=blocked "
+               "per_client_generation=required native_present_credit=0 "
+               "opengl_submit_credit=0 status=PASS\n");
         if (stats.nouveau_pci_probe_accepts == 0) {
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=0 gpup_only=PASS dma_mask=NOT_CONFIGURED "
@@ -2515,6 +2596,16 @@ static int validate_backend(void)
                    "legacy_irq_fallback=NOT_CLAIMED "
                    "irq_handler=ABSENT irq_delivery=ABSENT "
                    "runtime_pm_usage=DEFERRED remove_path=DEFERRED "
+                   "native_present_credit=0 opengl_submit_credit=0 "
+                   "status=PASS\n");
+            printf("gpu_core_c_validator "
+                   "nouveau_pci_runtime_interface_matrix "
+                   "accepts=0 resource_tree=GPU_P_FAIL_CLOSED "
+                   "dma_mapping_api=GPU_P_FAIL_CLOSED "
+                   "msi_msix_programming=NOT_ATTEMPTED "
+                   "legacy_irq_fallback=NOT_CLAIMED irq_delivery=ABSENT "
+                   "runtime_pm=DEFERRED remove_path=DEFERRED "
+                   "hot_remove=DEFERRED native_engine=ABSENT "
                    "native_present_credit=0 opengl_submit_credit=0 "
                    "status=PASS\n");
         } else {
@@ -2533,6 +2624,24 @@ static int validate_backend(void)
                        "MISSING",
                    stats.nouveau_pci_irq_handler_registered ? "PRESENT" :
                        "ABSENT",
+                   (stats.nouveau_pci_irq_delivery_enabled ||
+                    stats.nouveau_pci_irq_delivery_claimed) ? "PRESENT" :
+                       "ABSENT",
+                   stats.nouveau_pci_removes ? "DIAGNOSTIC" :
+                       "DEFERRED");
+            printf("gpu_core_c_validator "
+                   "nouveau_pci_runtime_interface_matrix "
+                   "accepts=%lu resource_tree=PASS dma_mapping_api=PASS "
+                   "msi_msix_programming=%s legacy_irq_fallback=%s "
+                   "irq_delivery=%s runtime_pm=DIAGNOSTIC "
+                   "remove_path=%s hot_remove=DIAGNOSTIC "
+                   "native_engine=DIAGNOSTIC native_present_credit=0 "
+                   "opengl_submit_credit=0 status=DIAGNOSTIC\n",
+                   stats.nouveau_pci_probe_accepts,
+                   stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
+                       "NOT_ATTEMPTED",
+                   stats.nouveau_pci_legacy_irq_fallback ? "PASS" :
+                       "MISSING",
                    (stats.nouveau_pci_irq_delivery_enabled ||
                     stats.nouveau_pci_irq_delivery_claimed) ? "PRESENT" :
                        "ABSENT",

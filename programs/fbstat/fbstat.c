@@ -426,6 +426,22 @@ int main(int argc, char *argv[])
                        stats.dxg_present_display_target_kind ==
                            FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                    "PASS" : "DIAGNOSTIC");
+        printf("d3d12_native_completion_zero_credit_matrix "
+               "backend=%s display_bind=%s transport_present=%lu "
+               "completion_source=required present_id=0 completed=0 "
+               "close_before_signal=DEFERRED callback_release_order=blocked "
+               "per_client_generation=required "
+               "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+               backend_name(backend.backend),
+               stats.dxg_present_helper_transport_present ? "PRESENT" :
+                   "ABSENT",
+               stats.dxg_present_helper_transport_present,
+               backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+                       backend_opengl_submit == 0 &&
+                       stats.dxg_present_helper_transport_present == 0 &&
+                       stats.dxg_present_display_target_kind ==
+                           FB_GPU_DXG_DISPLAY_TARGET_NONE ?
+                   "PASS" : "DIAGNOSTIC");
     }
     printf("gpu_diagnostics_separation_matrix "
            "generic_scanout=drm-kms-fb generic_scanout_prefixes=drm,kms,fb "
@@ -904,6 +920,24 @@ int main(int argc, char *argv[])
                dma_mask, coherent_dma_mask, bar_claim, msi_msix,
                legacy_irq, irq_handler, irq_delivery, runtime_pm,
                remove_path, stats.nouveau_pci_native_present_credit,
+               status);
+        printf("nouveau_pci_runtime_interface_matrix "
+               "accepts=%lu resource_tree=%s dma_mapping_api=%s "
+               "msi_msix_programming=%s legacy_irq_fallback=%s "
+               "irq_delivery=%s runtime_pm=%s remove_path=%s "
+               "hot_remove=%s native_engine=%s native_present_credit=%lu "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               accepts ? bar_claim : "GPU_P_FAIL_CLOSED",
+               accepts ? dma_mask : "GPU_P_FAIL_CLOSED",
+               msi_msix,
+               legacy_irq,
+               irq_delivery,
+               runtime_pm,
+               remove_path,
+               accepts ? "DIAGNOSTIC" : "DEFERRED",
+               accepts ? "DIAGNOSTIC" : "ABSENT",
+               stats.nouveau_pci_native_present_credit,
                status);
     }
     printf("nouveau_getparam_provenance_matrix stats "
@@ -1510,6 +1544,22 @@ int main(int argc, char *argv[])
            stats.dxg_present_selected_lane,
            stats.dxg_present_missing_host_abi,
            stats.dxg_present_helper_transport_present);
+    printf("d3d12_display_bind_absent_matrix "
+           "selected=%s display_bind=%s missing_host_abi=%lu "
+           "transport_present=%lu helper_requires_completion=%lu "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           present_lane_name(stats.dxg_present_selected_lane),
+           stats.dxg_present_helper_transport_present ? "PRESENT" :
+               "ABSENT",
+           stats.dxg_present_missing_host_abi,
+           stats.dxg_present_helper_transport_present,
+           stats.dxg_present_helper_requires_completion,
+           stats.dxg_present_selected_lane ==
+                   FB_GPU_DXG_PRESENT_LANE_GPUP_DXG_SCANOUT_BIND &&
+                   stats.dxg_present_helper_transport_present == 0 &&
+                   stats.dxg_present_helper_requires_completion != 0 ?
+               "PASS" : "DIAGNOSTIC");
     close(fd);
     return 0;
 }

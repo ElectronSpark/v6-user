@@ -10580,6 +10580,21 @@ out:
            software_path_rejection ? "PASS" : "FAIL",
            query.missing_host_abi, query.helper_transport_present,
            d3d12_bind_contract_failclosed_pass ? "PASS" : "FAIL");
+    printf("d3d12_native_completion_zero_credit_matrix "
+           "source=0x%x display_bind=ABSENT transport_present=%lu "
+           "completion_source=%lu present_id=0 completed=0 "
+           "close_before_signal=DEFERRED callbacks_after_completion=0 "
+           "releases_after_completion=0 per_client_generation=required "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           reg.present_source, query.helper_transport_present,
+           bind_contract.completion_source,
+           d3d12_bind_contract_failclosed_pass &&
+                   query.helper_transport_present == 0 &&
+                   bind_contract.completion_source ==
+                       FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+                   bind_contract.present_id == 0 &&
+                   bind_contract.completed == 0 ?
+               "PASS" : "FAIL");
     printf("dxg_resource_scanout_bind_host_abi_matrix "
            "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
            "wsl_dxg_display_bind_ioctl=0 "
