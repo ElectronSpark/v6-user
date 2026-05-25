@@ -5200,12 +5200,26 @@ struct dxg_shared_resource_diag {
     uint32 model_alloc0;
     uint32 model_alloc0_priv;
     uint64 model_alloc0_size;
+    uint64 model_alloc0_pages;
     uint32 model_alloc0_flags;
+    uint32 model_alloc0_cached;
     uint32 model_runtime_size;
     uint32 model_resource_size;
     uint32 model_total_size;
     uint32 model_sealed;
     uint32 model_generation;
+
+    uint32 parent_seen;
+    uint32 parent_next;
+    uint32 parent_last;
+    uint32 parent_refs;
+    uint32 parent_fd_refs;
+    uint32 parent_children;
+    uint32 parent_last_child;
+    uint32 parent_sealed_generation;
+    uint32 parent_publish_count;
+    uint32 parent_open_count;
+    uint32 parent_release_count;
 };
 
 struct dxg_present_credit_status {
@@ -7450,7 +7464,9 @@ static int read_dxg_shared_resource_diag(struct dxg_shared_resource_diag *out)
         dxg_parse_uint_after(line, "alloc0:", &out->model_alloc0);
         dxg_parse_uint_after(line, "priv0:", &out->model_alloc0_priv);
         dxg_parse_u64_after(line, "size0:", &out->model_alloc0_size);
+        dxg_parse_u64_after(line, "pages0:", &out->model_alloc0_pages);
         dxg_parse_uint_after(line, "flags0:", &out->model_alloc0_flags);
+        dxg_parse_uint_after(line, "cached0:", &out->model_alloc0_cached);
         dxg_parse_uint_after(line, "sizes:", &out->model_runtime_size);
         {
             char *sizes = dxg_find_text(line, "sizes:");
@@ -7470,6 +7486,25 @@ static int read_dxg_shared_resource_diag(struct dxg_shared_resource_diag *out)
         }
         dxg_parse_uint_after(line, "sealed:", &out->model_sealed);
         dxg_parse_uint_after(line, "gen:", &out->model_generation);
+    }
+
+    line = dxg_find_text(buf, "dxg_sharedresource_parent=");
+    if (line != 0) {
+        out->parent_seen = 1;
+        dxg_parse_uint_after(line, "next:", &out->parent_next);
+        dxg_parse_uint_after(line, "last:", &out->parent_last);
+        dxg_parse_uint_after(line, "refs:", &out->parent_refs);
+        dxg_parse_uint_after(line, "fd_refs:", &out->parent_fd_refs);
+        dxg_parse_uint_after(line, "children:", &out->parent_children);
+        dxg_parse_uint_after(line, "last_child:",
+                             &out->parent_last_child);
+        dxg_parse_uint_after(line, "sealed_gen:",
+                             &out->parent_sealed_generation);
+        dxg_parse_uint_after(line, "publish:",
+                             &out->parent_publish_count);
+        dxg_parse_uint_after(line, "open:", &out->parent_open_count);
+        dxg_parse_uint_after(line, "release:",
+                             &out->parent_release_count);
     }
 
     free(buf);
@@ -9508,6 +9543,8 @@ static int probe_shared_seal_provenance_contract(int fd,
     int record_generation_coherent;
     int canonical_record_coherent;
     int shared_model_coherent;
+    int sealed_alloc_metadata_coherent;
+    int parent_lifetime_coherent;
     int no_present_credit;
     int pass;
 
@@ -9727,6 +9764,29 @@ print_row:
         share_diag.model_runtime_size == expected_runtime_size &&
         share_diag.model_resource_size == expected_resource_size &&
         share_diag.model_total_size == expected_total_size;
+    sealed_alloc_metadata_coherent =
+        shared_model_coherent &&
+        share_diag.model_alloc0_pages != 0 &&
+        share_diag.model_alloc0_pages == open_diag.model_alloc0_pages &&
+        share_diag.model_alloc0_pages == close_diag.model_alloc0_pages &&
+        share_diag.model_alloc0_cached == open_diag.model_alloc0_cached &&
+        share_diag.model_alloc0_cached == close_diag.model_alloc0_cached &&
+        share_diag.model_alloc0_flags == open_diag.model_alloc0_flags &&
+        share_diag.model_alloc0_flags == close_diag.model_alloc0_flags;
+    parent_lifetime_coherent =
+        share_diag.parent_seen && open_diag.parent_seen &&
+        close_diag.parent_seen &&
+        share_diag.parent_last != 0 &&
+        share_diag.parent_last == open_diag.parent_last &&
+        share_diag.parent_last == close_diag.parent_last &&
+        share_diag.parent_children >= 1 &&
+        open_diag.parent_children >= 2 &&
+        close_diag.parent_children >= 2 &&
+        close_diag.parent_fd_refs == 0 &&
+        close_diag.parent_refs >= close_diag.parent_children &&
+        close_diag.parent_sealed_generation == close_diag.model_generation &&
+        open_diag.parent_open_count >= share_diag.parent_open_count &&
+        close_diag.parent_release_count >= share_diag.parent_release_count;
     no_present_credit =
         present_before.rc == 0 && present_after.rc == 0 &&
         present_before.display_presents == present_after.display_presents &&
@@ -9740,8 +9800,41 @@ print_row:
            destroy_rc == 0 && metadata_stable && seal_before_query &&
            local_resource_admitted && refcounts_coherent &&
            record_generation_coherent && canonical_record_coherent &&
-           shared_model_coherent &&
+           shared_model_coherent && sealed_alloc_metadata_coherent &&
+           parent_lifetime_coherent &&
            no_present_credit;
+
+    printf("shared_resource_parent_lifetime_matrix parent=0x%x/0x%x/0x%x refs=%u/%u/%u fd_refs=%u/%u/%u children=%u/%u/%u sealed_gen=%u/%u/%u publish=%u/%u/%u open=%u/%u/%u release=%u/%u/%u status=%s\n",
+           share_diag.parent_last, open_diag.parent_last,
+           close_diag.parent_last, share_diag.parent_refs,
+           open_diag.parent_refs, close_diag.parent_refs,
+           share_diag.parent_fd_refs, open_diag.parent_fd_refs,
+           close_diag.parent_fd_refs, share_diag.parent_children,
+           open_diag.parent_children, close_diag.parent_children,
+           share_diag.parent_sealed_generation,
+           open_diag.parent_sealed_generation,
+           close_diag.parent_sealed_generation,
+           share_diag.parent_publish_count,
+           open_diag.parent_publish_count,
+           close_diag.parent_publish_count,
+           share_diag.parent_open_count, open_diag.parent_open_count,
+           close_diag.parent_open_count,
+           share_diag.parent_release_count,
+           open_diag.parent_release_count,
+           close_diag.parent_release_count,
+           parent_lifetime_coherent ? "PASS" : "FAIL");
+    printf("shared_resource_sealed_alloc_metadata_matrix pages0=%lu/%lu/%lu cached0=%u/%u/%u flags0=0x%x/0x%x/0x%x size0=%lu/%lu/%lu model_valid=%u/%u/%u status=%s\n",
+           share_diag.model_alloc0_pages, open_diag.model_alloc0_pages,
+           close_diag.model_alloc0_pages,
+           share_diag.model_alloc0_cached, open_diag.model_alloc0_cached,
+           close_diag.model_alloc0_cached,
+           share_diag.model_alloc0_flags, open_diag.model_alloc0_flags,
+           close_diag.model_alloc0_flags,
+           share_diag.model_alloc0_size, open_diag.model_alloc0_size,
+           close_diag.model_alloc0_size,
+           share_diag.model_valid, open_diag.model_valid,
+           close_diag.model_valid,
+           sealed_alloc_metadata_coherent ? "PASS" : "FAIL");
 
     printf("shared_resource_seal_provenance_matrix create_rc=%d share_rc=%d fd=%lu fd_valid=%u fd_flags=%d fd_cloexec=%u query_rc=%d open_rc=%d close_fd_rc=%d destroy_rc=%d device=0x%x resource=0x%x allocation=0x%x global=0x%x opened_resource=0x%x opened_allocation=0x%x opened_gpuva=0x%lx create_flags=0x%x alloc_flags=0x%x expected_runtime=%u/%08x expected_resource=%u/%08x expected_total=%u/%08x share_meta=%u/%08x,%u/%08x,%u/%08x open_blob=%u/%08x,%u/%08x,%u/%08x close_meta=%u/%08x,%u/%08x,%u/%08x metadata_stable=%u nt_seal_before_query=%u nt_meta=%u->%u nt_seal=%u->%u nt_host_seal=%u->%u local_resource_admitted=%u runtime_user_obj=0x%x runtime_user_dev=0x%x runtime_entry=%u/%u query_allocs=%u query_sizes=%u,%u,%u open_refs=%u query_refs=%u lifetime_seals=%u->%u lifetime_open_tracked=%u->%u refcounts_coherent=%u record_generation_coherent=%u canonical_record_coherent=%u shared_model_coherent=%u model_valid=%u/%u/%u model_flat=%u/%u/%u model_alloc0=0x%x/0x%x/0x%x model_sizes=%u,%u,%u model_priv0=%u model_gen=%u/%u/%u record_key=0x%x/0x%x/0x%x record_source=0x%x/%u record_counts=q%u/o%u/fd%u record_mutated=%u present_attempted=0 native_present_claim=0 present_stats_rc=%d/%d present_delta=%lu,%lu,%lu,%lu no_present_credit=%u status=%s\n",
            create_rc, share_rc,
