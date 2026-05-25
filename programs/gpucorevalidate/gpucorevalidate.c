@@ -1267,6 +1267,24 @@ static int validate_drm_syncobj_matrix(void)
                          "native_present_credit=0");
     require_output_token("drm_fence_callback_lifecycle_matrix", output,
                          "opengl_submit_credit=0 status=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "dma_fence_lifetime_contract_matrix");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "single_backing_object=fb_gpu_fence");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "gem_prime_dmabuf=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "kms_out_fence=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "syncobj_sync_file=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "poll_callback_removal=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "final_release=PASS");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("drm_dma_fence_lifetime_contract_matrix", output,
+                         "opengl_submit_credit=0 status=PASS");
     require_output_token("drm_atomic_fence_matrix", output,
                          "atomic_fence_matrix");
     require_output_token("drm_atomic_fence_matrix", output,
@@ -1549,6 +1567,13 @@ static int validate_drm_syncobj_matrix(void)
            "callbacks_removed_delta=1 callbacks_late_delta=1 "
            "callback_errors_delta=0 fence_fd_live_delta=0 "
            "fence_objects_live_delta=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "drm_dma_fence_lifetime_contract_matrix "
+           "single_backing_object=fb_gpu_fence "
+           "gem_prime_dmabuf=PASS kms_out_fence=PASS "
+           "syncobj_sync_file=PASS poll_callback_removal=PASS "
+           "final_release=PASS native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
     if (contains(output, "atomic_fence_kernel=real")) {
         printf("gpu_core_c_validator drm_atomic_fence_matrix "
