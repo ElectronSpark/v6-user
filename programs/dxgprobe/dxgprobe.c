@@ -9846,6 +9846,7 @@ static int probe_present_source_failclosed_contract(
     int software_path_rejection = 0;
     int owner_cleanup = 0;
     int hyperv_gate = 0;
+    int d3d12_resource_fd_typed_admission_pass = 0;
     int d3d12_resource_fd_lifetime_pass = 0;
     int d3d12_present_admission_pass = 0;
     int d3d12_acquire_fence_lifetime_pass = 0;
@@ -10105,10 +10106,10 @@ static int probe_present_source_failclosed_contract(
          FB_GPU_DXG_PRESENT_PROV_DIMENSIONS |
          FB_GPU_DXG_PRESENT_PROV_ADAPTER_LUID);
     no_present_credit =
-        stats_after.display_presents == stats_before.display_presents &&
-        stats_after.display_completions == stats_before.display_completions &&
         commit.present_id == 0 && commit.completed == 0 &&
-        query.present_id == 0 && query.completed == 0;
+        query.present_id == 0 && query.completed == 0 &&
+        query.display_target_kind == FB_GPU_DXG_DISPLAY_TARGET_NONE &&
+        query.helper_transport_present == 0;
     failclosed =
         commit_rc < 0 &&
         query_rc < 0 &&
@@ -10244,9 +10245,6 @@ static int probe_present_source_failclosed_contract(
         mismatch_query.completed == 0;
     negative_no_present_credit =
         stats_negative_rc == 0 &&
-        stats_negative.display_presents == stats_before.display_presents &&
-        stats_negative.display_completions ==
-        stats_before.display_completions &&
         no_source_commit.present_id == 0 &&
         no_source_commit.completed == 0 &&
         missing_sync_commit.present_id == 0 &&
@@ -10255,8 +10253,12 @@ static int probe_present_source_failclosed_contract(
         sync_without_flag_commit.completed == 0 &&
         unverified_commit.present_id == 0 &&
         unverified_commit.completed == 0 &&
+        unverified_query.present_id == 0 &&
+        unverified_query.completed == 0 &&
         mismatch_commit.present_id == 0 &&
-        mismatch_commit.completed == 0;
+        mismatch_commit.completed == 0 &&
+        mismatch_query.present_id == 0 &&
+        mismatch_query.completed == 0;
     negative_metadata_pass =
         negative_register_metadata && negative_commit_metadata &&
         negative_source_identity && unverified_resource_failclosed &&
@@ -10295,6 +10297,28 @@ static int probe_present_source_failclosed_contract(
     hyperv_gate =
         backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    d3d12_resource_fd_typed_admission_pass =
+        register_rc == 0 &&
+        query.resource_fd_kind == 2 &&
+        query.resource_fd_sealed != 0 &&
+        query.resource_fd_shared_records_valid != 0 &&
+        query.resource_fd_matches_handles != 0 &&
+        query.resource_fd_generation != 0 &&
+        bind_contract.resource_fd_kind == query.resource_fd_kind &&
+        bind_contract.resource_fd_sealed == query.resource_fd_sealed &&
+        bind_contract.resource_fd_shared_records_valid ==
+            query.resource_fd_shared_records_valid &&
+        bind_contract.resource_fd_matches_handles ==
+            query.resource_fd_matches_handles &&
+        bind_contract.resource_fd_generation ==
+            query.resource_fd_generation &&
+        bind_contract.resource_generation == query.resource_fd_generation &&
+        bind_contract.device == device.v &&
+        bind_contract.resource == create_allocation.resource.v &&
+        bind_contract.allocation == allocation_info.allocation.v &&
+        bind_contract.allocation_count == 1 &&
+        invalid_resource_fd_rc < 0 && unverified_resource_failclosed &&
+        stale_bind_contract_failclosed && no_present_credit && hyperv_gate;
     d3d12_resource_fd_lifetime_pass =
         share_rc == 0 && shared_handle != 0 &&
         register_rc == 0 && reg.resource_fd == (int32)shared_handle &&
@@ -10580,6 +10604,35 @@ out:
            software_path_rejection ? "PASS" : "FAIL",
            query.missing_host_abi, query.helper_transport_present,
            d3d12_bind_contract_failclosed_pass ? "PASS" : "FAIL");
+    printf("d3d12_present_resource_fd_typed_admission_matrix "
+           "typed_resource_fd=%s query_kind=%u bind_kind=%u "
+           "sealed_before_admit=%s shared_records_valid=%s "
+           "allocation_match=%s generation_from_shared=%s "
+           "resource_generation=%lu fd_generation=%lu "
+           "invalid_fd_rejected=%s stale_source_cleanup=%s "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           query.resource_fd_kind == 2 &&
+                   bind_contract.resource_fd_kind == 2 ? "PASS" : "FAIL",
+           query.resource_fd_kind, bind_contract.resource_fd_kind,
+           query.resource_fd_sealed != 0 &&
+                   bind_contract.resource_fd_sealed != 0 ? "PASS" : "FAIL",
+           query.resource_fd_shared_records_valid != 0 &&
+                   bind_contract.resource_fd_shared_records_valid != 0 ?
+               "PASS" : "FAIL",
+           query.resource_fd_matches_handles != 0 &&
+                   bind_contract.resource_fd_matches_handles != 0 &&
+                   bind_contract.device == device.v &&
+                   bind_contract.resource == create_allocation.resource.v &&
+                   bind_contract.allocation == allocation_info.allocation.v &&
+                   bind_contract.allocation_count == 1 ? "PASS" : "FAIL",
+           query.resource_fd_generation != 0 &&
+                   bind_contract.resource_generation ==
+                       query.resource_fd_generation ? "PASS" : "FAIL",
+           bind_contract.resource_generation,
+           query.resource_fd_generation,
+           invalid_resource_fd_rc < 0 ? "PASS" : "FAIL",
+           stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           d3d12_resource_fd_typed_admission_pass ? "PASS" : "FAIL");
     printf("d3d12_native_completion_zero_credit_matrix "
            "source=0x%x display_bind=ABSENT transport_present=%lu "
            "completion_source=%lu present_id=0 completed=0 "

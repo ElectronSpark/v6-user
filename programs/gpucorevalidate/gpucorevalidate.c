@@ -1962,6 +1962,31 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_present_bind_contract_failclosed_matrix",
                               "status=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output,
+                         "d3d12_present_resource_fd_typed_admission_matrix");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "typed_resource_fd=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "sealed_before_admit=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "shared_records_valid=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "allocation_match=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "generation_from_shared=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "invalid_fd_rejected=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "stale_source_cleanup=PASS");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_present_resource_fd_typed_admission_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_present_resource_fd_typed_admission_matrix",
+                              output,
+                              "d3d12_present_resource_fd_typed_admission_matrix",
+                              "status=PASS");
     require_output_token("d3d12_native_completion_zero_credit_matrix",
                          output,
                          "d3d12_native_completion_zero_credit_matrix");
@@ -2091,6 +2116,13 @@ static int validate_present_source_matrix(void)
            "foreign_source=PASS stale_source=PASS "
            "software_paths_rejected=PASS transport_present=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "d3d12_present_resource_fd_typed_admission_matrix "
+           "typed_resource_fd=PASS sealed_before_admit=PASS "
+           "shared_records_valid=PASS allocation_match=PASS "
+           "generation_from_shared=PASS invalid_fd_rejected=PASS "
+           "stale_source_cleanup=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator "
            "d3d12_native_completion_zero_credit_matrix "
            "display_bind=ABSENT transport_present=0 "
