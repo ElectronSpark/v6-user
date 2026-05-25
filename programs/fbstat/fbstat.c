@@ -2423,8 +2423,12 @@ int main(int argc, char *argv[])
            "wsl_presenthistory_completion_contract=%lu "
            "synthvid_gpa_dirty_only=REJECTED "
            "linux_hyperv_drm_shadow_blit_only=REJECTED "
+           "synthvid_gpa_dirty_present=%lu "
+           "synthvid_d3d12_resource_bind=0 "
            "dda_nouveau_separate_pci_path=%s "
+           "dda_pci_display_present=%lu "
            "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "dda_hw_flip_completion=0 "
            "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
            "resource_bind_contracts=%lu display_completion_contracts=%lu "
            "reject_reasons=0x%lx "
@@ -2433,8 +2437,10 @@ int main(int argc, char *argv[])
            "status=%s\n",
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_scanout_bind_synthvid_gpa_dirty_present,
            stats.dxg_present_dda_nouveau_present != 0 ?
                "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+           stats.dxg_scanout_bind_dda_pci_display_present,
            stats.dxg_scanout_bind_candidate_vmbus_enum_known,
            stats.dxg_scanout_bind_candidate_linux_ioctl_contracts,
            stats.dxg_scanout_bind_candidate_resource_bind_contracts,

@@ -2217,7 +2217,16 @@ static int validate_present_source_matrix(void)
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
                          output, "wsl_dxg_display_bind_ioctl=0");
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "wsl_ioctl_namespace_checked=1");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "wsl_display_bind_ioctl_absent=1");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
                          output, "synthvid_vram_bridge=gpa_dirty_only");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output,
+                         "standard_alloc_role=private_driver_data");
+    require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
+                         output, "standard_alloc_display_bind_absent=1");
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
                          output, "dxg_resource_fd=PASS");
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
@@ -2322,9 +2331,15 @@ static int validate_present_source_matrix(void)
                          output,
                          "linux_hyperv_drm_shadow_blit_only=REJECTED");
     require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "synthvid_d3d12_resource_bind=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "dda_pci_display_present=");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
                          output, "dda_d3d12_resource_import=0");
     require_output_token("dxg_native_present_lane_rejection_matrix",
                          output, "dda_scanout_bind=0");
+    require_output_token("dxg_native_present_lane_rejection_matrix",
+                         output, "dda_hw_flip_completion=0");
     require_output_token("dxg_native_present_lane_rejection_matrix",
                          output, "custom_host_tool=0");
     require_output_token("dxg_native_present_lane_rejection_matrix",
@@ -2453,7 +2468,11 @@ static int validate_present_source_matrix(void)
            "dxg_resource_scanout_bind_host_abi_matrix "
            "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
            "wsl_dxg_display_bind_ioctl=0 "
-           "synthvid_vram_bridge=gpa_dirty_only missing_host_abi=1 "
+           "wsl_ioctl_namespace_checked=1 "
+           "wsl_display_bind_ioctl_absent=1 "
+           "synthvid_vram_bridge=gpa_dirty_only "
+           "standard_alloc_role=private_driver_data "
+           "standard_alloc_display_bind_absent=1 missing_host_abi=1 "
            "transport_present=0 display_target_kind=0 present_id=0 "
            "completed=0 native_present_credit=0 opengl_submit_credit=0 "
            "status=PASS\n");
@@ -2483,8 +2502,12 @@ static int validate_present_source_matrix(void)
            "wsl_presenthistory_completion_contract=0 "
            "synthvid_gpa_dirty_only=REJECTED "
            "linux_hyperv_drm_shadow_blit_only=REJECTED "
+           "synthvid_gpa_dirty_present=0 "
+           "synthvid_d3d12_resource_bind=0 "
            "dda_nouveau_separate_pci_path=ABSENT "
+           "dda_pci_display_present=0 "
            "dda_d3d12_resource_import=0 dda_scanout_bind=0 "
+           "dda_hw_flip_completion=0 "
            "vmbus_enum_known=1 linux_ioctl_contracts=0 "
            "resource_bind_contracts=0 display_completion_contracts=0 "
            "reject_reasons=0x7f "
@@ -3825,8 +3848,12 @@ static int validate_backend(void)
                "wsl_presenthistory_completion_contract=%lu "
                "synthvid_gpa_dirty_only=REJECTED "
                "linux_hyperv_drm_shadow_blit_only=REJECTED "
+               "synthvid_gpa_dirty_present=%lu "
+               "synthvid_d3d12_resource_bind=0 "
                "dda_nouveau_separate_pci_path=%s "
+               "dda_pci_display_present=%lu "
                "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+               "dda_hw_flip_completion=0 "
                "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
                "resource_bind_contracts=%lu "
                "display_completion_contracts=%lu reject_reasons=0x%lx "
@@ -3835,8 +3862,10 @@ static int validate_backend(void)
                "opengl_submit_credit=0 status=%s\n",
                stats.dxg_scanout_bind_candidate_sender_contracts,
                stats.dxg_scanout_bind_candidate_completion_contracts,
+               stats.dxg_scanout_bind_synthvid_gpa_dirty_present,
                stats.dxg_present_dda_nouveau_present != 0 ?
                    "REJECTED_NO_IMPORT_PATH" : "ABSENT",
+               stats.dxg_scanout_bind_dda_pci_display_present,
                stats.dxg_present_dda_nouveau_import_path_present,
                stats.dxg_present_dda_nouveau_scanout_bind_present,
                stats.dxg_scanout_bind_candidate_vmbus_enum_known,
@@ -3851,6 +3880,10 @@ static int validate_backend(void)
                        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
                        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
                        stats.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+                       stats.dxg_scanout_bind_synthvid_resource_bind_absent != 0 &&
+                       stats.dxg_scanout_bind_dda_resource_import_absent != 0 &&
+                       stats.dxg_scanout_bind_dda_scanout_bind_absent != 0 &&
+                       stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
                        stats.dxg_scanout_bind_candidate_reject_reasons ==
                            FB_GPU_DXG_SCANOUT_CANDIDATE_REJECT_ALL &&
                        stats.dxg_present_helper_transport_present == 0 &&
