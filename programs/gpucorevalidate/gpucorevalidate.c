@@ -2155,6 +2155,21 @@ static int validate_present_source_matrix(void)
                          output, "revalidate_successes=");
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
                          output, "revalidate_failures=0");
+    require_output_token("d3d12_display_bind_pin_lifetime_matrix",
+                         output,
+                         "d3d12_display_bind_pin_lifetime_matrix");
+    require_output_token("d3d12_display_bind_pin_lifetime_matrix",
+                         output, "pinned_dxg_file=1");
+    require_output_token("d3d12_display_bind_pin_lifetime_matrix",
+                         output, "pinned_resource_file=1");
+    require_output_token("d3d12_display_bind_pin_lifetime_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_pin_lifetime_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_display_bind_pin_lifetime_matrix",
+                              output,
+                              "d3d12_display_bind_pin_lifetime_matrix",
+                              "status=PASS");
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
                          output, "custom_host_tool=0");
     require_output_token("d3d12_display_bind_backend_boundary_matrix",
@@ -2856,6 +2871,34 @@ static int validate_backend(void)
                    stats.dxg_display_bind_completed_id == 0 &&
                    stats.dxg_display_bind_status == EOPNOTSUPP &&
                    stats.dxg_display_bind_revalidate_failures == 0 ?
+               "PASS" : "DIAGNOSTIC");
+    printf("gpu_core_c_validator d3d12_display_bind_pin_lifetime_matrix "
+           "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
+           "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
+           "pinned_resource_generation=%lu pinned_process_generation=%lu "
+           "pinned_process_refs=%lu source_generation=%lu "
+           "resource_generation=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_pin_attempts,
+           stats.dxg_display_bind_pin_successes,
+           stats.dxg_display_bind_pin_failures,
+           stats.dxg_display_bind_unpins,
+           stats.dxg_display_bind_pinned_dxg_file,
+           stats.dxg_display_bind_pinned_resource_file,
+           stats.dxg_display_bind_pinned_resource_generation,
+           stats.dxg_display_bind_pinned_process_generation,
+           stats.dxg_display_bind_pinned_process_refs,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_pin_attempts == 0 ||
+                   (stats.dxg_display_bind_pin_successes != 0 &&
+                    stats.dxg_display_bind_unpins ==
+                        stats.dxg_display_bind_pin_successes &&
+                    stats.dxg_display_bind_pinned_dxg_file == 1 &&
+                    stats.dxg_display_bind_pinned_resource_file == 1 &&
+                    stats.dxg_display_bind_pinned_resource_generation != 0 &&
+                    stats.dxg_display_bind_pinned_process_generation != 0 &&
+                    stats.dxg_display_bind_pinned_process_refs != 0) ?
                "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator dxg_syncfile_not_kms_completion_matrix "
            "syncfile_only=%lu weak_evidence_rejects=%lu "

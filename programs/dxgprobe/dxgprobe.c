@@ -9956,6 +9956,7 @@ static int probe_present_source_failclosed_contract(
     struct fb_gpu_stats stats_wait;
     struct fb_gpu_stats stats_negative;
     struct fb_gpu_stats stats_closed;
+    struct fb_gpu_stats *stats_pin;
     uint64 shared_handle = 0;
     int fb_fd = -1;
     int fb_fd_foreign = -1;
@@ -10063,6 +10064,7 @@ static int probe_present_source_failclosed_contract(
     memset(&stats_wait, 0, sizeof(stats_wait));
     memset(&stats_negative, 0, sizeof(stats_negative));
     memset(&stats_closed, 0, sizeof(stats_closed));
+    stats_pin = &stats_after;
 
     create_allocation.device = device;
     create_allocation.alloc_count = 1;
@@ -10307,6 +10309,8 @@ static int probe_present_source_failclosed_contract(
                   &after_close_bind_contract);
         stats_closed_rc = ioctl(fb_fd_after, FB_GPU_GET_STATS,
                                 &stats_closed);
+        if (stats_closed_rc == 0)
+            stats_pin = &stats_closed;
     }
 
     provenance_complete =
@@ -11000,6 +11004,44 @@ out:
                        stats_before.dxg_display_bind_revalidate_successes &&
                    stats_after.dxg_display_bind_revalidate_failures ==
                        stats_before.dxg_display_bind_revalidate_failures ?
+               "PASS" : "FAIL");
+    printf("d3d12_display_bind_pin_lifetime_matrix "
+           "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
+           "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
+           "pinned_resource_generation=%lu pinned_process_generation=%lu "
+           "pinned_process_refs=%lu source_generation=%lu "
+           "resource_generation=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_pin->dxg_display_bind_pin_attempts -
+               stats_before.dxg_display_bind_pin_attempts,
+           stats_pin->dxg_display_bind_pin_successes -
+               stats_before.dxg_display_bind_pin_successes,
+           stats_pin->dxg_display_bind_pin_failures -
+               stats_before.dxg_display_bind_pin_failures,
+           stats_pin->dxg_display_bind_unpins -
+               stats_before.dxg_display_bind_unpins,
+           stats_pin->dxg_display_bind_pinned_dxg_file,
+           stats_pin->dxg_display_bind_pinned_resource_file,
+           stats_pin->dxg_display_bind_pinned_resource_generation,
+           stats_pin->dxg_display_bind_pinned_process_generation,
+           stats_pin->dxg_display_bind_pinned_process_refs,
+           stats_pin->dxg_display_bind_source_generation,
+           stats_pin->dxg_display_bind_resource_generation,
+           stats_pin->dxg_display_bind_pin_attempts >
+                       stats_before.dxg_display_bind_pin_attempts &&
+                   stats_pin->dxg_display_bind_pin_successes >
+                       stats_before.dxg_display_bind_pin_successes &&
+                   stats_pin->dxg_display_bind_unpins -
+                           stats_before.dxg_display_bind_unpins ==
+                       stats_pin->dxg_display_bind_pin_successes -
+                           stats_before.dxg_display_bind_pin_successes &&
+                   stats_pin->dxg_display_bind_pinned_dxg_file == 1 &&
+                   stats_pin->dxg_display_bind_pinned_resource_file == 1 &&
+                   stats_pin->dxg_display_bind_pinned_resource_generation != 0 &&
+                   stats_pin->dxg_display_bind_pinned_process_generation != 0 &&
+                   stats_pin->dxg_display_bind_pinned_process_refs != 0 &&
+                   stats_pin->dxg_display_bind_present_id == 0 &&
+                   stats_pin->dxg_display_bind_completed_id == 0 ?
                "PASS" : "FAIL");
     printf("d3d12_present_commit_result_copyout_contract_matrix "
            "commit_ioctl_delta=%lu copyout_failures_delta=%lu "

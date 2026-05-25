@@ -2261,6 +2261,24 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_revalidate_successes);
     printf("dxg_display_bind_revalidate_failures %lu\n",
            stats.dxg_display_bind_revalidate_failures);
+    printf("dxg_display_bind_pin_attempts %lu\n",
+           stats.dxg_display_bind_pin_attempts);
+    printf("dxg_display_bind_pin_successes %lu\n",
+           stats.dxg_display_bind_pin_successes);
+    printf("dxg_display_bind_pin_failures %lu\n",
+           stats.dxg_display_bind_pin_failures);
+    printf("dxg_display_bind_unpins %lu\n",
+           stats.dxg_display_bind_unpins);
+    printf("dxg_display_bind_pinned_dxg_file %lu\n",
+           stats.dxg_display_bind_pinned_dxg_file);
+    printf("dxg_display_bind_pinned_resource_file %lu\n",
+           stats.dxg_display_bind_pinned_resource_file);
+    printf("dxg_display_bind_pinned_resource_generation %lu\n",
+           stats.dxg_display_bind_pinned_resource_generation);
+    printf("dxg_display_bind_pinned_process_generation %lu\n",
+           stats.dxg_display_bind_pinned_process_generation);
+    printf("dxg_display_bind_pinned_process_refs %lu\n",
+           stats.dxg_display_bind_pinned_process_refs);
     printf("d3d12_display_bind_backend_boundary_matrix "
            "backend=%s contract_version=%lu transport=%lu "
            "transport_present=%lu operation=%lu completion_source=%lu "
@@ -2290,6 +2308,33 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_revalidate_successes,
            stats.dxg_display_bind_revalidate_failures,
            display_bind_boundary_ok ? "PASS" : "DIAGNOSTIC");
+    printf("d3d12_display_bind_pin_lifetime_matrix "
+           "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
+           "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
+           "pinned_resource_generation=%lu pinned_process_generation=%lu "
+           "pinned_process_refs=%lu source_generation=%lu "
+           "resource_generation=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_pin_attempts,
+           stats.dxg_display_bind_pin_successes,
+           stats.dxg_display_bind_pin_failures,
+           stats.dxg_display_bind_unpins,
+           stats.dxg_display_bind_pinned_dxg_file,
+           stats.dxg_display_bind_pinned_resource_file,
+           stats.dxg_display_bind_pinned_resource_generation,
+           stats.dxg_display_bind_pinned_process_generation,
+           stats.dxg_display_bind_pinned_process_refs,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_pin_attempts == 0 ||
+                   (stats.dxg_display_bind_pin_successes != 0 &&
+                    stats.dxg_display_bind_unpins ==
+                        stats.dxg_display_bind_pin_successes &&
+                    stats.dxg_display_bind_pinned_dxg_file == 1 &&
+                    stats.dxg_display_bind_pinned_resource_file == 1 &&
+                    stats.dxg_display_bind_pinned_resource_generation != 0 &&
+                    stats.dxg_display_bind_pinned_process_generation != 0) ?
+               "PASS" : "DIAGNOSTIC");
     printf("dxg_scanout_bind_skeleton_matrix "
            "attempts=%lu rejects=%lu successes=%lu "
            "completion_queries=%lu completion_successes=%lu "
