@@ -2038,6 +2038,25 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_native_completion_zero_credit_matrix",
                               "status=PASS");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output,
+                         "d3d12_present_commit_result_copyout_contract_matrix");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "copyout_on_success=IMPLEMENTED");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "failure_returns_errno=PASS");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "failure_preserves_present_id=0");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "failure_preserves_completed=0");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token(
+        "d3d12_present_commit_result_copyout_contract_matrix", output,
+        "d3d12_present_commit_result_copyout_contract_matrix",
+        "status=PASS");
     require_output_token("dxg_resource_scanout_bind_host_abi_matrix",
                          output,
                          "dxg_resource_scanout_bind_host_abi_matrix");

@@ -10023,6 +10023,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_present_syncfile_preopen_pass = 0;
     int d3d12_bind_contract_failclosed_pass = 0;
     int d3d12_scanout_bind_skeleton_pass = 0;
+    int d3d12_commit_result_copyout_contract_pass = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10615,11 +10616,22 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_scanout_bind_last_dirty_sequence == 0 &&
         stats_after.dxg_scanout_bind_last_dirty_rects == 0 &&
         no_present_credit && hyperv_gate;
+    d3d12_commit_result_copyout_contract_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_present_commit_ioctl_entries >
+            stats_before.dxg_present_commit_ioctl_entries &&
+        stats_after.dxg_present_commit_copyout_failures ==
+            stats_before.dxg_present_commit_copyout_failures &&
+        commit_rc < 0 &&
+        commit.present_id == 0 &&
+        commit.completed == 0 &&
+        no_present_credit && hyperv_gate;
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
            software_path_rejection && d3d12_present_syncfile_preopen_pass &&
-           d3d12_scanout_bind_skeleton_pass && owner_cleanup &&
+           d3d12_scanout_bind_skeleton_pass &&
+           d3d12_commit_result_copyout_contract_pass && owner_cleanup &&
            stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -10932,6 +10944,17 @@ out:
                    bind_contract.present_id == 0 &&
                    bind_contract.completed == 0 ?
                "PASS" : "FAIL");
+    printf("d3d12_present_commit_result_copyout_contract_matrix "
+           "commit_ioctl_delta=%lu copyout_failures_delta=%lu "
+           "copyout_on_success=IMPLEMENTED failure_returns_errno=PASS "
+           "failure_preserves_present_id=0 failure_preserves_completed=0 "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_present_commit_ioctl_entries -
+               stats_before.dxg_present_commit_ioctl_entries,
+           stats_after.dxg_present_commit_copyout_failures -
+               stats_before.dxg_present_commit_copyout_failures,
+           d3d12_commit_result_copyout_contract_pass ? "PASS" : "FAIL");
     printf("dxg_resource_scanout_bind_host_abi_matrix "
            "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
            "wsl_dxg_display_bind_ioctl=0 "

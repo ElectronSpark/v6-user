@@ -1651,6 +1651,8 @@ int main(int argc, char *argv[])
            stats.dxg_present_register_copyin_failures);
     printf("dxg_present_commit_copyin_failures %lu\n",
            stats.dxg_present_commit_copyin_failures);
+    printf("dxg_present_commit_copyout_failures %lu\n",
+           stats.dxg_present_commit_copyout_failures);
     printf("dxg_present_query_copyin_failures %lu\n",
            stats.dxg_present_query_copyin_failures);
     printf("dxg_present_query_copyout_failures %lu\n",
