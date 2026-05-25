@@ -439,6 +439,29 @@ int main(int argc, char *argv[])
                        stats.dxg_present_display_target_kind ==
                            FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                    "PASS" : "DIAGNOSTIC");
+        printf("opengl_submit_backend_separation_matrix "
+               "backend=%s dxg_transport=%u d3dkmt=%u virgl_opengl=%u "
+               "backend_opengl_submit=%u allowed_submit_backend=virgl "
+               "hyperv_dxg_transport_is_submit=0 "
+               "hyperv_d3dkmt_is_submit=0 "
+               "kvm_virgl_submit_allowed=1 native_present_credit=0 "
+               "opengl_submit_credit=%u status=%s\n",
+               backend_name(backend.backend),
+               (backend.flags & FB_GPU_BACKEND_F_DXG_TRANSPORT) != 0,
+               (backend.flags & FB_GPU_BACKEND_F_D3DKMT) != 0,
+               (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0,
+               backend_opengl_submit,
+               backend.backend == FB_GPU_BACKEND_VIRGL ?
+                   backend_opengl_submit : 0,
+               (backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+                (backend.flags & FB_GPU_BACKEND_F_DXG_TRANSPORT) != 0 &&
+                (backend.flags & FB_GPU_BACKEND_F_D3DKMT) != 0 &&
+                (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) == 0 &&
+                backend_opengl_submit == 0) ||
+                   (backend.backend == FB_GPU_BACKEND_VIRGL &&
+                    (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0 &&
+                    backend_opengl_submit != 0) ?
+                   "PASS" : "DIAGNOSTIC");
         printf("d3d12_native_completion_zero_credit_matrix "
                "backend=%s display_bind=%s transport_present=%lu "
                "completion_source=required present_id=0 completed=0 "

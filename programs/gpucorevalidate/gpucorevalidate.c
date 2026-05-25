@@ -355,6 +355,8 @@ static int validate_fbstat_aggregate_matrix(void)
     static char output[65536];
     const char *poll_anchor = "dmabuf_poll_readiness_matrix stats";
     const char *atomic_anchor = "kms_atomic_fence_matrix stats";
+    const char *backend_separation_anchor =
+        "opengl_submit_backend_separation_matrix";
     uint64 attempts = 0;
     uint64 ready = 0;
     uint64 not_ready = 0;
@@ -402,6 +404,30 @@ static int validate_fbstat_aggregate_matrix(void)
                          "backend_opengl_submit_gate closed");
     require_output_token("fbstat_backend_gating", output,
                          "nouveau_pci_native_present_credit 0");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "backend=hyperv-dxg");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "dxg_transport=1");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "d3dkmt=1");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "virgl_opengl=0");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "backend_opengl_submit=0");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "allowed_submit_backend=virgl");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_backend_gating", output,
+                              backend_separation_anchor,
+                              "status=PASS");
 
     require_counter("fbstat_dmabuf_poll_readiness_stats", output,
                     poll_anchor, "attempts", &attempts);
@@ -2494,6 +2520,23 @@ static int validate_backend(void)
                    stats.dxg_present_display_target_kind ==
                        FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                "PASS" : "DIAGNOSTIC");
+    printf("gpu_core_c_validator opengl_submit_backend_separation_matrix "
+           "backend=%u dxg_transport=%u d3dkmt=%u virgl_opengl=%u "
+           "backend_opengl_submit=%u allowed_submit_backend=virgl "
+           "hyperv_dxg_transport_is_submit=0 hyperv_d3dkmt_is_submit=0 "
+           "kvm_virgl_submit_allowed=1 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           backend.backend,
+           (backend.flags & FB_GPU_BACKEND_F_DXG_TRANSPORT) != 0,
+           (backend.flags & FB_GPU_BACKEND_F_D3DKMT) != 0,
+           (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) != 0,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+                   (backend.flags & FB_GPU_BACKEND_F_DXG_TRANSPORT) != 0 &&
+                   (backend.flags & FB_GPU_BACKEND_F_D3DKMT) != 0 &&
+                   (backend.flags & FB_GPU_BACKEND_F_VIRGL_OPENGL) == 0 &&
+                   (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0 ?
+               "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator d3d12_native_completion_zero_credit_matrix "
            "backend=%u display_bind=%s transport_present=%lu "
            "completion_source=required present_id=0 completed=0 "
@@ -3077,6 +3120,15 @@ static int validate_backend(void)
                "callback_release_order=blocked "
                "per_client_generation=required native_present_credit=0 "
                "opengl_submit_credit=0 status=PASS\n");
+        printf("gpu_core_c_validator "
+               "opengl_submit_backend_separation_matrix "
+               "backend=%u dxg_transport=1 d3dkmt=1 virgl_opengl=0 "
+               "backend_opengl_submit=0 allowed_submit_backend=virgl "
+               "hyperv_dxg_transport_is_submit=0 "
+               "hyperv_d3dkmt_is_submit=0 kvm_virgl_submit_allowed=1 "
+               "native_present_credit=0 opengl_submit_credit=0 "
+               "status=PASS\n",
+               backend.backend);
         printf("gpu_core_c_validator "
                "dxg_scanout_bind_skeleton_matrix "
                "attempts=%lu rejects=%lu successes=%lu "
