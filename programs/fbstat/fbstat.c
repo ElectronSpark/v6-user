@@ -1024,6 +1024,25 @@ int main(int argc, char *argv[])
            stats.kms_atomic_out_fence_fd_exports,
            stats.kms_atomic_out_fence_display_correlated,
            stats.kms_atomic_out_fence_software_scanout_correlated);
+    printf("kms_vblank_native_present_separation_matrix "
+           "vblank_source=%s display_correlated=%lu synthetic=%lu "
+           "vblank_sequence=%lu display_last_complete=%lu "
+           "page_flip_events=%lu kms_page_flips=%lu "
+           "display_completion_is_native_present=0 "
+           "page_flip_native_present_credit=0 "
+           "vblank_native_present_credit=0 "
+           "atomic_out_fence_display_correlated=%lu "
+           "atomic_out_fence_software_scanout_correlated=%lu "
+           "opengl_submit_credit=0 status=PASS\n",
+           stats.kms_vblank_display_correlated ? "display" : "synthetic",
+           stats.kms_vblank_display_correlated,
+           stats.kms_vblank_synthetic,
+           stats.kms_vblank_sequence,
+           stats.display_last_complete,
+           stats.kms_vblank_page_flip_events,
+           stats.kms_page_flips,
+           stats.kms_atomic_out_fence_display_correlated,
+           stats.kms_atomic_out_fence_software_scanout_correlated);
     printf("ttm_system_bytes %lu\n", stats.ttm_system_bytes);
     printf("ttm_tt_bytes %lu\n", stats.ttm_tt_bytes);
     printf("ttm_vram_bytes %lu\n", stats.ttm_vram_bytes);

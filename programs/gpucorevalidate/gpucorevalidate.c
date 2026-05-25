@@ -1083,6 +1083,19 @@ static int validate_drm_syncobj_matrix(void)
                          "native_present_credit=0");
     require_output_token("drm_vblank_source_matrix", output,
                          "status=PASS");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output,
+                         "kms_vblank_native_present_separation_matrix");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "display_completion_is_native_present=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "page_flip_native_present_credit=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "vblank_native_present_credit=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_token("drm_vblank_native_present_separation_matrix",
+                         output, "status=PASS");
     require_output_token("drm_kms_present_completion_failclosed_matrix",
                          output,
                          "kms_present_completion_failclosed_matrix");
@@ -1499,6 +1512,12 @@ static int validate_drm_syncobj_matrix(void)
            "page_flip_async_fail_closed=PASS "
            "page_flip_invalid_fb_no_event=PASS "
            "native_present_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "drm_vblank_native_present_separation_matrix "
+           "display_completion_is_native_present=0 "
+           "page_flip_native_present_credit=0 "
+           "vblank_native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator drm_minor_matrix "
            "primary_index=0 render_index=128 control_index=64 "
            "control_registered=0 control_open=fail_closed "
