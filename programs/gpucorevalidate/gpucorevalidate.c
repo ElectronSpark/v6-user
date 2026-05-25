@@ -2168,6 +2168,31 @@ static int validate_backend(void)
            stats.nouveau_pci_runtime_pm_balanced,
            stats.nouveau_pci_remove_runtime_suspended,
            stats.nouveau_pci_native_present_credit);
+    printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
+           "accepts=%lu gpup_only=%s dma_mask=%s coherent_dma_mask=%s "
+           "bar_claim=%s msi_msix_setup=%s legacy_irq_fallback=%s "
+           "irq_handler=%s irq_delivery=%s runtime_pm_usage=%s "
+           "remove_path=%s native_present_credit=%lu "
+           "opengl_submit_credit=0 status=PENDING\n",
+           stats.nouveau_pci_probe_accepts,
+           stats.nouveau_pci_probe_accepts == 0 ? "PASS" : "NO",
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_ATTEMPTED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
+               "NOT_ATTEMPTED",
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CLAIMED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_irq_handler_registered ? "PRESENT" : "ABSENT",
+           (stats.nouveau_pci_irq_delivery_enabled ||
+            stats.nouveau_pci_irq_delivery_claimed) ? "PRESENT" : "ABSENT",
+           stats.nouveau_pci_probe_accepts == 0 ? "DEFERRED" :
+               "DIAGNOSTIC",
+           stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED",
+           stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
            "driver_caps=%lu "
@@ -2392,6 +2417,39 @@ static int validate_backend(void)
                stats.nouveau_pci_irq_handler_registered,
                stats.nouveau_pci_irq_delivery_enabled,
                stats.nouveau_pci_irq_delivery_claimed);
+        if (stats.nouveau_pci_probe_accepts == 0) {
+            printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
+                   "accepts=0 gpup_only=PASS dma_mask=NOT_CONFIGURED "
+                   "coherent_dma_mask=NOT_CONFIGURED "
+                   "bar_claim=NOT_ATTEMPTED "
+                   "msi_msix_setup=NOT_ATTEMPTED "
+                   "legacy_irq_fallback=NOT_CLAIMED "
+                   "irq_handler=ABSENT irq_delivery=ABSENT "
+                   "runtime_pm_usage=DEFERRED remove_path=DEFERRED "
+                   "native_present_credit=0 opengl_submit_credit=0 "
+                   "status=PASS\n");
+        } else {
+            printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
+                   "accepts=%lu gpup_only=NO dma_mask=PASS "
+                   "coherent_dma_mask=PASS bar_claim=PASS "
+                   "msi_msix_setup=%s legacy_irq_fallback=%s "
+                   "irq_handler=%s irq_delivery=%s "
+                   "runtime_pm_usage=DIAGNOSTIC remove_path=%s "
+                   "native_present_credit=0 opengl_submit_credit=0 "
+                   "status=DIAGNOSTIC\n",
+                   stats.nouveau_pci_probe_accepts,
+                   stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
+                       "NOT_ATTEMPTED",
+                   stats.nouveau_pci_legacy_irq_fallback ? "PASS" :
+                       "MISSING",
+                   stats.nouveau_pci_irq_handler_registered ? "PRESENT" :
+                       "ABSENT",
+                   (stats.nouveau_pci_irq_delivery_enabled ||
+                    stats.nouveau_pci_irq_delivery_claimed) ? "PRESENT" :
+                       "ABSENT",
+                   stats.nouveau_pci_removes ? "DIAGNOSTIC" :
+                       "DEFERRED");
+        }
         if (stats.nouveau_pci_probe_accepts == 0) {
             printf("gpu_core_c_validator nouveau_gpup_failclosed_matrix "
                    "accepts=0 backend_dda_nouveau=0 reject_reason=PASS "

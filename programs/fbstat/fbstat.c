@@ -841,6 +841,52 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_runtime_pm_balanced,
            stats.nouveau_pci_remove_runtime_suspended,
            stats.nouveau_pci_native_present_credit);
+    {
+        const int accepts = stats.nouveau_pci_probe_accepts != 0;
+        const char *dma_mask = accepts ?
+            (stats.nouveau_pci_dma_mask_configured &&
+             stats.nouveau_pci_dma_mask_bits >= 32 ? "PASS" : "FAIL") :
+            "NOT_CONFIGURED";
+        const char *coherent_dma_mask = accepts ?
+            (stats.nouveau_pci_coherent_dma_mask_configured &&
+             stats.nouveau_pci_coherent_dma_mask_bits >= 32 ? "PASS" :
+             "FAIL") : "NOT_CONFIGURED";
+        const char *bar_claim = accepts ?
+            (((stats.nouveau_pci_bar0_len == 0 ||
+               stats.nouveau_pci_bar0_claimed) &&
+              (stats.nouveau_pci_bar1_len == 0 ||
+               stats.nouveau_pci_bar1_claimed)) ? "PASS" : "FAIL") :
+            "NOT_ATTEMPTED";
+        const char *msi_msix = stats.nouveau_pci_msi_fail_closed ?
+            "FAIL_CLOSED" : "NOT_ATTEMPTED";
+        const char *legacy_irq = accepts ?
+            (stats.nouveau_pci_legacy_irq_fallback ? "PASS" : "MISSING") :
+            "NOT_CLAIMED";
+        const char *irq_handler =
+            stats.nouveau_pci_irq_handler_registered ? "PRESENT" : "ABSENT";
+        const char *irq_delivery =
+            stats.nouveau_pci_irq_delivery_enabled ||
+                    stats.nouveau_pci_irq_delivery_claimed ?
+                "PRESENT" : "ABSENT";
+        const char *runtime_pm = accepts ? "DIAGNOSTIC" : "DEFERRED";
+        const char *remove_path =
+            stats.nouveau_pci_removes ? "DIAGNOSTIC" : "DEFERRED";
+        const char *status = accepts ? "DIAGNOSTIC" : "PASS";
+
+        printf("nouveau_pci_runtime_contract_matrix "
+               "accepts=%lu gpup_only=%s dma_mask=%s "
+               "coherent_dma_mask=%s bar_claim=%s "
+               "msi_msix_setup=%s legacy_irq_fallback=%s "
+               "irq_handler=%s irq_delivery=%s runtime_pm_usage=%s "
+               "remove_path=%s native_present_credit=%lu "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               accepts ? "NO" : "PASS",
+               dma_mask, coherent_dma_mask, bar_claim, msi_msix,
+               legacy_irq, irq_handler, irq_delivery, runtime_pm,
+               remove_path, stats.nouveau_pci_native_present_credit,
+               status);
+    }
     printf("nouveau_getparam_provenance_matrix stats "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
            "driver_caps=%lu "
