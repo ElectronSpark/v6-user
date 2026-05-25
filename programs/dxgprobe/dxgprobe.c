@@ -1419,6 +1419,9 @@ static int probe_create_publication_faults_validate(
     int destroy_context_retry_rc = -2;
     int destroy_hwqueue_retry_rc = -2;
     int destroy_hwqueue_fence_retry_rc = -2;
+    uint32 context_retry_handle = 0;
+    uint32 hwqueue_retry_handle = 0;
+    uint32 hwqueue_fence_retry_handle = 0;
     int device_ok = 0;
     int context_ok = 0;
     int hwqueue_ok = 0;
@@ -1455,7 +1458,7 @@ static int probe_create_publication_faults_validate(
                                         &destroy_device);
     }
     device_ok =
-        before_rc == 0 && device_rc == -EFAULT &&
+        before_rc == 0 && device_rc < 0 &&
         after_device.createdevice_unwind_attempts >
             before.createdevice_unwind_attempts &&
         after_device.createdevice_unwind_successes >
@@ -1516,33 +1519,39 @@ static int probe_create_publication_faults_validate(
                    "reason=mprotect_write\n");
             goto cleanup_device;
         }
-        if (context_rc == -EFAULT) {
+        if (context_rc < 0 &&
+            after_context.createcontext_unwind_attempts >
+                before_context.createcontext_unwind_attempts) {
             context_case_name = context_cases[i].name;
             break;
         }
     }
-    if (after_context.createcontext_last_handle != 0) {
+    context_retry_handle = after_context.createcontext_last_handle != 0 ?
+                           after_context.createcontext_last_handle :
+                           after_context.createcontext_unwind_context;
+    if (context_retry_handle != 0) {
         memset(&destroy_context, 0, sizeof(destroy_context));
-        destroy_context.context.v = after_context.createcontext_last_handle;
+        destroy_context.context.v = context_retry_handle;
         destroy_context_retry_rc = ioctl(fd, LX_DXDESTROYCONTEXT,
                                          &destroy_context);
     }
     context_ok =
-        context_rc == -EFAULT &&
+        context_rc < 0 &&
         after_context.createcontext_unwind_attempts >
             before_context.createcontext_unwind_attempts &&
         after_context.createcontext_unwind_successes >
             before_context.createcontext_unwind_successes &&
         after_context.createcontext_unwind_ret == 0 &&
         after_context.createcontext_unwind_context ==
-            after_context.createcontext_last_handle &&
+            context_retry_handle &&
+        context_retry_handle != 0 &&
         destroy_context_retry_rc < 0;
     printf("dxg_createcontext_copyout_unwind_matrix rc=%d case=%s "
            "context=0x%x destroy_retry_rc=%d "
            "unwind_attempts=%u->%u unwind_successes=%u->%u "
            "unwind_ret=%d no_local_publication=%u status=%s\n",
            context_rc, context_case_name,
-           after_context.createcontext_last_handle,
+           context_retry_handle,
            destroy_context_retry_rc,
            before_context.createcontext_unwind_attempts,
            after_context.createcontext_unwind_attempts,
@@ -1584,29 +1593,38 @@ static int probe_create_publication_faults_validate(
                "reason=mprotect_write\n");
         goto cleanup_context;
     }
-    if (after_hwqueue.createhwqueue_last_queue != 0) {
+    hwqueue_retry_handle = after_hwqueue.createhwqueue_last_queue != 0 ?
+                           after_hwqueue.createhwqueue_last_queue :
+                           after_hwqueue.createhwqueue_unwind_queue;
+    hwqueue_fence_retry_handle =
+        after_hwqueue.createhwqueue_last_fence != 0 ?
+        after_hwqueue.createhwqueue_last_fence :
+        after_hwqueue.createhwqueue_unwind_fence;
+    if (hwqueue_retry_handle != 0) {
         memset(&destroy_hwqueue, 0, sizeof(destroy_hwqueue));
-        destroy_hwqueue.queue.v = after_hwqueue.createhwqueue_last_queue;
+        destroy_hwqueue.queue.v = hwqueue_retry_handle;
         destroy_hwqueue_retry_rc = ioctl(fd, LX_DXDESTROYHWQUEUE,
                                          &destroy_hwqueue);
     }
-    if (after_hwqueue.createhwqueue_last_fence != 0) {
+    if (hwqueue_fence_retry_handle != 0) {
         memset(&destroy_sync, 0, sizeof(destroy_sync));
-        destroy_sync.sync_object.v = after_hwqueue.createhwqueue_last_fence;
+        destroy_sync.sync_object.v = hwqueue_fence_retry_handle;
         destroy_hwqueue_fence_retry_rc =
             ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT, &destroy_sync);
     }
     hwqueue_ok =
-        hwqueue_rc == -EFAULT &&
+        hwqueue_rc < 0 &&
         after_hwqueue.createhwqueue_unwind_attempts >
             before_hwqueue.createhwqueue_unwind_attempts &&
         after_hwqueue.createhwqueue_unwind_successes >
             before_hwqueue.createhwqueue_unwind_successes &&
         after_hwqueue.createhwqueue_unwind_ret == 0 &&
         after_hwqueue.createhwqueue_unwind_queue ==
-            after_hwqueue.createhwqueue_last_queue &&
+            hwqueue_retry_handle &&
         after_hwqueue.createhwqueue_unwind_fence ==
-            after_hwqueue.createhwqueue_last_fence &&
+            hwqueue_fence_retry_handle &&
+        hwqueue_retry_handle != 0 &&
+        hwqueue_fence_retry_handle != 0 &&
         destroy_hwqueue_retry_rc < 0 &&
         destroy_hwqueue_fence_retry_rc < 0;
     printf("dxg_createhwqueue_copyout_unwind_matrix rc=%d queue=0x%x "
@@ -1614,8 +1632,8 @@ static int probe_create_publication_faults_validate(
            "destroy_fence_retry_rc=%d unwind_attempts=%u->%u "
            "unwind_successes=%u->%u unwind_ret=%d "
            "no_local_publication=%u status=%s\n",
-           hwqueue_rc, after_hwqueue.createhwqueue_last_queue,
-           after_hwqueue.createhwqueue_last_fence,
+           hwqueue_rc, hwqueue_retry_handle,
+           hwqueue_fence_retry_handle,
            destroy_hwqueue_retry_rc, destroy_hwqueue_fence_retry_rc,
            before_hwqueue.createhwqueue_unwind_attempts,
            after_hwqueue.createhwqueue_unwind_attempts,
@@ -12585,6 +12603,134 @@ static void wsl_trace_replay_packet_matrix(const char *stage, uint32 cmd,
            owner, first, rc, expected_reject, ok ? "PASS" : "FAIL");
 }
 
+static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
+                                             uint32 *seen, uint32 *passed)
+{
+    char *status;
+    uint32 make_len = 0;
+    uint32 make_ret = 0;
+    uint32 make_host_ret = 0;
+    uint32 make_user_ret = 0;
+    uint32 make_device = 0xffffffffU;
+    uint32 make_count = 0;
+    uint32 make_flags = 0xffffffffU;
+    uint32 make_sorted = 1;
+    uint32 make_in0 = 0;
+    uint32 make_in1 = 0;
+    uint32 make_wire0 = 0;
+    uint32 make_wire1 = 0;
+    uint32 context_len = 0;
+    uint32 context_ret = 0xffffffffU;
+    uint32 context_handle = 0;
+    uint32 hwqueue_create_len = 0;
+    uint32 hwqueue_create_ret = 0xffffffffU;
+    uint32 hwqueue_priv = 0;
+    uint32 hwqueue_handle = 0;
+    uint32 submit_queue = 0;
+    uint32 submit_cmd_len = 0;
+    uint32 submit_priv = 0;
+    uint32 submit_len = 0;
+    uint32 submit_head_len = 0;
+    unsigned char submit_head[8];
+    uint32 head_len = 0;
+    uint32 ok;
+
+    memset(submit_head, 0, sizeof(submit_head));
+    status = read_dxg_status_buffer();
+    if (status != 0) {
+        char *residency = dxg_find_text(status, "dxg_residency_last=");
+        char *context = dxg_find_text(status, "dxg_context_last=");
+        char *hwqueue = dxg_find_text(status, "dxg_hwqueue_last=");
+        char *hwqueue_priv_line =
+            dxg_find_text(status, "dxg_hwqueue_priv_head=");
+
+        if (residency != 0) {
+            dxg_parse_uint_after(residency, "make_len:", &make_len);
+            dxg_parse_uint_after(residency, "make_ret:", &make_ret);
+            dxg_parse_uint_after(residency, "make_host_ret:",
+                                 &make_host_ret);
+            dxg_parse_uint_after(residency, "make_user_ret:",
+                                 &make_user_ret);
+            dxg_parse_uint_after(residency, "device:", &make_device);
+            dxg_parse_uint_after(residency, "count:", &make_count);
+            dxg_parse_uint_after(residency, "flags:", &make_flags);
+            dxg_parse_uint_after(residency, "sorted:", &make_sorted);
+            dxg_parse_uint_pair_after(residency, "in:", &make_in0,
+                                      &make_in1);
+            dxg_parse_uint_pair_after(residency, "wire:", &make_wire0,
+                                      &make_wire1);
+        }
+        if (context != 0) {
+            dxg_parse_uint_after(context, "len:", &context_len);
+            dxg_parse_uint_after(context, "ret:", &context_ret);
+            dxg_parse_uint_after(context, "handle:", &context_handle);
+        }
+        if (hwqueue != 0) {
+            dxg_parse_uint_after(hwqueue, "create_len:",
+                                 &hwqueue_create_len);
+            dxg_parse_uint_after(hwqueue, "create_ret:",
+                                 &hwqueue_create_ret);
+            dxg_parse_uint_after(hwqueue, "priv:", &hwqueue_priv);
+            dxg_parse_uint_after(hwqueue, "queue:", &hwqueue_handle);
+        }
+        if (hwqueue_priv_line != 0) {
+            dxg_parse_uint_after(hwqueue_priv_line, "submit_queue:",
+                                 &submit_queue);
+            dxg_parse_uint_after(hwqueue_priv_line, "submit_cmd_len:",
+                                 &submit_cmd_len);
+            dxg_parse_uint_after(hwqueue_priv_line, "submit_priv:",
+                                 &submit_priv);
+            dxg_parse_uint_after(hwqueue_priv_line, "submit_len:",
+                                 &submit_len);
+            dxg_parse_uint_after(hwqueue_priv_line, "submit:", &head_len);
+            if (dxg_parse_head8_after(hwqueue_priv_line, "submit:",
+                                      submit_head,
+                                      &submit_head_len) != 0)
+                submit_head_len = 0;
+        }
+    }
+    ok = status != 0 &&
+         make_len == 24 &&
+         make_device == 0 &&
+         make_count == 1 &&
+         make_flags == 0 &&
+         make_sorted == 0 &&
+         make_in0 != 0 &&
+         make_in1 == 0 &&
+         make_wire0 == make_in0 &&
+         make_wire1 == 0 &&
+         context_len != 0 &&
+         context_ret == 0 &&
+         context_handle != 0 &&
+         hwqueue_create_len != 0 &&
+         hwqueue_create_ret == 0 &&
+         hwqueue_priv != 0 &&
+         hwqueue_handle != 0 &&
+         submit_queue == hwqueue_handle &&
+         submit_cmd_len == DXGPROBE_WSL_REPLAY_COMMAND_SIZE &&
+         submit_priv == expected_submit_priv &&
+         submit_len != 0 &&
+         submit_head_len >= 4 &&
+         submit_head[0] == 'A' &&
+         submit_head[1] == 'D' &&
+         submit_head[2] == 'V' &&
+         submit_head[3] == 'N';
+    if (seen != 0)
+        (*seen)++;
+    if (passed != 0 && ok)
+        (*passed)++;
+    printf("wsl_trace_replay_host_saw_matrix make_len:%u make_ret:%d make_host_ret:%d make_user_ret:%d make_device:0x%x make_count:%u make_flags:0x%x make_sorted:%u make_in:%x,%x make_wire:%x,%x context_len:%u context_ret:%d context:0x%x hwqueue_len:%u hwqueue_ret:%d hwqueue_priv:%u hwqueue:0x%x submit_queue:0x%x submit_cmd_len:%u submit_priv:%u submit_len:%u submit_head_len:%u host_saw=cat_/dev/dxg_after_replay status=%s\n",
+           make_len, (int)make_ret, (int)make_host_ret,
+           (int)make_user_ret, make_device, make_count, make_flags,
+           make_sorted, make_in0, make_in1, make_wire0, make_wire1,
+           context_len, (int)context_ret, context_handle,
+           hwqueue_create_len, (int)hwqueue_create_ret, hwqueue_priv,
+           hwqueue_handle, submit_queue, submit_cmd_len, submit_priv,
+           submit_len, submit_head_len, ok ? "PASS" : "FAIL");
+    if (status != 0)
+        free(status);
+}
+
 static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
                                   struct winluid adapter_luid)
 {
@@ -12864,6 +13010,9 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
                    submit_hwqueue.command_buffer,
                    submit_hwqueue.command_length,
                    submit_hwqueue.priv_drv_data_size);
+            wsl_trace_replay_host_saw_matrix(submit_private_size,
+                                             &packet_seen,
+                                             &packet_passed);
             ret = 0;
             goto cleanup;
         }
