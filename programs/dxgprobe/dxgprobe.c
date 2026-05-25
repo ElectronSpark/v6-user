@@ -9764,16 +9764,21 @@ static int probe_present_source_failclosed_contract(
     struct d3dkmt_destroyallocation2 destroy_allocation;
     struct d3dkmt_shareobjects share_objects;
     struct d3dkmt_createsynchronizationobject2 create_sync;
+    struct d3dkmt_createsyncfile present_create_sync_file;
+    struct d3dkmt_opensyncobjectfromsyncfile present_open_sync_file;
+    struct d3dkmt_opensyncobjectfromsyncfile present_bad_open_sync_file;
     struct d3dkmt_destroysynchronizationobject destroy_sync;
     struct d3dkmthandle objects[1];
     struct fb_gpu_dxg_present_source_register reg;
     struct fb_gpu_dxg_present_source_commit commit;
     struct fb_gpu_dxg_present_source_commit wait_commit;
+    struct fb_gpu_dxg_present_source_commit sync_file_commit;
     struct fb_gpu_dxg_present_source_commit missing_sync_commit;
     struct fb_gpu_dxg_present_source_commit sync_without_flag_commit;
     struct fb_gpu_dxg_present_source_commit no_source_commit;
     struct fb_gpu_dxg_present_source_query query;
     struct fb_gpu_dxg_present_source_query wait_query;
+    struct fb_gpu_dxg_present_source_query sync_file_query;
     struct fb_gpu_dxg_present_host_bind_contract bind_contract;
     struct fb_gpu_dxg_present_host_bind_contract foreign_bind_contract;
     struct fb_gpu_dxg_present_source_register bad_reg;
@@ -9802,6 +9807,11 @@ static int probe_present_source_failclosed_contract(
     int create_sync_rc = -1;
     int wait_commit_rc = -1;
     int wait_query_rc = -1;
+    int present_create_sync_file_rc = -1;
+    int present_open_sync_file_rc = -1;
+    int present_bad_open_sync_file_rc = -1;
+    int sync_file_commit_rc = -1;
+    int sync_file_query_rc = -1;
     int zero_dimensions_rc = -1;
     int bad_pitch_rc = -1;
     int invalid_resource_fd_rc = -1;
@@ -9850,6 +9860,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_resource_fd_lifetime_pass = 0;
     int d3d12_present_admission_pass = 0;
     int d3d12_acquire_fence_lifetime_pass = 0;
+    int d3d12_present_syncfile_preopen_pass = 0;
     int d3d12_bind_contract_failclosed_pass = 0;
     int pass = 0;
 
@@ -9859,15 +9870,20 @@ static int probe_present_source_failclosed_contract(
     memset(&destroy_allocation, 0, sizeof(destroy_allocation));
     memset(&share_objects, 0, sizeof(share_objects));
     memset(&create_sync, 0, sizeof(create_sync));
+    memset(&present_create_sync_file, 0, sizeof(present_create_sync_file));
+    memset(&present_open_sync_file, 0, sizeof(present_open_sync_file));
+    memset(&present_bad_open_sync_file, 0, sizeof(present_bad_open_sync_file));
     memset(&destroy_sync, 0, sizeof(destroy_sync));
     memset(&reg, 0, sizeof(reg));
     memset(&commit, 0, sizeof(commit));
     memset(&wait_commit, 0, sizeof(wait_commit));
+    memset(&sync_file_commit, 0, sizeof(sync_file_commit));
     memset(&missing_sync_commit, 0, sizeof(missing_sync_commit));
     memset(&sync_without_flag_commit, 0, sizeof(sync_without_flag_commit));
     memset(&no_source_commit, 0, sizeof(no_source_commit));
     memset(&query, 0, sizeof(query));
     memset(&wait_query, 0, sizeof(wait_query));
+    memset(&sync_file_query, 0, sizeof(sync_file_query));
     memset(&bind_contract, 0, sizeof(bind_contract));
     memset(&foreign_bind_contract, 0, sizeof(foreign_bind_contract));
     memset(&bad_reg, 0, sizeof(bad_reg));
@@ -10057,6 +10073,7 @@ static int probe_present_source_failclosed_contract(
 
     create_sync.device = device;
     create_sync.info.type = _D3DDDI_MONITORED_FENCE;
+    create_sync.info.flags.value = g_sync_create_flags;
     create_sync.info.monitored_fence.initial_fence_value = 0;
     create_sync_rc =
         ioctl(fd, LX_DXCREATESYNCHRONIZATIONOBJECT, &create_sync);
@@ -10071,6 +10088,43 @@ static int probe_present_source_failclosed_contract(
         wait_query_rc =
             ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY, &wait_query);
         stats_wait_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_wait);
+
+        present_create_sync_file.device = device;
+        present_create_sync_file.monitored_fence = create_sync.sync_object;
+        present_create_sync_file.fence_value = 11;
+        present_create_sync_file_rc =
+            ioctl(fd, LX_DXCREATESYNCFILE, &present_create_sync_file);
+        if (present_create_sync_file_rc == 0 &&
+            present_create_sync_file.sync_file_handle != 0) {
+            present_bad_open_sync_file.device = device;
+            present_bad_open_sync_file.sync_file_handle = shared_handle;
+            present_bad_open_sync_file_rc =
+                ioctl(fd, LX_DXOPENSYNCOBJECTFROMSYNCFILE,
+                      &present_bad_open_sync_file);
+
+            present_open_sync_file.device = device;
+            present_open_sync_file.sync_file_handle =
+                present_create_sync_file.sync_file_handle;
+            present_open_sync_file_rc =
+                ioctl(fd, LX_DXOPENSYNCOBJECTFROMSYNCFILE,
+                      &present_open_sync_file);
+            if (present_open_sync_file_rc == 0 &&
+                present_open_sync_file.syncobj.v != 0) {
+                sync_file_commit.present_source = reg.present_source;
+                sync_file_commit.flags = FB_GPU_DXG_PRESENT_F_WAIT_SYNC;
+                sync_file_commit.sync_object =
+                    present_open_sync_file.syncobj.v;
+                sync_file_commit.fence_value =
+                    present_open_sync_file.fence_value;
+                sync_file_commit_rc =
+                    ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_COMMIT,
+                          &sync_file_commit);
+                sync_file_query.present_source = reg.present_source;
+                sync_file_query_rc =
+                    ioctl(fb_fd, FB_GPU_DXG_PRESENT_SOURCE_QUERY,
+                          &sync_file_query);
+            }
+        }
     }
 
     close(fb_fd);
@@ -10352,6 +10406,28 @@ static int probe_present_source_failclosed_contract(
         wait_query.sync_object == create_sync.sync_object.v &&
         wait_query.fence_value == wait_commit.fence_value &&
         wait_sync_no_present_credit && hyperv_gate;
+    d3d12_present_syncfile_preopen_pass =
+        present_create_sync_file_rc == 0 &&
+        present_create_sync_file.sync_file_handle != 0 &&
+        present_open_sync_file_rc == 0 &&
+        present_open_sync_file.syncobj.v != 0 &&
+        present_open_sync_file.fence_value ==
+            present_create_sync_file.fence_value &&
+        present_bad_open_sync_file_rc < 0 &&
+        sync_file_commit_rc < 0 &&
+        sync_file_query_rc < 0 &&
+        sync_file_query.source_live == 1 &&
+        sync_file_query.last_flags == FB_GPU_DXG_PRESENT_F_WAIT_SYNC &&
+        sync_file_query.sync_object == present_open_sync_file.syncobj.v &&
+        sync_file_query.fence_value == present_open_sync_file.fence_value &&
+        sync_file_commit.present_id == 0 &&
+        sync_file_commit.completed == 0 &&
+        sync_file_query.present_id == 0 &&
+        sync_file_query.completed == 0 &&
+        sync_file_query.helper_transport_present == 0 &&
+        sync_file_query.missing_host_abi ==
+            FB_GPU_DXG_PRESENT_MISSING_SCANOUT_BIND &&
+        stale_bind_contract_failclosed && hyperv_gate;
     d3d12_bind_contract_failclosed_pass =
         bind_contract_failclosed && foreign_bind_contract_failclosed &&
         stale_bind_contract_failclosed && software_path_rejection &&
@@ -10360,7 +10436,8 @@ static int probe_present_source_failclosed_contract(
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
-           software_path_rejection && owner_cleanup &&
+           software_path_rejection && d3d12_present_syncfile_preopen_pass &&
+           owner_cleanup &&
            stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -10590,6 +10667,31 @@ out:
                "PASS" : "FAIL",
            stale_bind_contract_failclosed ? "PASS" : "FAIL",
            d3d12_acquire_fence_lifetime_pass ? "PASS" : "FAIL");
+    printf("d3d12_present_syncfile_preopen_matrix "
+           "sync_file_create_rc=%d sync_file=%lu open_rc=%d "
+           "opened_sync=0x%x fence=%lu wrong_fd_kind_rejected=%s "
+           "wait_commit_failclosed=%s query_sync_matches=%s "
+           "fence_value_preserved=%s stale_source_cleanup=%s "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           present_create_sync_file_rc,
+           present_create_sync_file.sync_file_handle,
+           present_open_sync_file_rc,
+           present_open_sync_file.syncobj.v,
+           present_open_sync_file.fence_value,
+           present_bad_open_sync_file_rc < 0 ? "PASS" : "FAIL",
+           sync_file_commit_rc < 0 &&
+                   sync_file_query.last_ret == EOPNOTSUPP ?
+               "PASS" : "FAIL",
+           sync_file_query.sync_object == present_open_sync_file.syncobj.v &&
+                   sync_file_query.fence_value ==
+                       present_open_sync_file.fence_value ?
+               "PASS" : "FAIL",
+           present_open_sync_file.fence_value ==
+                   present_create_sync_file.fence_value ?
+               "PASS" : "FAIL",
+           stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           d3d12_present_syncfile_preopen_pass ? "PASS" : "FAIL");
     printf("d3d12_present_bind_contract_failclosed_matrix "
            "selected_lane=%lu completion_source=%lu "
            "required_metadata=0x%lx lifetime=0x%lx "
@@ -10695,6 +10797,15 @@ out:
         close(fb_fd_after);
     if (shared_handle != 0)
         close((int)shared_handle);
+    if (present_create_sync_file.sync_file_handle != 0)
+        close((int)present_create_sync_file.sync_file_handle);
+    if (present_open_sync_file.syncobj.v != 0) {
+        destroy_sync.sync_object = present_open_sync_file.syncobj;
+        if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,
+                  &destroy_sync) < 0)
+            printf("present_source_failclosed sync_file_sync_destroy_failed sync=0x%x\n",
+                   present_open_sync_file.syncobj.v);
+    }
     if (create_sync.sync_object.v != 0) {
         destroy_sync.sync_object = create_sync.sync_object;
         if (ioctl(fd, LX_DXDESTROYSYNCHRONIZATIONOBJECT,

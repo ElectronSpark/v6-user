@@ -1943,6 +1943,30 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_acquire_fence_lifetime_matrix",
                               "status=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "d3d12_present_syncfile_preopen_matrix");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "sync_file=");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "opened_sync=0x");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "wrong_fd_kind_rejected=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "wait_commit_failclosed=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "query_sync_matches=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "fence_value_preserved=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "stale_source_cleanup=PASS");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("d3d12_present_syncfile_preopen_matrix", output,
+                         "opengl_submit_credit=0");
+    require_output_line_token("d3d12_present_syncfile_preopen_matrix",
+                              output,
+                              "d3d12_present_syncfile_preopen_matrix",
+                              "status=PASS");
     require_output_token("d3d12_present_bind_contract_failclosed_matrix",
                          output,
                          "d3d12_present_bind_contract_failclosed_matrix");
