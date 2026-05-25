@@ -533,12 +533,12 @@ static int validate_fbstat_aggregate_matrix(void)
                         test_only_out_fence_placeholders, 1);
     require_counter_min("fbstat_kms_atomic_fence_stats", "out_fence_exports",
                         out_fence_exports, 1);
-    require_counter_eq("fbstat_kms_atomic_fence_stats",
-                       "out_fence_display_correlated",
-                       out_fence_display_correlated, 0);
     require_counter_min("fbstat_kms_atomic_fence_stats",
-                        "out_fence_software_scanout_correlated",
-                        out_fence_software_scanout_correlated, 1);
+                        "out_fence_display_correlated",
+                        out_fence_display_correlated, 1);
+    require_counter_eq("fbstat_kms_atomic_fence_stats",
+                       "out_fence_software_scanout_correlated",
+                       out_fence_software_scanout_correlated, 0);
 
     if (failures != before)
         return -1;
@@ -1343,7 +1343,9 @@ static int validate_drm_syncobj_matrix(void)
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_out_fence_query_ok=1");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "atomic_out_fence_software=1");
+                             "atomic_out_fence_display=1");
+        require_output_token("drm_atomic_fence_matrix", output,
+                             "atomic_out_fence_software=0");
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_out_fence_immediate=0");
         require_output_token("drm_atomic_fence_matrix", output,
@@ -1383,13 +1385,13 @@ static int validate_drm_syncobj_matrix(void)
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_out_fence_cleanup_closes_delta=");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "atomic_out_fence_display_correlated=0");
+                             "atomic_out_fence_display_correlated=1");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "out_fence_display_correlated_delta=0");
+                             "out_fence_display_correlated_delta=");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "atomic_out_fence_software_scanout_correlated=1");
+                             "atomic_out_fence_software_scanout_correlated=0");
         require_output_token("drm_atomic_fence_matrix", output,
-                             "out_fence_software_scanout_correlated_delta=");
+                             "out_fence_software_scanout_correlated_delta=0");
         require_output_token("drm_atomic_fence_matrix", output,
                              "atomic_fence_kernel=real");
         require_output_line_token("drm_atomic_fence_matrix", output,
@@ -1428,21 +1430,23 @@ static int validate_drm_syncobj_matrix(void)
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "atomic_out_fence_provenance_matrix");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_source=software_scanout_commit");
+                         "out_fence_source=display_completion");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_software=1");
+                         "out_fence_display=1");
+    require_output_token("drm_atomic_out_fence_provenance_matrix", output,
+                         "out_fence_software=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "out_fence_immediate=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_display_correlated=0");
+                         "out_fence_display_correlated=1");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_software_scanout_correlated=1");
+                         "out_fence_software_scanout_correlated=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_completion_deferred=0");
+                         "out_fence_completion_deferred=1");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_display_correlated_delta=0");
+                         "out_fence_display_correlated_delta=");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
-                         "out_fence_software_scanout_correlated_delta=");
+                         "out_fence_software_scanout_correlated_delta=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,
                          "native_present_credit=0");
     require_output_token("drm_atomic_out_fence_provenance_matrix", output,

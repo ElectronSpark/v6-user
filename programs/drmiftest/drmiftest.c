@@ -547,6 +547,7 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
     uint64 test_only_out_placeholder_delta = 0;
     uint64 out_fence_display_correlated_delta = 0;
     uint64 out_fence_software_scanout_correlated_delta = 0;
+    int out_fence_display = 0;
     int out_fence_software = 0;
     int out_fence_immediate = 0;
     int invalid_out_reject = 0;
@@ -758,12 +759,14 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
         return fail("atomic OUT_FENCE_PTR was not prepared");
     if (out_fence_cleanup_delta < 1)
         return fail("atomic OUT_FENCE_PTR copyout cleanup not observed");
-    if (out_fence_display_correlated_delta != 0)
-        return fail("atomic OUT_FENCE_PTR claimed native display credit");
-    if (out_fence_software_scanout_correlated_delta == 0)
-        return fail("atomic OUT_FENCE_PTR lacked software scanout credit");
-    out_fence_software = out_exported && out_query_ok;
-    out_fence_immediate = out_fence_software &&
+    if (out_fence_display_correlated_delta == 0)
+        return fail("atomic OUT_FENCE_PTR lacked display completion credit");
+    if (out_fence_software_scanout_correlated_delta != 0)
+        return fail("atomic OUT_FENCE_PTR used software scanout credit");
+    out_fence_display = out_exported && out_query_ok;
+    out_fence_software = out_fence_software_scanout_correlated_delta != 0;
+    out_fence_immediate = out_exported &&
+        out_fence_display_correlated_delta == 0 &&
         out_fence_software_scanout_correlated_delta == 0;
 
     if (in_accept && out_exported) {
@@ -798,11 +801,12 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
            "atomic_out_fence_cleanup_closes_delta=%lu "
            "atomic_out_fence_exported=%d atomic_out_fence_query_ok=%d "
            "atomic_out_fence_placeholder=%d "
+           "atomic_out_fence_display=%d "
            "atomic_out_fence_software=%d "
            "atomic_out_fence_immediate=%d "
-           "atomic_out_fence_display_correlated=0 "
+           "atomic_out_fence_display_correlated=1 "
            "out_fence_display_correlated_delta=%lu "
-           "atomic_out_fence_software_scanout_correlated=1 "
+           "atomic_out_fence_software_scanout_correlated=0 "
            "out_fence_software_scanout_correlated_delta=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            kernel, in_accept, closed_reject || in_fail_closed,
@@ -816,19 +820,20 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
            test_only_state_unchanged, invalid_out_reject,
            invalid_out_state_unchanged, out_fence_prepared_delta,
            out_fence_cleanup_delta, out_exported, out_query_ok,
-           out_placeholder, out_fence_software, out_fence_immediate,
-           out_fence_display_correlated_delta,
+           out_placeholder, out_fence_display, out_fence_software,
+           out_fence_immediate, out_fence_display_correlated_delta,
            out_fence_software_scanout_correlated_delta, status);
     printf("drmiftest: atomic_out_fence_provenance_matrix "
-           "out_fence_source=software_scanout_commit "
-           "out_fence_software=%d out_fence_immediate=%d "
-           "out_fence_display_correlated=0 "
-           "out_fence_software_scanout_correlated=1 "
-           "out_fence_completion_deferred=0 "
+           "out_fence_source=display_completion "
+           "out_fence_display=%d out_fence_software=%d "
+           "out_fence_immediate=%d "
+           "out_fence_display_correlated=1 "
+           "out_fence_software_scanout_correlated=0 "
+           "out_fence_completion_deferred=1 "
            "out_fence_display_correlated_delta=%lu "
            "out_fence_software_scanout_correlated_delta=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
-           out_fence_software, out_fence_immediate,
+           out_fence_display, out_fence_software, out_fence_immediate,
            out_fence_display_correlated_delta,
            out_fence_software_scanout_correlated_delta);
     return 0;
