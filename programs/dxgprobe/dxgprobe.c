@@ -11067,7 +11067,7 @@ out:
            d3d12_scanout_bind_skeleton_pass ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_candidate_command_matrix "
            "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
-           "blt_cmd=%lu "
+           "blt_cmd=%lu propagate_presenthistory_cmd=%lu "
            "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
            "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
            "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
@@ -11078,6 +11078,7 @@ out:
            stats_after.dxg_scanout_bind_candidate_presenthistory_cmd,
            stats_after.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
            stats_after.dxg_scanout_bind_candidate_blt_cmd,
+           stats_after.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
            stats_after.dxg_scanout_bind_candidate_cmds_known,
            stats_after.dxg_scanout_bind_candidate_sender_contracts,
            stats_after.dxg_scanout_bind_candidate_completion_contracts,
@@ -11089,10 +11090,11 @@ out:
            stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
            stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
            stats_after.dxg_scanout_bind_candidate_reject_reasons,
-           stats_after.dxg_scanout_bind_candidate_cmds_known == 3 &&
+           stats_after.dxg_scanout_bind_candidate_cmds_known == 4 &&
                    stats_after.dxg_scanout_bind_candidate_presenthistory_cmd == 34 &&
                    stats_after.dxg_scanout_bind_candidate_redirected_flip_fence_cmd == 35 &&
                    stats_after.dxg_scanout_bind_candidate_blt_cmd == 38 &&
+                   stats_after.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
                    stats_after.dxg_scanout_bind_candidate_vmbus_enum_known == 1 &&
                    stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
                    stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&

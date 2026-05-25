@@ -2243,7 +2243,9 @@ static int validate_present_source_matrix(void)
                          output,
                          "dxg_scanout_bind_candidate_command_matrix");
     require_output_token("dxg_scanout_bind_candidate_command_matrix",
-                         output, "cmds_known=3");
+                         output, "cmds_known=4");
+    require_output_token("dxg_scanout_bind_candidate_command_matrix",
+                         output, "propagate_presenthistory_cmd=1");
     require_output_token("dxg_scanout_bind_candidate_command_matrix",
                          output, "sender_contracts=0");
     require_output_token("dxg_scanout_bind_candidate_command_matrix",
@@ -2443,7 +2445,8 @@ static int validate_present_source_matrix(void)
     printf("gpu_core_c_validator "
            "dxg_scanout_bind_candidate_command_matrix "
            "presenthistory_cmd=34 redirected_flip_fence_cmd=35 blt_cmd=38 "
-           "cmds_known=3 sender_contracts=0 completion_contracts=0 "
+           "propagate_presenthistory_cmd=1 cmds_known=4 "
+           "sender_contracts=0 completion_contracts=0 "
            "candidate_rejects=0 custom_host_tool=0 transport_present=0 "
            "vmbus_enum_known=1 linux_ioctl_contracts=0 "
            "resource_bind_contracts=0 display_completion_contracts=0 "
@@ -3713,7 +3716,8 @@ static int validate_backend(void)
         printf("gpu_core_c_validator "
                "dxg_scanout_bind_candidate_command_matrix "
                "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
-               "blt_cmd=%lu cmds_known=%lu sender_contracts=%lu "
+               "blt_cmd=%lu propagate_presenthistory_cmd=%lu "
+               "cmds_known=%lu sender_contracts=%lu "
                "completion_contracts=%lu candidate_rejects=%lu "
                "custom_host_tool=0 transport_present=%lu present_id=0 "
                "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
@@ -3724,6 +3728,7 @@ static int validate_backend(void)
                stats.dxg_scanout_bind_candidate_presenthistory_cmd,
                stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
                stats.dxg_scanout_bind_candidate_blt_cmd,
+               stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
                stats.dxg_scanout_bind_candidate_cmds_known,
                stats.dxg_scanout_bind_candidate_sender_contracts,
                stats.dxg_scanout_bind_candidate_completion_contracts,
@@ -3734,10 +3739,11 @@ static int validate_backend(void)
                stats.dxg_scanout_bind_candidate_resource_bind_contracts,
                stats.dxg_scanout_bind_candidate_display_completion_contracts,
                stats.dxg_scanout_bind_candidate_reject_reasons,
-               stats.dxg_scanout_bind_candidate_cmds_known == 3 &&
+               stats.dxg_scanout_bind_candidate_cmds_known == 4 &&
                        stats.dxg_scanout_bind_candidate_presenthistory_cmd == 34 &&
                        stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd == 35 &&
                        stats.dxg_scanout_bind_candidate_blt_cmd == 38 &&
+                       stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
                        stats.dxg_scanout_bind_candidate_vmbus_enum_known == 1 &&
                        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
                        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&

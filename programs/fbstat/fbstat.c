@@ -2191,6 +2191,8 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_candidate_completion_contracts);
     printf("dxg_scanout_bind_candidate_rejects %lu\n",
            stats.dxg_scanout_bind_candidate_rejects);
+    printf("dxg_scanout_bind_candidate_propagate_presenthistory_cmd %lu\n",
+           stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd);
     printf("dxg_scanout_bind_weak_dxg_ready_only %lu\n",
            stats.dxg_scanout_bind_weak_dxg_ready_only);
     printf("dxg_scanout_bind_weak_d3dkmt_handles_only %lu\n",
@@ -2314,7 +2316,7 @@ int main(int argc, char *argv[])
            scanout_bind_skeleton_ok ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_candidate_command_matrix "
            "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
-           "blt_cmd=%lu "
+           "blt_cmd=%lu propagate_presenthistory_cmd=%lu "
            "cmds_known=%lu sender_contracts=%lu completion_contracts=%lu "
            "candidate_rejects=%lu custom_host_tool=0 transport_present=%lu "
            "vmbus_enum_known=%lu linux_ioctl_contracts=%lu "
@@ -2325,6 +2327,7 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_candidate_presenthistory_cmd,
            stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
            stats.dxg_scanout_bind_candidate_blt_cmd,
+           stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
            stats.dxg_scanout_bind_candidate_cmds_known,
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
@@ -2335,7 +2338,8 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_candidate_resource_bind_contracts,
            stats.dxg_scanout_bind_candidate_display_completion_contracts,
            stats.dxg_scanout_bind_candidate_reject_reasons,
-           stats.dxg_scanout_bind_candidate_cmds_known == 3 &&
+           stats.dxg_scanout_bind_candidate_cmds_known == 4 &&
+                   stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
                    stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
                    stats.dxg_present_helper_transport_present == 0 &&
