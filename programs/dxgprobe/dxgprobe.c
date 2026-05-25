@@ -10,7 +10,14 @@
 #define DXGPROBE_TRACKER_STRESS_GPUVAS 544
 #define DXGPROBE_TRACKER_STRESS_SYNCS 544
 #define DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE 0x10000
-#define DXGPROBE_WSL_REPLAY_COMMAND_SIZE 64
+#define DXGPROBE_WSL_REPLAY_COMMAND_SIZE 4096
+#define DXGPROBE_WSL_REPLAY_CONTEXT_PRIV_SIZE 3200
+#define DXGPROBE_WSL_REPLAY_ALLOC_PRIV_SIZE 594
+#define DXGPROBE_WSL_REPLAY_HWQUEUE_PRIV_SIZE 124
+#define DXGPROBE_WSL_REPLAY_SUBMIT_PRIV_SIZE 1880
+#define DXGPROBE_WSL_REPLAY_CLIENT_HINT 12
+#define DXGPROBE_WSL_REPLAY_GPUVA_MIN 0x4000000ULL
+#define DXGPROBE_WSL_REPLAY_GPUVA_MAX 0x10000000000ULL
 
 static int g_paging_fence_wait_seconds = DXGPROBE_DEFAULT_FENCE_WAIT_SECONDS;
 static uint32 g_sync_create_flags = 0x3;
@@ -1179,6 +1186,9 @@ struct dxg_alloc_priv_info {
 static unsigned char dxg_existing_sysmem_buffer[0x10000]
     __attribute__((aligned(4096)));
 
+static int parse_hex_bytes(const char *hex, unsigned char *out,
+                           uint32 out_cap);
+
 static void make_alloc_private(struct dxg_alloc_priv_info *priv, uint64 size)
 {
     memset(priv, 0, sizeof(*priv));
@@ -1224,6 +1234,138 @@ static void make_submit_private(struct dxg_submit_priv_data *priv,
     priv->data0.cmdbuf.ibs[0].size_dwords = command_size >> 2;
     priv->data0.cmdbuf.ibs[0].iova = command_iova;
     *priv_size_out = priv_size;
+}
+
+static void put_le32(unsigned char *p, uint32 v)
+{
+    p[0] = (unsigned char)(v & 0xff);
+    p[1] = (unsigned char)((v >> 8) & 0xff);
+    p[2] = (unsigned char)((v >> 16) & 0xff);
+    p[3] = (unsigned char)((v >> 24) & 0xff);
+}
+
+static void put_utf16le_ascii(unsigned char *p, uint32 bytes,
+                              const char *text)
+{
+    uint32 i;
+
+    for (i = 0; text[i] != '\0' && i * 2 + 1 < bytes; i++) {
+        p[i * 2] = (unsigned char)text[i];
+        p[i * 2 + 1] = 0;
+    }
+}
+
+static void make_wsl_replay_allocation_private(unsigned char *priv,
+                                               uint32 priv_size)
+{
+    static const char wsl_alloc_priv_hex[] =
+        "4144564e04000100520200005844564e00000000000100000000000000000000"
+        "0000020000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000200000002000000020000000000"
+        "0000000000000000000000001078000000000100000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000100000001000000000000000000000000000800"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "00000000000000000000ffffffff000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000010000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000000000";
+
+    memset(priv, 0, priv_size);
+    if (priv_size < DXGPROBE_WSL_REPLAY_ALLOC_PRIV_SIZE)
+        return;
+    if (parse_hex_bytes(wsl_alloc_priv_hex, priv,
+                        DXGPROBE_WSL_REPLAY_ALLOC_PRIV_SIZE) !=
+        DXGPROBE_WSL_REPLAY_ALLOC_PRIV_SIZE)
+        memset(priv, 0, priv_size);
+}
+
+static void make_wsl_replay_hwqueue_private(unsigned char *priv,
+                                            uint32 priv_size,
+                                            struct d3dkmthandle allocation)
+{
+    memset(priv, 0, priv_size);
+    if (priv_size < DXGPROBE_WSL_REPLAY_HWQUEUE_PRIV_SIZE)
+        return;
+
+    /* Same-adapter NVIDIA WSL trace: ADVN/XDVN 124-byte HW queue blob. */
+    put_le32(priv + 0, 0x4e564441);
+    put_le32(priv + 4, 0x00010000);
+    put_le32(priv + 8, DXGPROBE_WSL_REPLAY_HWQUEUE_PRIV_SIZE);
+    put_le32(priv + 12, 0x4e564458);
+    put_le32(priv + 16, 0x00000900);
+    put_le32(priv + 24, 0x04000000);
+    put_le32(priv + 32, 0x00010000);
+    put_le32(priv + 36, allocation.v);
+}
+
+static void make_wsl_replay_context_private(unsigned char *priv,
+                                            uint32 priv_size)
+{
+    memset(priv, 0, priv_size);
+    if (priv_size < DXGPROBE_WSL_REPLAY_CONTEXT_PRIV_SIZE)
+        return;
+
+    /* Same-adapter NVIDIA WSL trace: ADVN/XDVN 3200-byte DX12 context blob. */
+    put_le32(priv + 0, 0x4e564441);
+    put_le32(priv + 4, 0x00010000);
+    put_le32(priv + 8, DXGPROBE_WSL_REPLAY_CONTEXT_PRIV_SIZE);
+    put_le32(priv + 12, 0x4e564458);
+    put_le32(priv + 16, 4);
+    put_le32(priv + 20, 2);
+    put_le32(priv + 24, 2);
+    put_le32(priv + 28, 0x80);
+    put_le32(priv + 32, 0x938575bf);
+    put_le32(priv + 36, 0x8db63936);
+    put_utf16le_ascii(priv + 0x530, priv_size - 0x530,
+                      "/home/es/xv6-os");
+    put_utf16le_ascii(priv + 0x738, priv_size - 0x738,
+                      "/tmp/tmp.PHsSKWCqgl/bin/mesaglfeature");
+    put_le32(priv + 0xc40, 0x003d1b62);
+    put_le32(priv + 0xc48, 0xffffffff);
+    put_le32(priv + 0xc4c, 0xffffffff);
+    put_le32(priv + 0xc50, 0xffffffff);
+    put_le32(priv + 0xc54, 0xffffffff);
+    put_le32(priv + 0xc58, 0xffffffff);
+    put_le32(priv + 0xc5c, 0xffffffff);
+}
+
+static void make_wsl_replay_submit_private(unsigned char *priv,
+                                           uint32 priv_size,
+                                           uint32 *priv_size_out,
+                                           uint64 command_iova,
+                                           uint32 command_size)
+{
+    memset(priv, 0, priv_size);
+    if (priv_size < DXGPROBE_WSL_REPLAY_SUBMIT_PRIV_SIZE) {
+        *priv_size_out = 0;
+        return;
+    }
+
+    /*
+     * Same-adapter NVIDIA WSL trace: SUBMITCOMMANDTOHWQUEUE uses ADVN private
+     * data with a 0x118-byte leading command section inside a larger blob.
+     * Keep the replay synthetic by using a zero command buffer, but preserve
+     * the observed private-data family and command length.
+     */
+    put_le32(priv + 0, 0x4e564441);
+    put_le32(priv + 4, 0x00010000);
+    put_le32(priv + 8, 0);
+    put_le32(priv + 12, 0x00000118);
+    put_le32(priv + 16, 0);
+    put_le32(priv + 20, 1);
+    (void)command_iova;
+    put_le32(priv + 0x78, command_size >> 8);
+    put_le32(priv + 0x110, 1);
+    *priv_size_out = DXGPROBE_WSL_REPLAY_SUBMIT_PRIV_SIZE;
 }
 
 static int try_create_context(int fd, struct d3dkmthandle device,
@@ -12693,7 +12835,7 @@ static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
          make_len == 24 &&
          make_device == 0 &&
          make_count == 1 &&
-         make_flags == 0 &&
+         make_flags == 1 &&
          make_sorted == 0 &&
          make_in0 != 0 &&
          make_in1 == 0 &&
@@ -12734,20 +12876,12 @@ static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
 static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
                                   struct winluid adapter_luid)
 {
-    static unsigned char context_private_data[] = {
-        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x1c, 0x0c, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00,
-    };
     struct d3dkmt_createdevice create_device;
     struct d3dkmt_destroydevice destroy_device;
     struct d3dkmt_createpagingqueue create_paging_queue;
     struct d3dddi_destroypagingqueue destroy_paging_queue;
     struct d3dddi_allocationinfo2 allocation_info;
     struct d3dkmt_createallocation create_allocation;
-    struct d3dkmt_createstandardallocation standard_allocation;
     struct d3dkmt_destroyallocation2 destroy_allocation;
     struct d3dddi_makeresident make_resident;
     struct d3dkmt_evict evict;
@@ -12759,9 +12893,11 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
     struct d3dddi_createhwqueueflags hwqueue_flags;
     struct d3dkmt_createhwqueue create_hwqueue;
     struct d3dkmt_destroyhwqueue destroy_hwqueue;
-    struct d3dkmt_submitcommand submit_context;
     struct d3dkmt_submitcommandtohwqueue submit_hwqueue;
-    struct dxg_submit_priv_data submit_private;
+    unsigned char context_private_data[DXGPROBE_WSL_REPLAY_CONTEXT_PRIV_SIZE];
+    unsigned char allocation_private[DXGPROBE_WSL_REPLAY_ALLOC_PRIV_SIZE];
+    unsigned char hwqueue_private[DXGPROBE_WSL_REPLAY_HWQUEUE_PRIV_SIZE];
+    unsigned char submit_private[DXGPROBE_WSL_REPLAY_SUBMIT_PRIV_SIZE];
     struct d3dkmthandle allocation_list[1];
     struct d3dkmthandle context_handle;
     uint32 priority_list[1];
@@ -12774,12 +12910,12 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
     int allocation_locked = 0;
     int context_created = 0;
     int hwqueue_created = 0;
-    int context_empty_rejected = 0;
-    int hwqueue_synthetic_rejected = 0;
     uint32 packet_seen = 0;
     uint32 packet_passed = 0;
     int ret = -1;
 
+    make_wsl_replay_context_private(context_private_data,
+                                    sizeof(context_private_data));
     memset(&context_handle, 0, sizeof(context_handle));
     memset(&create_device, 0, sizeof(create_device));
     create_device.adapter = adapter;
@@ -12819,18 +12955,36 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
         create_device.device.v, create_paging_queue.paging_queue.v, 0, 0,
         &packet_seen, &packet_passed);
 
+    memset(&context_flags, 0, sizeof(context_flags));
+    context_flags.hw_queue_supported = 1;
+    if (try_create_context(fd, create_device.device,
+                           "wsl_replay_wsl_hwqueue_private_e1", 0, 1,
+                           (enum d3dkmt_clienthint)
+                           DXGPROBE_WSL_REPLAY_CLIENT_HINT, context_flags,
+                           context_private_data,
+                           sizeof(context_private_data),
+                           &context_handle) < 0) {
+        printf("wsl_trace_replay create_context_failed\n");
+        goto cleanup;
+    }
+    context_created = 1;
+    wsl_trace_replay_packet_matrix(
+        "create_context", LX_DXCREATECONTEXTVIRTUAL,
+        sizeof(struct d3dkmt_createcontextvirtual),
+        sizeof(struct d3dkmt_createcontextvirtual), create_device.device.v,
+        context_handle.v, 0, 0, &packet_seen, &packet_passed);
+
     memset(&allocation_info, 0, sizeof(allocation_info));
     memset(&create_allocation, 0, sizeof(create_allocation));
-    memset(&standard_allocation, 0, sizeof(standard_allocation));
-    standard_allocation.type = _D3DKMT_STANDARDALLOCATIONTYPE_CROSSADAPTER;
-    standard_allocation.existing_heap_data.size =
-        DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE;
+    make_wsl_replay_allocation_private(allocation_private,
+                                       sizeof(allocation_private));
     create_allocation.device = create_device.device;
     create_allocation.alloc_count = 1;
     create_allocation.allocation_info = (uint64)&allocation_info;
-    create_allocation.standard_allocation = (uint64)&standard_allocation;
-    create_allocation.flags.create_resource = 1;
-    create_allocation.flags.standard_allocation = 1;
+    allocation_info.priv_drv_data = (uint64)allocation_private;
+    allocation_info.priv_drv_data_size = sizeof(allocation_private);
+    allocation_info.flags.value = 0x4;
+    allocation_info.priority = 0x78100000;
     if (ioctl(fd, LX_DXCREATEALLOCATION, &create_allocation) < 0 ||
         allocation_info.allocation.v == 0) {
         printf("wsl_trace_replay create_allocation_failed allocation=0x%x resource=0x%x\n",
@@ -12848,31 +13002,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
 
     allocation_list[0] = allocation_info.allocation;
     priority_list[0] = 0;
-    memset(&make_resident, 0, sizeof(make_resident));
-    make_resident.paging_queue = create_paging_queue.paging_queue;
-    make_resident.alloc_count = 1;
-    make_resident.allocation_list = (uint64)allocation_list;
-    make_resident.priority_list = (uint64)priority_list;
-    if (ioctl(fd, LX_DXMAKERESIDENT, &make_resident) < 0) {
-        printf("wsl_trace_replay make_resident_failed fence=%lu trim=%lu\n",
-               make_resident.paging_fence_value,
-               make_resident.num_bytes_to_trim);
-        goto cleanup;
-    }
-    allocation_resident = 1;
-    printf("wsl_trace_replay resident fence=%lu trim=%lu\n",
-           make_resident.paging_fence_value, make_resident.num_bytes_to_trim);
-    wsl_trace_replay_packet_matrix(
-        "make_resident", LX_DXMAKERESIDENT, sizeof(make_resident),
-        sizeof(make_resident), create_paging_queue.paging_queue.v,
-        allocation_info.allocation.v, 0, 0, &packet_seen, &packet_passed);
-    (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
-                            make_resident.paging_fence_value,
-                            "wsl_replay_make_resident");
-
     memset(&map_gpuva, 0, sizeof(map_gpuva));
     map_gpuva.paging_queue = create_paging_queue.paging_queue;
-    map_gpuva.maximum_address = ~0ULL;
+    map_gpuva.minimum_address = DXGPROBE_WSL_REPLAY_GPUVA_MIN;
+    map_gpuva.maximum_address = DXGPROBE_WSL_REPLAY_GPUVA_MAX;
     map_gpuva.allocation = allocation_info.allocation;
     map_gpuva.size_in_pages = DXGPROBE_WSL_REPLAY_ALLOCATION_SIZE >> 12;
     map_gpuva.protection.write = 1;
@@ -12894,6 +13027,29 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
                             map_gpuva.paging_fence_value,
                             "wsl_replay_map_gpuva");
 
+    memset(&make_resident, 0, sizeof(make_resident));
+    make_resident.paging_queue = create_paging_queue.paging_queue;
+    make_resident.alloc_count = 1;
+    make_resident.allocation_list = (uint64)allocation_list;
+    make_resident.priority_list = (uint64)priority_list;
+    make_resident.flags.cant_trim_further = 1;
+    if (ioctl(fd, LX_DXMAKERESIDENT, &make_resident) < 0) {
+        printf("wsl_trace_replay make_resident_failed fence=%lu trim=%lu\n",
+               make_resident.paging_fence_value,
+               make_resident.num_bytes_to_trim);
+        goto cleanup;
+    }
+    allocation_resident = 1;
+    printf("wsl_trace_replay resident fence=%lu trim=%lu\n",
+           make_resident.paging_fence_value, make_resident.num_bytes_to_trim);
+    wsl_trace_replay_packet_matrix(
+        "make_resident", LX_DXMAKERESIDENT, sizeof(make_resident),
+        sizeof(make_resident), create_paging_queue.paging_queue.v,
+        allocation_info.allocation.v, 0, 0, &packet_seen, &packet_passed);
+    (void)wait_paging_fence(create_paging_queue.fence_cpu_virtual_address,
+                            make_resident.paging_fence_value,
+                            "wsl_replay_make_resident");
+
     memset(&lock, 0, sizeof(lock));
     lock.device = create_device.device;
     lock.allocation = allocation_info.allocation;
@@ -12911,59 +13067,14 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
         create_device.device.v, allocation_info.allocation.v, 0, 0,
         &packet_seen, &packet_passed);
 
-    memset(&context_flags, 0, sizeof(context_flags));
-    context_flags.hw_queue_supported = 1;
-    if (try_create_context(fd, create_device.device,
-                           "wsl_replay_dx12_hwqueue_private_e0", 0, 0,
-                           _D3DKMT_CLIENTHINT_DX12, context_flags,
-                           context_private_data,
-                           sizeof(context_private_data),
-                           &context_handle) < 0 &&
-        try_create_context(fd, create_device.device,
-                           "wsl_replay_dx12_hwqueue_empty_e0", 0, 0,
-                           _D3DKMT_CLIENTHINT_DX12, context_flags,
-                           0, 0, &context_handle) < 0 &&
-        try_create_context(fd, create_device.device,
-                           "wsl_replay_dx12_hwqueue_empty_e1", 0, 1,
-                           _D3DKMT_CLIENTHINT_DX12, context_flags,
-                           0, 0, &context_handle) < 0) {
-        printf("wsl_trace_replay create_context_failed\n");
-        goto cleanup;
-    }
-    context_created = 1;
-    wsl_trace_replay_packet_matrix(
-        "create_context", LX_DXCREATECONTEXTVIRTUAL,
-        sizeof(struct d3dkmt_createcontextvirtual),
-        sizeof(struct d3dkmt_createcontextvirtual), create_device.device.v,
-        context_handle.v, 0, 0, &packet_seen, &packet_passed);
-
-    memset(&submit_context, 0, sizeof(submit_context));
-    submit_context.broadcast_context_count = 1;
-    submit_context.broadcast_context[0] = context_handle;
-    {
-        int submit_context_rc =
-            ioctl(fd, LX_DXSUBMITCOMMAND, &submit_context);
-
-        wsl_trace_replay_packet_matrix(
-            "submit_context_empty", LX_DXSUBMITCOMMAND,
-            sizeof(submit_context), sizeof(submit_context),
-            context_handle.v, context_handle.v, submit_context_rc, 1,
-            &packet_seen, &packet_passed);
-        if (submit_context_rc < 0) {
-            context_empty_rejected = 1;
-            printf("wsl_trace_replay submit_context_empty expected_invalid_parameter context=0x%x\n",
-                   context_handle.v);
-        } else {
-            printf("wsl_trace_replay submit_context_empty unexpected_success context=0x%x\n",
-                   context_handle.v);
-            goto cleanup;
-        }
-    }
-
     memset(&hwqueue_flags, 0, sizeof(hwqueue_flags));
+    make_wsl_replay_hwqueue_private(hwqueue_private, sizeof(hwqueue_private),
+                                    allocation_info.allocation);
     memset(&create_hwqueue, 0, sizeof(create_hwqueue));
     create_hwqueue.context = context_handle;
     create_hwqueue.flags = hwqueue_flags;
+    create_hwqueue.priv_drv_data = (uint64)hwqueue_private;
+    create_hwqueue.priv_drv_data_size = sizeof(hwqueue_private);
     if (ioctl(fd, LX_DXCREATEHWQUEUE, &create_hwqueue) < 0 ||
         create_hwqueue.queue.v == 0) {
         printf("wsl_trace_replay create_hwqueue_failed context=0x%x queue=0x%x fence=0x%x\n",
@@ -12981,9 +13092,10 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
         sizeof(create_hwqueue), context_handle.v, create_hwqueue.queue.v,
         0, 0, &packet_seen, &packet_passed);
 
-    make_submit_private(&submit_private, &submit_private_size,
-                        map_gpuva.virtual_address,
-                        DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
+    make_wsl_replay_submit_private(submit_private, sizeof(submit_private),
+                                   &submit_private_size,
+                                   map_gpuva.virtual_address,
+                                   DXGPROBE_WSL_REPLAY_COMMAND_SIZE);
     memset(&submit_hwqueue, 0, sizeof(submit_hwqueue));
     submit_hwqueue.hwqueue = create_hwqueue.queue;
     submit_hwqueue.hwqueue_progress_fence_id = 1;
@@ -13001,9 +13113,8 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
             "submit_hwqueue", LX_DXSUBMITCOMMANDTOHWQUEUE,
             sizeof(submit_hwqueue), sizeof(submit_hwqueue),
             create_hwqueue.queue.v, allocation_info.allocation.v,
-            submit_hwqueue_rc, 1, &packet_seen, &packet_passed);
+            submit_hwqueue_rc, 0, &packet_seen, &packet_passed);
         if (submit_hwqueue_rc < 0) {
-            hwqueue_synthetic_rejected = 1;
             printf("wsl_trace_replay submit_hwqueue expected_invalid_parameter queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
                    create_hwqueue.queue.v,
                    submit_hwqueue.hwqueue_progress_fence_id,
@@ -13017,12 +13128,15 @@ static int probe_wsl_trace_replay(int fd, struct d3dkmthandle adapter,
             goto cleanup;
         }
     }
-    printf("wsl_trace_replay submit_hwqueue unexpected_success queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
+    printf("wsl_trace_replay submit_hwqueue success queue=0x%x fence=%lu cmd=0x%lx len=%u priv=%u\n",
            create_hwqueue.queue.v,
            submit_hwqueue.hwqueue_progress_fence_id,
            submit_hwqueue.command_buffer,
            submit_hwqueue.command_length,
            submit_hwqueue.priv_drv_data_size);
+    wsl_trace_replay_host_saw_matrix(submit_private_size, &packet_seen,
+                                     &packet_passed);
+    ret = 0;
     goto cleanup;
 
 cleanup:
@@ -13047,17 +13161,6 @@ cleanup:
     }
     if (context_created && destroy_context_handle(fd, context_handle) < 0)
         ret = -1;
-    if (gpuva_mapped) {
-        memset(&free_gpuva, 0, sizeof(free_gpuva));
-        free_gpuva.adapter = adapter;
-        free_gpuva.base_address = map_gpuva.virtual_address;
-        free_gpuva.size = map_gpuva.size_in_pages << 12;
-        if (ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS, &free_gpuva) < 0) {
-            printf("wsl_trace_replay free_gpuva_failed va=0x%lx size=%lu\n",
-                   free_gpuva.base_address, free_gpuva.size);
-            ret = -1;
-        }
-    }
     if (allocation_resident) {
         memset(&evict, 0, sizeof(evict));
         evict.device = create_device.device;
@@ -13066,6 +13169,17 @@ cleanup:
         if (ioctl(fd, LX_DXEVICT, &evict) < 0) {
             printf("wsl_trace_replay evict_failed trim=%lu\n",
                    evict.num_bytes_to_trim);
+            ret = -1;
+        }
+    }
+    if (gpuva_mapped) {
+        memset(&free_gpuva, 0, sizeof(free_gpuva));
+        free_gpuva.adapter = adapter;
+        free_gpuva.base_address = map_gpuva.virtual_address;
+        free_gpuva.size = map_gpuva.size_in_pages << 12;
+        if (ioctl(fd, LX_DXFREEGPUVIRTUALADDRESS, &free_gpuva) < 0) {
+            printf("wsl_trace_replay free_gpuva_failed va=0x%lx size=%lu\n",
+                   free_gpuva.base_address, free_gpuva.size);
             ret = -1;
         }
     }
@@ -13104,16 +13218,12 @@ cleanup:
             ret = -1;
         }
     }
-    if (ret == 0 && (!context_empty_rejected ||
-                     !hwqueue_synthetic_rejected)) {
-        printf("wsl_trace_replay missing_expected_rejection context=%d hwqueue=%d\n",
-               context_empty_rejected, hwqueue_synthetic_rejected);
-        ret = -1;
-    }
     if (ret == 0) {
-        printf("wsl_trace_replay_signature adapter:%x:%x trace=/tmp/xv6-wsl-probe/mesaglfeature-nvidia-live.trace equivalence=synthetic_invalid_parameter driver_store_hash:%08x umd_type0_size:%u context_priv:%u hwqueue_priv:%u submit_priv:%u packets:%u/%u same_adapter_source=selected_openadapter_luid status=%s\n",
-               adapter_luid.b, adapter_luid.a, 0U, 9300U,
+        printf("wsl_trace_replay_signature adapter:%x:%x trace=/tmp/xv6-wsl-probe/mesaglfeature-nvidia-fullpriv-20260525-034404.trace equivalence=wsl_private_hwqueue_submit_success driver_store_hash:%08x umd_type0_size:%u context_priv:%u alloc_priv:%u hwqueue_priv:%u submit_priv:%u packets:%u/%u same_adapter_source=selected_openadapter_luid status=%s\n",
+               adapter_luid.b, adapter_luid.a,
+               0U, 9300U,
                (uint32)sizeof(context_private_data),
+               (uint32)sizeof(allocation_private),
                create_hwqueue.priv_drv_data_size, submit_private_size,
                packet_passed, packet_seen,
                packet_seen != 0 && packet_seen == packet_passed ?
@@ -13122,7 +13232,7 @@ cleanup:
             ret = -1;
     }
     if (ret == 0)
-        printf("wsl_trace_replay ok equivalence=synthetic_invalid_parameter\n");
+        printf("wsl_trace_replay ok equivalence=wsl_private_hwqueue_submit_success\n");
     return ret;
 }
 
