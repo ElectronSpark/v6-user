@@ -2279,6 +2279,12 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_pinned_process_generation);
     printf("dxg_display_bind_pinned_process_refs %lu\n",
            stats.dxg_display_bind_pinned_process_refs);
+    printf("dxg_display_bind_pinned_shared_parent %lu\n",
+           stats.dxg_display_bind_pinned_shared_parent);
+    printf("dxg_display_bind_pinned_parent_refs %lu\n",
+           stats.dxg_display_bind_pinned_parent_refs);
+    printf("dxg_display_bind_pinned_parent_children %lu\n",
+           stats.dxg_display_bind_pinned_parent_children);
     printf("d3d12_display_bind_backend_boundary_matrix "
            "backend=%s contract_version=%lu transport=%lu "
            "transport_present=%lu operation=%lu completion_source=%lu "
@@ -2312,7 +2318,9 @@ int main(int argc, char *argv[])
            "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
            "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
            "pinned_resource_generation=%lu pinned_process_generation=%lu "
-           "pinned_process_refs=%lu source_generation=%lu "
+           "pinned_process_refs=%lu pinned_shared_parent=%lu "
+           "pinned_parent_refs=%lu pinned_parent_children=%lu "
+           "source_generation=%lu "
            "resource_generation=%lu native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_pin_attempts,
@@ -2324,6 +2332,9 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_pinned_resource_generation,
            stats.dxg_display_bind_pinned_process_generation,
            stats.dxg_display_bind_pinned_process_refs,
+           stats.dxg_display_bind_pinned_shared_parent,
+           stats.dxg_display_bind_pinned_parent_refs,
+           stats.dxg_display_bind_pinned_parent_children,
            stats.dxg_display_bind_source_generation,
            stats.dxg_display_bind_resource_generation,
            stats.dxg_display_bind_pin_attempts == 0 ||
@@ -2333,7 +2344,10 @@ int main(int argc, char *argv[])
                     stats.dxg_display_bind_pinned_dxg_file == 1 &&
                     stats.dxg_display_bind_pinned_resource_file == 1 &&
                     stats.dxg_display_bind_pinned_resource_generation != 0 &&
-                    stats.dxg_display_bind_pinned_process_generation != 0) ?
+                    stats.dxg_display_bind_pinned_process_generation != 0 &&
+                    stats.dxg_display_bind_pinned_shared_parent != 0 &&
+                    stats.dxg_display_bind_pinned_parent_refs != 0 &&
+                    stats.dxg_display_bind_pinned_parent_children != 0) ?
                "PASS" : "DIAGNOSTIC");
     printf("dxg_scanout_bind_skeleton_matrix "
            "attempts=%lu rejects=%lu successes=%lu "

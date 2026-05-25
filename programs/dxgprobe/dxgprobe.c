@@ -11009,7 +11009,9 @@ out:
            "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
            "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
            "pinned_resource_generation=%lu pinned_process_generation=%lu "
-           "pinned_process_refs=%lu source_generation=%lu "
+           "pinned_process_refs=%lu pinned_shared_parent=%lu "
+           "pinned_parent_refs=%lu pinned_parent_children=%lu "
+           "source_generation=%lu "
            "resource_generation=%lu native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats_pin->dxg_display_bind_pin_attempts -
@@ -11025,6 +11027,9 @@ out:
            stats_pin->dxg_display_bind_pinned_resource_generation,
            stats_pin->dxg_display_bind_pinned_process_generation,
            stats_pin->dxg_display_bind_pinned_process_refs,
+           stats_pin->dxg_display_bind_pinned_shared_parent,
+           stats_pin->dxg_display_bind_pinned_parent_refs,
+           stats_pin->dxg_display_bind_pinned_parent_children,
            stats_pin->dxg_display_bind_source_generation,
            stats_pin->dxg_display_bind_resource_generation,
            stats_pin->dxg_display_bind_pin_attempts >
@@ -11040,6 +11045,9 @@ out:
                    stats_pin->dxg_display_bind_pinned_resource_generation != 0 &&
                    stats_pin->dxg_display_bind_pinned_process_generation != 0 &&
                    stats_pin->dxg_display_bind_pinned_process_refs != 0 &&
+                   stats_pin->dxg_display_bind_pinned_shared_parent != 0 &&
+                   stats_pin->dxg_display_bind_pinned_parent_refs != 0 &&
+                   stats_pin->dxg_display_bind_pinned_parent_children != 0 &&
                    stats_pin->dxg_display_bind_present_id == 0 &&
                    stats_pin->dxg_display_bind_completed_id == 0 ?
                "PASS" : "FAIL");

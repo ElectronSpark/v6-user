@@ -2876,7 +2876,9 @@ static int validate_backend(void)
            "pin_attempts=%lu pin_successes=%lu pin_failures=%lu "
            "unpins=%lu pinned_dxg_file=%lu pinned_resource_file=%lu "
            "pinned_resource_generation=%lu pinned_process_generation=%lu "
-           "pinned_process_refs=%lu source_generation=%lu "
+           "pinned_process_refs=%lu pinned_shared_parent=%lu "
+           "pinned_parent_refs=%lu pinned_parent_children=%lu "
+           "source_generation=%lu "
            "resource_generation=%lu native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_pin_attempts,
@@ -2888,6 +2890,9 @@ static int validate_backend(void)
            stats.dxg_display_bind_pinned_resource_generation,
            stats.dxg_display_bind_pinned_process_generation,
            stats.dxg_display_bind_pinned_process_refs,
+           stats.dxg_display_bind_pinned_shared_parent,
+           stats.dxg_display_bind_pinned_parent_refs,
+           stats.dxg_display_bind_pinned_parent_children,
            stats.dxg_display_bind_source_generation,
            stats.dxg_display_bind_resource_generation,
            stats.dxg_display_bind_pin_attempts == 0 ||
@@ -2898,7 +2903,10 @@ static int validate_backend(void)
                     stats.dxg_display_bind_pinned_resource_file == 1 &&
                     stats.dxg_display_bind_pinned_resource_generation != 0 &&
                     stats.dxg_display_bind_pinned_process_generation != 0 &&
-                    stats.dxg_display_bind_pinned_process_refs != 0) ?
+                    stats.dxg_display_bind_pinned_process_refs != 0 &&
+                    stats.dxg_display_bind_pinned_shared_parent != 0 &&
+                    stats.dxg_display_bind_pinned_parent_refs != 0 &&
+                    stats.dxg_display_bind_pinned_parent_children != 0) ?
                "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator dxg_syncfile_not_kms_completion_matrix "
            "syncfile_only=%lu weak_evidence_rejects=%lu "
