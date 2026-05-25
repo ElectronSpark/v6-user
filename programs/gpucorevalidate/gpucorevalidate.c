@@ -2261,6 +2261,15 @@ static int validate_present_source_matrix(void)
            "per_client_generation=required native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator "
+           "d3d12_native_completion_future_contract_matrix "
+           "display_bind_gate=closed requires_present_id=1 "
+           "requires_completed_ge_present=1 "
+           "requires_same_resource_generation=1 "
+           "requires_callback_release_after_completion=1 "
+           "requires_close_before_signal_cancel=1 "
+           "requires_cleanup_balance=1 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS_FAILCLOSED\n");
+    printf("gpu_core_c_validator "
            "dxg_resource_scanout_bind_host_abi_matrix "
            "selected_lane=gpup_dxg_scanout_bind custom_host_tool=0 "
            "wsl_dxg_display_bind_ioctl=0 "
