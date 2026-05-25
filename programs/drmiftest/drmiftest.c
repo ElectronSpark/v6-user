@@ -1024,6 +1024,11 @@ static int check_primary(int fd)
     struct drm_mode_get_plane_compat plane;
     struct drm_mode_modeinfo_compat modes[2];
     struct drm_mode_modeinfo_compat blob_mode;
+    struct {
+        struct drm_format_modifier_blob_compat header;
+        uint32 formats[2];
+        struct drm_format_modifier_compat modifiers[1];
+    } in_formats;
     uint32 plane_ids[2];
     uint32 formats[4];
     uint32 props[4];
@@ -1035,6 +1040,8 @@ static int check_primary(int fd)
     uint32 fb_prop;
     uint32 plane_type_prop;
     uint32 mode_blob = 0;
+    uint32 in_formats_prop = 0;
+    uint32 in_formats_blob = 0;
     uint32 crtc_prop = 0;
 
     memset(&magic, 0, sizeof(magic));
@@ -1186,8 +1193,51 @@ static int check_primary(int fd)
                         DRM_MODE_PROP_OBJECT);
     crtc_prop = find_prop(fd, obj_props, obj_count, "CRTC_ID",
                           DRM_MODE_PROP_OBJECT);
-    if (plane_type_prop == 0 || fb_prop == 0 || crtc_prop == 0)
+    for (uint32 i = 0; i < obj_count && i < 16; i++) {
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = obj_props[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) < 0)
+            return fail("plane GETPROPERTY failed");
+        if (strcmp(prop.name, "IN_FORMATS") != 0)
+            continue;
+        if ((prop.flags & DRM_MODE_PROP_BLOB) == 0 ||
+            (prop.flags & DRM_MODE_PROP_IMMUTABLE) == 0 ||
+            obj_values[i] == 0)
+            return fail("IN_FORMATS property mismatch");
+        in_formats_prop = obj_props[i];
+        in_formats_blob = (uint32)obj_values[i];
+        break;
+    }
+    if (plane_type_prop == 0 || fb_prop == 0 || crtc_prop == 0 ||
+        in_formats_prop == 0)
         return fail("plane object properties missing");
+
+    memset(&blob, 0, sizeof(blob));
+    memset(&in_formats, 0, sizeof(in_formats));
+    blob.blob_id = in_formats_blob;
+    blob.length = sizeof(in_formats);
+    blob.data = (uint64)&in_formats;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0 ||
+        blob.length != sizeof(in_formats) ||
+        in_formats.header.version != 1 ||
+        in_formats.header.count_formats != 2 ||
+        in_formats.header.count_modifiers != 1 ||
+        in_formats.header.formats_offset !=
+            (uint32)((char *)&in_formats.formats[0] - (char *)&in_formats) ||
+        in_formats.header.modifiers_offset !=
+            (uint32)((char *)&in_formats.modifiers[0] -
+                     (char *)&in_formats) ||
+        in_formats.formats[0] != DRM_FORMAT_XRGB8888 ||
+        in_formats.formats[1] != DRM_FORMAT_ARGB8888 ||
+        in_formats.modifiers[0].formats != 0x3 ||
+        in_formats.modifiers[0].offset != 0 ||
+        in_formats.modifiers[0].modifier != DRM_FORMAT_MOD_LINEAR)
+        return fail("IN_FORMATS blob failed");
+    printf("drmiftest: kms_in_formats_blob_matrix "
+           "cap_addfb2_modifiers=1 in_formats_blob=PASS "
+           "xrgb8888_linear=1 argb8888_linear=1 nv12_scanout=0 "
+           "nonlinear_modifiers=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
 
     if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) < 0)
         return fail("primary DROP_MASTER failed");

@@ -1096,6 +1096,26 @@ static int validate_drm_syncobj_matrix(void)
                          output, "opengl_submit_credit=0");
     require_output_token("drm_vblank_native_present_separation_matrix",
                          output, "status=PASS");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "kms_in_formats_blob_matrix");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "cap_addfb2_modifiers=1");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "in_formats_blob=PASS");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "xrgb8888_linear=1");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "argb8888_linear=1");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "nv12_scanout=0");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "nonlinear_modifiers=0");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("drm_kms_in_formats_blob_matrix", output,
+                         "opengl_submit_credit=0");
+    require_output_line_token("drm_kms_in_formats_blob_matrix", output,
+                              "kms_in_formats_blob_matrix", "status=PASS");
     require_output_token("drm_kms_present_completion_failclosed_matrix",
                          output,
                          "kms_present_completion_failclosed_matrix");
@@ -1626,13 +1646,19 @@ static int validate_drm_syncobj_matrix(void)
            "state_unchanged=PASS dxg_present_delta=0/0 "
            "native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator drm_kms_in_formats_blob_matrix "
+           "cap_addfb2_modifiers=1 in_formats_blob=PASS "
+           "xrgb8888_linear=1 argb8888_linear=1 nv12_scanout=0 "
+           "nonlinear_modifiers=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     printf("gpu_core_c_validator drm_atomic_out_fence_provenance_matrix "
-           "out_fence_source=software_scanout_commit out_fence_software=1 "
-           "out_fence_immediate=0 out_fence_display_correlated=0 "
-           "out_fence_software_scanout_correlated=1 "
-           "out_fence_completion_deferred=0 "
-           "out_fence_display_correlated_delta=0 "
-           "out_fence_software_scanout_correlated_delta=1 "
+           "out_fence_source=display_completion out_fence_display=1 "
+           "out_fence_software=0 out_fence_immediate=0 "
+           "out_fence_display_correlated=1 "
+           "out_fence_software_scanout_correlated=0 "
+           "out_fence_completion_deferred=1 "
+           "out_fence_display_correlated_delta=1 "
+           "out_fence_software_scanout_correlated_delta=0 "
            "native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
     return 0;
