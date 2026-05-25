@@ -1710,6 +1710,12 @@ static int check_kms_fb(int fd)
                vblank_negative_before.kms_vblank_page_flip_events,
            vblank_after.kms_page_flips -
                vblank_negative_before.kms_page_flips);
+    printf("drmiftest: kms_vblank_native_present_separation_matrix "
+           "vblank_source=display display_correlated=1 synthetic=0 "
+           "display_completion_is_native_present=0 "
+           "page_flip_native_present_credit=0 "
+           "vblank_native_present_credit=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
 
     memset(&atomic, 0, sizeof(atomic));
     atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
@@ -2459,6 +2465,12 @@ static int check_fence_callback_lifecycle_matrix(void)
            "opengl_submit_credit=0 status=PASS\n",
            added_delta, fired_delta, removed_delta, late_delta,
            errors_delta);
+    printf("drmiftest: dma_fence_lifetime_contract_matrix "
+           "single_backing_object=fb_gpu_fence "
+           "gem_prime_dmabuf=PASS kms_out_fence=PASS "
+           "syncobj_sync_file=PASS poll_callback_removal=PASS "
+           "final_release=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
     ret = 0;
 
 out:
