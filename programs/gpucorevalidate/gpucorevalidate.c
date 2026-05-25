@@ -359,6 +359,8 @@ static int validate_fbstat_aggregate_matrix(void)
     const char *backend_separation_anchor =
         "opengl_submit_backend_separation_matrix";
     const char *id_shape_anchor = "d3d12_display_bind_id_shape_matrix";
+    const char *success_shape_anchor =
+        "d3d12_display_bind_success_shape_matrix";
     const char *provider_gate_anchor = "d3d12_provider_credit_gate_matrix";
     const char *not_kms_anchor = "d3d12_native_completion_not_kms_matrix";
     const char *standard_alloc_anchor =
@@ -445,6 +447,15 @@ static int validate_fbstat_aggregate_matrix(void)
                               "stale_id_rejected=1");
     require_output_line_token("fbstat_native_completion_shape", output,
                               id_shape_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_display_bind_success_shape", output,
+                              success_shape_anchor,
+                              "success_requires_provider_clear=1");
+    require_output_line_token("fbstat_display_bind_success_shape", output,
+                              success_shape_anchor,
+                              "success_requires_display_completion=1");
+    require_output_line_token("fbstat_display_bind_success_shape", output,
+                              success_shape_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_provider_credit_gate", output,
                               provider_gate_anchor,
@@ -1905,7 +1916,7 @@ static int validate_present_source_matrix(void)
     char *dxg_present[] = {
         "dxgprobe", "--present-source-failclosed-validate", 0
     };
-    static char output[16384];
+    static char output[32768];
     int before = failures;
 
     if (run_child_capture("dxg_present_source_failclosed",
@@ -2236,6 +2247,55 @@ static int validate_present_source_matrix(void)
     require_output_line_token("d3d12_display_bind_backend_boundary_matrix",
                               output,
                               "d3d12_display_bind_backend_boundary_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output,
+                         "d3d12_display_bind_success_shape_matrix");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output, "failclosed_allowed=1");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output, "success_requires_provider_clear=1");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output,
+                         "success_requires_display_completion=1");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_success_shape_matrix",
+                         output, "backend_opengl_submit=0");
+    require_output_line_token("d3d12_display_bind_success_shape_matrix",
+                              output,
+                              "d3d12_display_bind_success_shape_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output,
+                         "d3d12_display_bind_query_fields_matrix");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_status=95");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "provider_status=95");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_host_abi_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_sender_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_completion_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_host_abi_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_sender_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_completion_present=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_no_host_abi=1");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_no_host_abi=1");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_pin_revalidated=1");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_pin_revalidated=1");
+    require_output_line_token("d3d12_display_bind_query_fields_matrix",
+                              output,
+                              "d3d12_display_bind_query_fields_matrix",
                               "status=PASS");
     require_output_token("d3d12_present_commit_result_copyout_contract_matrix",
                          output,
@@ -2648,6 +2708,7 @@ static int validate_backend(void)
     int kms_atomic_prepare_cleanup_fb_ok;
     int kms_page_flip_feature_gate_ok;
     int display_bind_id_shape_ok;
+    int display_bind_success_shape_ok;
     int provider_credit_gate_ok;
     int generic_completion_not_native_ok;
     int standard_alloc_not_display_bind_ok;
@@ -2805,6 +2866,35 @@ static int validate_backend(void)
          stats.dxg_present_display_target_kind ==
              FB_GPU_DXG_DISPLAY_TARGET_NONE) ||
         (stats.dxg_display_bind_provider_no_host_abi == 0 &&
+         stats.dxg_display_bind_provider_no_sender == 0 &&
+         stats.dxg_display_bind_provider_no_completion == 0);
+    display_bind_success_shape_ok =
+        (backend_opengl_submit == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
+         stats.dxg_scanout_bind_successes == 0 &&
+         stats.dxg_scanout_bind_completion_successes == 0 &&
+         stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         (stats.dxg_display_bind_provider_submits == 0 ||
+          (stats.dxg_display_bind_provider_no_host_abi != 0 &&
+           stats.dxg_display_bind_provider_no_sender != 0 &&
+           stats.dxg_display_bind_provider_no_completion != 0))) ||
+        (stats.dxg_display_bind_transport_present != 0 &&
+         stats.dxg_display_bind_status == 0 &&
+         stats.dxg_display_bind_block_reason == 0 &&
+         stats.dxg_display_bind_completion_source ==
+             FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+         stats.dxg_display_bind_present_id != 0 &&
+         stats.dxg_display_bind_completed_id >=
+             stats.dxg_display_bind_present_id &&
+         stats.dxg_display_bind_source_generation != 0 &&
+         stats.dxg_display_bind_resource_generation != 0 &&
+         stats.dxg_scanout_bind_successes != 0 &&
+         stats.dxg_scanout_bind_completion_successes != 0 &&
+         stats.dxg_display_bind_provider_submits != 0 &&
+         stats.dxg_display_bind_provider_pin_revalidated != 0 &&
+         stats.dxg_display_bind_provider_no_host_abi == 0 &&
          stats.dxg_display_bind_provider_no_sender == 0 &&
          stats.dxg_display_bind_provider_no_completion == 0);
     generic_completion_not_native_ok =
@@ -2994,6 +3084,36 @@ static int validate_backend(void)
            stats.nouveau_pci_native_present_credit,
            backend_opengl_submit,
            provider_credit_gate_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_display_bind_success_shape_matrix "
+           "transport_present=%lu status_code=%lu block_reason=0x%lx "
+           "completion_source=%lu present_id=%lu completed=%lu "
+           "source_generation=%lu resource_generation=%lu "
+           "scanout_successes=%lu completion_successes=%lu "
+           "provider_submits=%lu provider_pin_revalidated=%lu "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu failclosed_allowed=1 "
+           "success_requires_provider_clear=1 "
+           "success_requires_display_completion=1 "
+           "native_present_credit=%lu backend_opengl_submit=%u "
+           "status=%s\n",
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_status,
+           stats.dxg_display_bind_block_reason,
+           stats.dxg_display_bind_completion_source,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_pin_revalidated,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           display_bind_success_shape_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator d3d12_native_completion_not_kms_matrix "
            "generic_display_last_complete=%lu "
            "kms_vblank_display_correlated=%lu "
@@ -3673,6 +3793,10 @@ static int validate_backend(void)
     }
     if (!provider_credit_gate_ok) {
         note_fail("backend", "d3d12_credit_without_provider_clear");
+        ok = 0;
+    }
+    if (!display_bind_success_shape_ok) {
+        note_fail("backend", "d3d12_display_bind_success_shape_invalid");
         ok = 0;
     }
     if (!generic_completion_not_native_ok) {

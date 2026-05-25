@@ -360,6 +360,7 @@ int main(int argc, char *argv[])
     int scanout_bind_skeleton_ok = 0;
     int display_bind_boundary_ok = 0;
     int display_bind_id_shape_ok = 0;
+    int display_bind_success_shape_ok = 0;
     int provider_credit_gate_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
@@ -448,6 +449,35 @@ int main(int argc, char *argv[])
          stats.dxg_present_display_target_kind ==
              FB_GPU_DXG_DISPLAY_TARGET_NONE) ||
         (stats.dxg_display_bind_provider_no_host_abi == 0 &&
+         stats.dxg_display_bind_provider_no_sender == 0 &&
+         stats.dxg_display_bind_provider_no_completion == 0);
+    display_bind_success_shape_ok =
+        (backend_opengl_submit == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
+         stats.dxg_scanout_bind_successes == 0 &&
+         stats.dxg_scanout_bind_completion_successes == 0 &&
+         stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         (stats.dxg_display_bind_provider_submits == 0 ||
+          (stats.dxg_display_bind_provider_no_host_abi != 0 &&
+           stats.dxg_display_bind_provider_no_sender != 0 &&
+           stats.dxg_display_bind_provider_no_completion != 0))) ||
+        (stats.dxg_display_bind_transport_present != 0 &&
+         stats.dxg_display_bind_status == 0 &&
+         stats.dxg_display_bind_block_reason == 0 &&
+         stats.dxg_display_bind_completion_source ==
+             FB_GPU_DXG_PRESENT_COMPLETION_DISPLAY &&
+         stats.dxg_display_bind_present_id != 0 &&
+         stats.dxg_display_bind_completed_id >=
+             stats.dxg_display_bind_present_id &&
+         stats.dxg_display_bind_source_generation != 0 &&
+         stats.dxg_display_bind_resource_generation != 0 &&
+         stats.dxg_scanout_bind_successes != 0 &&
+         stats.dxg_scanout_bind_completion_successes != 0 &&
+         stats.dxg_display_bind_provider_submits != 0 &&
+         stats.dxg_display_bind_provider_pin_revalidated != 0 &&
+         stats.dxg_display_bind_provider_no_host_abi == 0 &&
          stats.dxg_display_bind_provider_no_sender == 0 &&
          stats.dxg_display_bind_provider_no_completion == 0);
     generic_completion_not_native_ok =
@@ -594,6 +624,36 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_native_present_credit,
            backend_opengl_submit,
            provider_credit_gate_ok ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_success_shape_matrix "
+           "transport_present=%lu status_code=%lu block_reason=0x%lx "
+           "completion_source=%lu present_id=%lu completed=%lu "
+           "source_generation=%lu resource_generation=%lu "
+           "scanout_successes=%lu completion_successes=%lu "
+           "provider_submits=%lu provider_pin_revalidated=%lu "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu failclosed_allowed=1 "
+           "success_requires_provider_clear=1 "
+           "success_requires_display_completion=1 "
+           "native_present_credit=%lu backend_opengl_submit=%d "
+           "status=%s\n",
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_status,
+           stats.dxg_display_bind_block_reason,
+           stats.dxg_display_bind_completion_source,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_pin_revalidated,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           display_bind_success_shape_ok ? "PASS" : "FAIL");
     printf("d3d12_native_completion_not_kms_matrix "
            "generic_display_last_complete=%lu "
            "kms_vblank_display_correlated=%lu "
