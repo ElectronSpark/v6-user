@@ -960,6 +960,144 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_dma_map_last_ret);
     printf("nouveau_pci_native_present_credit %lu\n",
            stats.nouveau_pci_native_present_credit);
+    printf("nouveau_native_display_ready %lu\n",
+           stats.nouveau_native_display_ready);
+    printf("nouveau_dda_native_display_present %lu\n",
+           stats.nouveau_dda_native_display_present);
+    printf("nouveau_display_create_attempts %lu\n",
+           stats.nouveau_display_create_attempts);
+    printf("nouveau_display_create_successes %lu\n",
+           stats.nouveau_display_create_successes);
+    printf("nouveau_display_create_fail_closed %lu\n",
+           stats.nouveau_display_create_fail_closed);
+    printf("nouveau_display_heads %lu\n", stats.nouveau_display_heads);
+    printf("nouveau_display_connectors %lu\n",
+           stats.nouveau_display_connectors);
+    printf("nouveau_display_vblank_supported %lu\n",
+           stats.nouveau_display_vblank_supported);
+    printf("nouveau_display_vblank_irqs %lu\n",
+           stats.nouveau_display_vblank_irqs);
+    printf("nouveau_display_page_flip_completions %lu\n",
+           stats.nouveau_display_page_flip_completions);
+    printf("nouveau_native_display_reject_reasons 0x%lx\n",
+           stats.nouveau_native_display_reject_reasons);
+    printf("kms_present_last_lane %lu\n", stats.kms_present_last_lane);
+    printf("kms_present_dumb %lu\n", stats.kms_present_dumb);
+    printf("kms_present_synthvid %lu\n", stats.kms_present_synthvid);
+    printf("kms_present_nouveau_hw %lu\n", stats.kms_present_nouveau_hw);
+    printf("kms_present_rejects %lu\n", stats.kms_present_rejects);
+    printf("kms_present_reject_reasons 0x%lx\n",
+           stats.kms_present_reject_reasons);
+    printf("kms_present_reject_no_native_display %lu\n",
+           stats.kms_present_reject_no_native_display);
+    printf("kms_present_reject_no_nouveau_display %lu\n",
+           stats.kms_present_reject_no_nouveau_display);
+    printf("kms_present_reject_no_display_create %lu\n",
+           stats.kms_present_reject_no_display_create);
+    printf("kms_present_reject_no_heads %lu\n",
+           stats.kms_present_reject_no_heads);
+    printf("kms_present_reject_no_connectors %lu\n",
+           stats.kms_present_reject_no_connectors);
+    printf("kms_present_reject_no_vblank %lu\n",
+           stats.kms_present_reject_no_vblank);
+    printf("kms_present_reject_no_hw_completion %lu\n",
+           stats.kms_present_reject_no_hw_completion);
+    {
+        int hyperv_gpup =
+            have_backend &&
+            backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+            (backend.flags & FB_GPU_BACKEND_F_DXG_TRANSPORT) != 0 &&
+            (backend.flags & FB_GPU_BACKEND_F_D3DKMT) != 0 &&
+            (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) == 0 &&
+            stats.nouveau_pci_probe_accepts == 0;
+        int failclosed =
+            hyperv_gpup &&
+            stats.nouveau_native_display_ready == 0 &&
+            stats.nouveau_dda_native_display_present == 0 &&
+            stats.nouveau_display_create_attempts == 0 &&
+            stats.nouveau_display_create_successes == 0 &&
+            stats.nouveau_display_heads == 0 &&
+            stats.nouveau_display_connectors == 0 &&
+            stats.nouveau_display_vblank_supported == 0 &&
+            stats.nouveau_display_vblank_irqs == 0 &&
+            stats.nouveau_display_page_flip_completions == 0 &&
+            stats.nouveau_native_display_reject_reasons ==
+                FB_GPU_KMS_PRESENT_REJECT_ALL &&
+            stats.kms_present_last_lane == FB_GPU_KMS_PRESENT_LANE_NONE &&
+            stats.kms_present_dumb == 0 &&
+            stats.kms_present_synthvid == 0 &&
+            stats.kms_present_nouveau_hw == 0 &&
+            stats.kms_present_reject_reasons ==
+                FB_GPU_KMS_PRESENT_REJECT_ALL &&
+            stats.nouveau_pci_native_present_credit == 0 &&
+            (!have_backend ||
+             (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0);
+
+        printf("native_display_readiness_failclosed_matrix "
+               "backend=%u hyperv_gpup=%s native_display_ready=%lu "
+               "dda_native_display_present=%lu display_target_kind=%lu "
+               "dxg_scanout_bind_successes=%lu present_id=%lu "
+               "completed=%lu reject_reasons=0x%lx "
+               "native_present_credit=0 opengl_submit_credit=0 "
+               "status=%s\n",
+               have_backend ? backend.backend : 0,
+               hyperv_gpup ? "PASS" : "FAIL",
+               stats.nouveau_native_display_ready,
+               stats.nouveau_dda_native_display_present,
+               stats.dxg_present_display_target_kind,
+               stats.dxg_scanout_bind_successes,
+               stats.dxg_scanout_bind_last_present_id,
+               stats.dxg_scanout_bind_last_completed,
+               stats.nouveau_native_display_reject_reasons,
+               failclosed ? "PASS" : "FAIL");
+        printf("nouveau_display_failclosed_matrix "
+               "accepts=%lu create_attempts=%lu create_successes=%lu "
+               "create_fail_closed=%lu heads=%lu connectors=%lu "
+               "vblank_supported=%lu vblank_irqs=%lu "
+               "flip_completions=%lu dda_native_display_present=%lu "
+               "native_display_ready=%lu reject_reasons=0x%lx "
+               "native_present_credit=0 opengl_submit_credit=0 "
+               "status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               stats.nouveau_display_create_attempts,
+               stats.nouveau_display_create_successes,
+               stats.nouveau_display_create_fail_closed,
+               stats.nouveau_display_heads,
+               stats.nouveau_display_connectors,
+               stats.nouveau_display_vblank_supported,
+               stats.nouveau_display_vblank_irqs,
+               stats.nouveau_display_page_flip_completions,
+               stats.nouveau_dda_native_display_present,
+               stats.nouveau_native_display_ready,
+               stats.nouveau_native_display_reject_reasons,
+               failclosed ? "PASS" : "FAIL");
+        printf("kms_present_discriminator_failclosed_matrix "
+               "last_lane=%lu kms_present_dumb=%lu "
+               "kms_present_synthvid=%lu kms_present_nouveau_hw=%lu "
+               "rejects=%lu reject_reasons=0x%lx "
+               "no_native_display=%lu no_nouveau_display=%lu "
+               "no_display_create=%lu no_heads=%lu no_connectors=%lu "
+               "no_vblank=%lu no_hw_completion=%lu selected=none "
+               "native_display_ready=%lu dda_native_display_present=%lu "
+               "native_present_credit=0 opengl_submit_credit=0 "
+               "status=%s\n",
+               stats.kms_present_last_lane,
+               stats.kms_present_dumb,
+               stats.kms_present_synthvid,
+               stats.kms_present_nouveau_hw,
+               stats.kms_present_rejects,
+               stats.kms_present_reject_reasons,
+               stats.kms_present_reject_no_native_display,
+               stats.kms_present_reject_no_nouveau_display,
+               stats.kms_present_reject_no_display_create,
+               stats.kms_present_reject_no_heads,
+               stats.kms_present_reject_no_connectors,
+               stats.kms_present_reject_no_vblank,
+               stats.kms_present_reject_no_hw_completion,
+               stats.nouveau_native_display_ready,
+               stats.nouveau_dda_native_display_present,
+               failclosed ? "PASS" : "FAIL");
+    }
     printf("nouveau_pci_dma_resource_matrix stats "
            "registered=%lu accepts=%lu reject_dxg_present=%lu "
            "reject_no_bars=%lu dma_mask_configured=%lu "
