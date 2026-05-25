@@ -801,12 +801,24 @@ int main(int argc, char *argv[])
     printf("nouveau_pci_msix_cap %lu\n", stats.nouveau_pci_msix_cap);
     printf("nouveau_pci_dma_mask_configured %lu\n",
            stats.nouveau_pci_dma_mask_configured);
+    printf("nouveau_pci_dma_mask_requested_bits %lu\n",
+           stats.nouveau_pci_dma_mask_requested_bits);
     printf("nouveau_pci_dma_mask_bits %lu\n",
            stats.nouveau_pci_dma_mask_bits);
+    printf("nouveau_pci_dma_mask_effective_bits %lu\n",
+           stats.nouveau_pci_dma_mask_effective_bits);
+    printf("nouveau_pci_dma_mask_fallback_32 %lu\n",
+           stats.nouveau_pci_dma_mask_fallback_32);
     printf("nouveau_pci_coherent_dma_mask_configured %lu\n",
            stats.nouveau_pci_coherent_dma_mask_configured);
+    printf("nouveau_pci_coherent_dma_mask_requested_bits %lu\n",
+           stats.nouveau_pci_coherent_dma_mask_requested_bits);
     printf("nouveau_pci_coherent_dma_mask_bits %lu\n",
            stats.nouveau_pci_coherent_dma_mask_bits);
+    printf("nouveau_pci_coherent_dma_mask_effective_bits %lu\n",
+           stats.nouveau_pci_coherent_dma_mask_effective_bits);
+    printf("nouveau_pci_coherent_dma_mask_fallback_32 %lu\n",
+           stats.nouveau_pci_coherent_dma_mask_fallback_32);
     printf("nouveau_pci_bar0_claimed %lu\n",
            stats.nouveau_pci_bar0_claimed);
     printf("nouveau_pci_bar1_claimed %lu\n",
@@ -844,13 +856,31 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_irq_delivery_claimed);
     printf("nouveau_pci_legacy_irq_fallback %lu\n",
            stats.nouveau_pci_legacy_irq_fallback);
+    printf("nouveau_pci_dma_map_api_present %lu\n",
+           stats.nouveau_pci_dma_map_api_present);
+    printf("nouveau_pci_dma_map_attempts %lu\n",
+           stats.nouveau_pci_dma_map_attempts);
+    printf("nouveau_pci_dma_map_successes %lu\n",
+           stats.nouveau_pci_dma_map_successes);
+    printf("nouveau_pci_dma_map_failures %lu\n",
+           stats.nouveau_pci_dma_map_failures);
+    printf("nouveau_pci_dma_unmaps %lu\n", stats.nouveau_pci_dma_unmaps);
+    printf("nouveau_pci_dma_map_last_size %lu\n",
+           stats.nouveau_pci_dma_map_last_size);
+    printf("nouveau_pci_dma_map_last_addr %lu\n",
+           stats.nouveau_pci_dma_map_last_addr);
+    printf("nouveau_pci_dma_map_last_ret %lu\n",
+           stats.nouveau_pci_dma_map_last_ret);
     printf("nouveau_pci_native_present_credit %lu\n",
            stats.nouveau_pci_native_present_credit);
     printf("nouveau_pci_dma_resource_matrix stats "
            "registered=%lu accepts=%lu reject_dxg_present=%lu "
            "reject_no_bars=%lu dma_mask_configured=%lu "
-           "dma_mask_bits=%lu coherent_configured=%lu "
-           "coherent_bits=%lu bar0_len=%lu bar1_len=%lu "
+           "dma_mask_requested_bits=%lu dma_mask_bits=%lu "
+           "dma_mask_effective_bits=%lu dma_mask_fallback_32=%lu "
+           "coherent_configured=%lu coherent_requested_bits=%lu "
+           "coherent_bits=%lu coherent_effective_bits=%lu "
+           "coherent_fallback_32=%lu bar0_len=%lu bar1_len=%lu "
            "bar0_claimed=%lu bar1_claimed=%lu claim_failures=%lu "
            "releases=%lu resource_claims=%lu resource_releases=%lu "
            "resource_iomaps=%lu owner_mismatches=%lu "
@@ -859,7 +889,10 @@ int main(int argc, char *argv[])
            "msi_requested=%lu msi_fail_closed=%lu "
            "irq_vector_valid=%lu irq_handler_registered=%lu "
            "irq_delivery_enabled=%lu irq_delivery_claimed=%lu "
-           "legacy_irq_fallback=%lu "
+           "legacy_irq_fallback=%lu dma_map_api=%lu "
+           "dma_map_attempts=%lu dma_map_successes=%lu "
+           "dma_map_failures=%lu dma_unmaps=%lu dma_last_size=%lu "
+           "dma_last_addr=0x%lx dma_last_ret=%lu "
            "suspend_count=%lu resume_count=%lu pm_balanced=%lu "
            "remove_while_suspended=%lu "
            "native_present_credit=%lu\n",
@@ -868,9 +901,15 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_probe_reject_dxg_present,
            stats.nouveau_pci_probe_reject_no_bars,
            stats.nouveau_pci_dma_mask_configured,
+           stats.nouveau_pci_dma_mask_requested_bits,
            stats.nouveau_pci_dma_mask_bits,
+           stats.nouveau_pci_dma_mask_effective_bits,
+           stats.nouveau_pci_dma_mask_fallback_32,
            stats.nouveau_pci_coherent_dma_mask_configured,
+           stats.nouveau_pci_coherent_dma_mask_requested_bits,
            stats.nouveau_pci_coherent_dma_mask_bits,
+           stats.nouveau_pci_coherent_dma_mask_effective_bits,
+           stats.nouveau_pci_coherent_dma_mask_fallback_32,
            stats.nouveau_pci_bar0_len,
            stats.nouveau_pci_bar1_len,
            stats.nouveau_pci_bar0_claimed,
@@ -892,6 +931,14 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_irq_delivery_enabled,
            stats.nouveau_pci_irq_delivery_claimed,
            stats.nouveau_pci_legacy_irq_fallback,
+           stats.nouveau_pci_dma_map_api_present,
+           stats.nouveau_pci_dma_map_attempts,
+           stats.nouveau_pci_dma_map_successes,
+           stats.nouveau_pci_dma_map_failures,
+           stats.nouveau_pci_dma_unmaps,
+           stats.nouveau_pci_dma_map_last_size,
+           stats.nouveau_pci_dma_map_last_addr,
+           stats.nouveau_pci_dma_map_last_ret,
            stats.nouveau_pci_suspend_count,
            stats.nouveau_pci_resume_count,
            stats.nouveau_pci_runtime_pm_balanced,
@@ -901,12 +948,19 @@ int main(int argc, char *argv[])
         const int accepts = stats.nouveau_pci_probe_accepts != 0;
         const char *dma_mask = accepts ?
             (stats.nouveau_pci_dma_mask_configured &&
-             stats.nouveau_pci_dma_mask_bits >= 32 ? "PASS" : "FAIL") :
+             stats.nouveau_pci_dma_mask_requested_bits >= 32 &&
+             stats.nouveau_pci_dma_mask_effective_bits >= 32 &&
+             stats.nouveau_pci_dma_mask_bits ==
+                 stats.nouveau_pci_dma_mask_effective_bits ?
+                 "PASS" : "FAIL") :
             "NOT_CONFIGURED";
         const char *coherent_dma_mask = accepts ?
             (stats.nouveau_pci_coherent_dma_mask_configured &&
-             stats.nouveau_pci_coherent_dma_mask_bits >= 32 ? "PASS" :
-             "FAIL") : "NOT_CONFIGURED";
+             stats.nouveau_pci_coherent_dma_mask_requested_bits >= 32 &&
+             stats.nouveau_pci_coherent_dma_mask_effective_bits >= 32 &&
+             stats.nouveau_pci_coherent_dma_mask_bits ==
+                 stats.nouveau_pci_coherent_dma_mask_effective_bits ?
+                 "PASS" : "FAIL") : "NOT_CONFIGURED";
         const char *bar_claim = accepts ?
             (((stats.nouveau_pci_bar0_len == 0 ||
                stats.nouveau_pci_bar0_claimed) &&
@@ -922,6 +976,14 @@ int main(int argc, char *argv[])
         const char *release_balance =
             stats.nouveau_pci_unclaimed_releases == 0 ?
                 (accepts ? "PASS" : "GPU_P_FAIL_CLOSED") : "FAIL";
+        const char *dma_map = accepts ?
+            (stats.nouveau_pci_dma_map_api_present &&
+             stats.nouveau_pci_dma_map_attempts != 0 &&
+             stats.nouveau_pci_dma_map_successes != 0 &&
+             stats.nouveau_pci_dma_map_failures == 0 &&
+             stats.nouveau_pci_dma_unmaps ==
+                 stats.nouveau_pci_dma_map_successes ? "PASS" : "FAIL") :
+            "GPU_P_FAIL_CLOSED";
         const char *msi_msix = stats.nouveau_pci_msi_fail_closed ?
             "FAIL_CLOSED" : "NOT_ATTEMPTED";
         const char *legacy_irq = accepts ?
@@ -940,14 +1002,14 @@ int main(int argc, char *argv[])
 
         printf("nouveau_pci_runtime_contract_matrix "
                "accepts=%lu gpup_only=%s dma_mask=%s "
-               "coherent_dma_mask=%s bar_claim=%s "
+               "coherent_dma_mask=%s dma_map=%s bar_claim=%s "
                "msi_msix_setup=%s legacy_irq_fallback=%s "
                "irq_handler=%s irq_delivery=%s runtime_pm_usage=%s "
                "remove_path=%s native_present_credit=%lu "
                "opengl_submit_credit=0 status=%s\n",
                stats.nouveau_pci_probe_accepts,
                accepts ? "NO" : "PASS",
-               dma_mask, coherent_dma_mask, bar_claim, msi_msix,
+               dma_mask, coherent_dma_mask, dma_map, bar_claim, msi_msix,
                legacy_irq, irq_handler, irq_delivery, runtime_pm,
                remove_path, stats.nouveau_pci_native_present_credit,
                status);
@@ -962,7 +1024,7 @@ int main(int argc, char *argv[])
                "opengl_submit_credit=0 status=%s\n",
                stats.nouveau_pci_probe_accepts,
                accepts ? bar_claim : "GPU_P_FAIL_CLOSED",
-               accepts ? dma_mask : "GPU_P_FAIL_CLOSED",
+               accepts ? dma_map : "GPU_P_FAIL_CLOSED",
                msi_msix,
                legacy_irq,
                irq_delivery,
@@ -1000,7 +1062,17 @@ int main(int argc, char *argv[])
             stats.nouveau_pci_bar1_claimed == 0;
         int no_fake_dma =
             stats.nouveau_pci_dma_mask_configured == 0 &&
-            stats.nouveau_pci_coherent_dma_mask_configured == 0;
+            stats.nouveau_pci_dma_mask_requested_bits == 0 &&
+            stats.nouveau_pci_dma_mask_effective_bits == 0 &&
+            stats.nouveau_pci_dma_mask_fallback_32 == 0 &&
+            stats.nouveau_pci_coherent_dma_mask_configured == 0 &&
+            stats.nouveau_pci_coherent_dma_mask_requested_bits == 0 &&
+            stats.nouveau_pci_coherent_dma_mask_effective_bits == 0 &&
+            stats.nouveau_pci_coherent_dma_mask_fallback_32 == 0 &&
+            stats.nouveau_pci_dma_map_attempts == 0 &&
+            stats.nouveau_pci_dma_map_successes == 0 &&
+            stats.nouveau_pci_dma_map_failures == 0 &&
+            stats.nouveau_pci_dma_unmaps == 0;
         int no_fake_irq =
             stats.nouveau_pci_irq_vector_valid == 0 &&
             stats.nouveau_pci_irq_handler_registered == 0 &&

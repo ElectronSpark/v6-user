@@ -2222,6 +2222,9 @@ static int validate_backend(void)
     struct fb_gpu_stats stats;
     int fd;
     int ok = 1;
+    const char *nouveau_dma_map_state;
+    const char *nouveau_dma_mask_state;
+    const char *nouveau_coherent_dma_mask_state;
 
     fd = open("/dev/gpu0", O_RDONLY);
     if (fd < 0)
@@ -2244,6 +2247,30 @@ static int validate_backend(void)
     }
     close(fd);
 
+    nouveau_dma_map_state =
+        stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
+        (stats.nouveau_pci_dma_map_api_present != 0 &&
+         stats.nouveau_pci_dma_map_attempts != 0 &&
+         stats.nouveau_pci_dma_map_successes != 0 &&
+         stats.nouveau_pci_dma_map_failures == 0 &&
+         stats.nouveau_pci_dma_unmaps ==
+             stats.nouveau_pci_dma_map_successes ? "PASS" : "FAIL");
+    nouveau_dma_mask_state =
+        stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
+        (stats.nouveau_pci_dma_mask_configured != 0 &&
+         stats.nouveau_pci_dma_mask_requested_bits >= 32 &&
+         stats.nouveau_pci_dma_mask_effective_bits >= 32 &&
+         stats.nouveau_pci_dma_mask_bits ==
+             stats.nouveau_pci_dma_mask_effective_bits ? "PASS" : "FAIL");
+    nouveau_coherent_dma_mask_state =
+        stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
+        (stats.nouveau_pci_coherent_dma_mask_configured != 0 &&
+         stats.nouveau_pci_coherent_dma_mask_requested_bits >= 32 &&
+         stats.nouveau_pci_coherent_dma_mask_effective_bits >= 32 &&
+         stats.nouveau_pci_coherent_dma_mask_bits ==
+             stats.nouveau_pci_coherent_dma_mask_effective_bits ? "PASS" :
+                                                                  "FAIL");
+
     printf("gpu_core_c_validator backend id=%u flags=0x%x name=%s renderer=%s "
            "dxg_global_open=%u dxg_vgpu_open=%u dxg_d3dkmt=%u\n",
            backend.backend, backend.flags,
@@ -2255,7 +2282,9 @@ static int validate_backend(void)
            "gpu_backend=%lu gpu_backend_flags=0x%lx nouveau_registered=%lu "
            "nouveau_accepts=%lu reject_dxg_present=%lu reject_no_bars=%lu "
            "bar0=%lu bar1=%lu bar0_claimed=%lu bar1_claimed=%lu "
-           "dma=%lu/%lu coherent=%lu/%lu irq_mode=%lu "
+           "dma=%lu/%lu/%lu/%lu fallback32=%lu "
+           "coherent=%lu/%lu/%lu/%lu fallback32=%lu irq_mode=%lu "
+           "dma_map=%lu/%lu/%lu unmaps=%lu dma_map_last=%lu/%lu/%lu "
            "irq_handler=%lu irq_delivery=%lu irq_claimed=%lu "
            "pm=%lu/%lu balanced=%lu remove_suspended=%lu "
            "native_present_credit=%lu dxg_present_transport=%lu "
@@ -2270,10 +2299,23 @@ static int validate_backend(void)
            stats.nouveau_pci_bar0_len, stats.nouveau_pci_bar1_len,
            stats.nouveau_pci_bar0_claimed, stats.nouveau_pci_bar1_claimed,
            stats.nouveau_pci_dma_mask_configured,
+           stats.nouveau_pci_dma_mask_requested_bits,
            stats.nouveau_pci_dma_mask_bits,
+           stats.nouveau_pci_dma_mask_effective_bits,
+           stats.nouveau_pci_dma_mask_fallback_32,
            stats.nouveau_pci_coherent_dma_mask_configured,
+           stats.nouveau_pci_coherent_dma_mask_requested_bits,
            stats.nouveau_pci_coherent_dma_mask_bits,
+           stats.nouveau_pci_coherent_dma_mask_effective_bits,
+           stats.nouveau_pci_coherent_dma_mask_fallback_32,
            stats.nouveau_pci_irq_mode,
+           stats.nouveau_pci_dma_map_attempts,
+           stats.nouveau_pci_dma_map_successes,
+           stats.nouveau_pci_dma_map_failures,
+           stats.nouveau_pci_dma_unmaps,
+           stats.nouveau_pci_dma_map_last_size,
+           stats.nouveau_pci_dma_map_last_addr,
+           stats.nouveau_pci_dma_map_last_ret,
            stats.nouveau_pci_irq_handler_registered,
            stats.nouveau_pci_irq_delivery_enabled,
            stats.nouveau_pci_irq_delivery_claimed,
@@ -2318,11 +2360,19 @@ static int validate_backend(void)
     printf("gpu_core_c_validator nouveau_pci_dma_resource_matrix "
            "registered=%lu accepts=%lu reject_dxg_present=%lu "
            "reject_no_bars=%lu dma_mask_configured=%lu "
-           "dma_mask_bits=%lu coherent_configured=%lu coherent_bits=%lu "
+           "dma_mask_requested_bits=%lu dma_mask_bits=%lu "
+           "dma_mask_effective_bits=%lu dma_mask_fallback_32=%lu "
+           "coherent_configured=%lu coherent_requested_bits=%lu "
+           "coherent_bits=%lu coherent_effective_bits=%lu "
+           "coherent_fallback_32=%lu "
            "bar0_len=%lu bar1_len=%lu bar0_claimed=%lu "
            "bar1_claimed=%lu claim_failures=%lu releases=%lu "
            "resource_claims=%lu resource_releases=%lu "
            "resource_iomaps=%lu owner_mismatches=%lu "
+           "dma_map_api=%lu dma_map_attempts=%lu "
+           "dma_map_successes=%lu dma_map_failures=%lu "
+           "dma_unmaps=%lu dma_last_size=%lu dma_last_addr=%lu "
+           "dma_last_ret=%lu dma_map=%s "
            "unclaimed_iomaps=%lu unclaimed_releases=%lu "
            "irq_mode=%lu irq_failures=%lu msi_requested=%lu "
            "msi_fail_closed=%lu irq_vector_valid=%lu "
@@ -2336,9 +2386,15 @@ static int validate_backend(void)
            stats.nouveau_pci_probe_reject_dxg_present,
            stats.nouveau_pci_probe_reject_no_bars,
            stats.nouveau_pci_dma_mask_configured,
+           stats.nouveau_pci_dma_mask_requested_bits,
            stats.nouveau_pci_dma_mask_bits,
+           stats.nouveau_pci_dma_mask_effective_bits,
+           stats.nouveau_pci_dma_mask_fallback_32,
            stats.nouveau_pci_coherent_dma_mask_configured,
+           stats.nouveau_pci_coherent_dma_mask_requested_bits,
            stats.nouveau_pci_coherent_dma_mask_bits,
+           stats.nouveau_pci_coherent_dma_mask_effective_bits,
+           stats.nouveau_pci_coherent_dma_mask_fallback_32,
            stats.nouveau_pci_bar0_len,
            stats.nouveau_pci_bar1_len,
            stats.nouveau_pci_bar0_claimed,
@@ -2349,6 +2405,15 @@ static int validate_backend(void)
            stats.nouveau_pci_resource_releases,
            stats.nouveau_pci_resource_iomaps,
            stats.nouveau_pci_resource_owner_mismatches,
+           stats.nouveau_pci_dma_map_api_present,
+           stats.nouveau_pci_dma_map_attempts,
+           stats.nouveau_pci_dma_map_successes,
+           stats.nouveau_pci_dma_map_failures,
+           stats.nouveau_pci_dma_unmaps,
+           stats.nouveau_pci_dma_map_last_size,
+           stats.nouveau_pci_dma_map_last_addr,
+           stats.nouveau_pci_dma_map_last_ret,
+           nouveau_dma_map_state,
            stats.nouveau_pci_unclaimed_iomaps,
            stats.nouveau_pci_unclaimed_releases,
            stats.nouveau_pci_irq_mode,
@@ -2367,16 +2432,15 @@ static int validate_backend(void)
            stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
            "accepts=%lu gpup_only=%s dma_mask=%s coherent_dma_mask=%s "
-           "bar_claim=%s msi_msix_setup=%s legacy_irq_fallback=%s "
+           "dma_map=%s bar_claim=%s msi_msix_setup=%s legacy_irq_fallback=%s "
            "irq_handler=%s irq_delivery=%s runtime_pm_usage=%s "
            "remove_path=%s native_present_credit=%lu "
            "opengl_submit_credit=0 status=PENDING\n",
            stats.nouveau_pci_probe_accepts,
            stats.nouveau_pci_probe_accepts == 0 ? "PASS" : "NO",
-           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
-               "DIAGNOSTIC",
-           stats.nouveau_pci_probe_accepts == 0 ? "NOT_CONFIGURED" :
-               "DIAGNOSTIC",
+           nouveau_dma_mask_state,
+           nouveau_coherent_dma_mask_state,
+           nouveau_dma_map_state,
            stats.nouveau_pci_probe_accepts == 0 ? "NOT_ATTEMPTED" :
                "DIAGNOSTIC",
            stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
@@ -2402,8 +2466,7 @@ static int validate_backend(void)
            stats.nouveau_pci_probe_accepts,
            stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
                "DIAGNOSTIC",
-           stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
-               "DIAGNOSTIC",
+           nouveau_dma_map_state,
            stats.nouveau_pci_msi_fail_closed ? "FAIL_CLOSED" :
                "NOT_ATTEMPTED",
            stats.nouveau_pci_probe_accepts == 0 ? "NOT_CLAIMED" :
@@ -2530,9 +2593,26 @@ static int validate_backend(void)
         }
         if (stats.nouveau_pci_dma_mask_configured == 0 ||
             stats.nouveau_pci_dma_mask_bits < 32 ||
+            stats.nouveau_pci_dma_mask_requested_bits < 32 ||
+            stats.nouveau_pci_dma_mask_effective_bits < 32 ||
+            stats.nouveau_pci_dma_mask_bits !=
+                stats.nouveau_pci_dma_mask_effective_bits ||
             stats.nouveau_pci_coherent_dma_mask_configured == 0 ||
-            stats.nouveau_pci_coherent_dma_mask_bits < 32) {
+            stats.nouveau_pci_coherent_dma_mask_bits < 32 ||
+            stats.nouveau_pci_coherent_dma_mask_requested_bits < 32 ||
+            stats.nouveau_pci_coherent_dma_mask_effective_bits < 32 ||
+            stats.nouveau_pci_coherent_dma_mask_bits !=
+                stats.nouveau_pci_coherent_dma_mask_effective_bits) {
             note_fail("backend", "dda_nouveau_dma_mask_not_configured");
+            ok = 0;
+        }
+        if (stats.nouveau_pci_dma_map_api_present == 0 ||
+            stats.nouveau_pci_dma_map_attempts == 0 ||
+            stats.nouveau_pci_dma_map_successes == 0 ||
+            stats.nouveau_pci_dma_map_failures != 0 ||
+            stats.nouveau_pci_dma_unmaps !=
+                stats.nouveau_pci_dma_map_successes) {
+            note_fail("backend", "dda_nouveau_dma_map_not_validated");
             ok = 0;
         }
         if (stats.nouveau_pci_bar0_len != 0 &&
@@ -2602,7 +2682,13 @@ static int validate_backend(void)
             ok = 0;
         }
         if (stats.nouveau_pci_dma_mask_configured != 0 ||
+            stats.nouveau_pci_dma_mask_requested_bits != 0 ||
+            stats.nouveau_pci_dma_mask_effective_bits != 0 ||
+            stats.nouveau_pci_dma_mask_fallback_32 != 0 ||
             stats.nouveau_pci_coherent_dma_mask_configured != 0 ||
+            stats.nouveau_pci_coherent_dma_mask_requested_bits != 0 ||
+            stats.nouveau_pci_coherent_dma_mask_effective_bits != 0 ||
+            stats.nouveau_pci_coherent_dma_mask_fallback_32 != 0 ||
             stats.nouveau_pci_bar0_claimed != 0 ||
             stats.nouveau_pci_bar1_claimed != 0 ||
             stats.nouveau_pci_irq_vector_valid != 0 ||
@@ -2613,6 +2699,13 @@ static int validate_backend(void)
             stats.nouveau_pci_resource_owner_mismatches != 0 ||
             stats.nouveau_pci_unclaimed_iomaps != 0 ||
             stats.nouveau_pci_unclaimed_releases != 0 ||
+            stats.nouveau_pci_dma_map_attempts != 0 ||
+            stats.nouveau_pci_dma_map_successes != 0 ||
+            stats.nouveau_pci_dma_map_failures != 0 ||
+            stats.nouveau_pci_dma_unmaps != 0 ||
+            stats.nouveau_pci_dma_map_last_size != 0 ||
+            stats.nouveau_pci_dma_map_last_addr != 0 ||
+            stats.nouveau_pci_dma_map_last_ret != 0 ||
             stats.nouveau_pci_suspend_count != 0 ||
             stats.nouveau_pci_resume_count != 0 ||
             stats.nouveau_pci_runtime_suspended != 0) {
@@ -2667,7 +2760,8 @@ static int validate_backend(void)
     }
     if (ok) {
         printf("gpu_core_c_validator nouveau_pci_dma_resource_matrix "
-               "bar_claim=PASS dma_mask=PASS irq_diagnostics=PASS "
+               "bar_claim=PASS dma_mask=%s dma_map=%s "
+               "irq_diagnostics=PASS "
                "resource_owner=PASS claim_before_iomap=PASS "
                "release_balance=PASS owner_mismatch=0 "
                "unclaimed_iomap=0 unclaimed_release=0 "
@@ -2675,6 +2769,8 @@ static int validate_backend(void)
                "irq_delivery_claimed=%lu "
                "runtime_pm=PASS "
                "native_present_credit=0 status=PASS\n",
+               nouveau_dma_mask_state,
+               nouveau_dma_map_state,
                stats.nouveau_pci_irq_handler_registered,
                stats.nouveau_pci_irq_delivery_enabled,
                stats.nouveau_pci_irq_delivery_claimed);
@@ -2689,6 +2785,7 @@ static int validate_backend(void)
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=0 gpup_only=PASS dma_mask=NOT_CONFIGURED "
                    "coherent_dma_mask=NOT_CONFIGURED "
+                   "dma_map=GPU_P_FAIL_CLOSED "
                    "bar_claim=NOT_ATTEMPTED "
                    "msi_msix_setup=NOT_ATTEMPTED "
                    "legacy_irq_fallback=NOT_CLAIMED "
@@ -2713,7 +2810,7 @@ static int validate_backend(void)
         } else {
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=%lu gpup_only=NO dma_mask=PASS "
-                   "coherent_dma_mask=PASS bar_claim=PASS "
+                   "coherent_dma_mask=PASS dma_map=PASS bar_claim=PASS "
                    "msi_msix_setup=%s legacy_irq_fallback=%s "
                    "irq_handler=%s irq_delivery=%s "
                    "runtime_pm_usage=DIAGNOSTIC remove_path=%s "
