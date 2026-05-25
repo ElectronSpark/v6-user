@@ -1026,7 +1026,7 @@ static int check_primary(int fd)
     struct drm_mode_modeinfo_compat blob_mode;
     struct {
         struct drm_format_modifier_blob_compat header;
-        uint32 formats[2];
+        uint32 formats[4];
         struct drm_format_modifier_compat modifiers[1];
     } in_formats;
     uint32 plane_ids[2];
@@ -1162,10 +1162,11 @@ static int check_primary(int fd)
     plane.count_format_types = 4;
     if (ioctl(fd, DRM_IOCTL_MODE_GETPLANE, &plane) < 0 ||
         plane.crtc_id == 0 || plane.possible_crtcs == 0 ||
-        plane.count_format_types != 2 ||
+        plane.count_format_types != 4 ||
         formats[0] != DRM_FORMAT_XRGB8888 ||
         formats[1] != DRM_FORMAT_ARGB8888 ||
-        formats[2] != 0)
+        formats[2] != DRM_FORMAT_XBGR8888 ||
+        formats[3] != DRM_FORMAT_ABGR8888)
         return fail("GETPLANE failed");
 
     memset(obj_props, 0, sizeof(obj_props));
@@ -1220,7 +1221,7 @@ static int check_primary(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0 ||
         blob.length != sizeof(in_formats) ||
         in_formats.header.version != 1 ||
-        in_formats.header.count_formats != 2 ||
+        in_formats.header.count_formats != 4 ||
         in_formats.header.count_modifiers != 1 ||
         in_formats.header.formats_offset !=
             (uint32)((char *)&in_formats.formats[0] - (char *)&in_formats) ||
@@ -1229,14 +1230,23 @@ static int check_primary(int fd)
                      (char *)&in_formats) ||
         in_formats.formats[0] != DRM_FORMAT_XRGB8888 ||
         in_formats.formats[1] != DRM_FORMAT_ARGB8888 ||
-        in_formats.modifiers[0].formats != 0x3 ||
+        in_formats.formats[2] != DRM_FORMAT_XBGR8888 ||
+        in_formats.formats[3] != DRM_FORMAT_ABGR8888 ||
+        in_formats.modifiers[0].formats != 0xf ||
         in_formats.modifiers[0].offset != 0 ||
         in_formats.modifiers[0].modifier != DRM_FORMAT_MOD_LINEAR)
         return fail("IN_FORMATS blob failed");
     printf("drmiftest: kms_in_formats_blob_matrix "
            "cap_addfb2_modifiers=1 in_formats_blob=PASS "
-           "xrgb8888_linear=1 argb8888_linear=1 nv12_scanout=0 "
+           "xrgb8888_linear=1 argb8888_linear=1 "
+           "xbgr8888_linear=1 abgr8888_linear=1 nv12_scanout=0 "
            "nonlinear_modifiers=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("drmiftest: kms_primary_scanout_format_mod_matrix "
+           "getplane_matches_in_formats=PASS scanout_format_count=4 "
+           "xrgb8888_linear=1 argb8888_linear=1 "
+           "xbgr8888_linear=1 abgr8888_linear=1 "
+           "nv12_scanout=0 modifier_check=PASS native_present_credit=0 "
            "opengl_submit_credit=0 status=PASS\n");
 
     if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) < 0)
@@ -1429,6 +1439,7 @@ static int check_kms_fb(int fd)
     struct drm_mode_atomic_compat atomic;
     struct drm_mode_get_plane_res_compat plane_res;
     struct drm_mode_get_plane_compat plane;
+    struct drm_mode_obj_set_property_compat obj_set;
     struct drm_mode_destroy_dumb_compat destroy;
     union drm_wait_vblank_compat vblank;
     struct drm_crtc_get_sequence_compat crtc_seq;
@@ -1440,6 +1451,8 @@ static int check_kms_fb(int fd)
     struct fb_gpu_stats vblank_after;
     struct fb_gpu_stats present_fail_before;
     struct fb_gpu_stats present_fail_after;
+    struct fb_gpu_stats xbgr_before;
+    struct fb_gpu_stats xbgr_after;
     struct atomic_test_fence_source present_fail_fence_source;
     uint32 plane_ids[2];
     uint32 objs[2];
@@ -1461,6 +1474,7 @@ static int check_kms_fb(int fd)
     uint64 crtc_sequence_sample = 0;
     uint32 fb_id = 0;
     uint32 nvfb_id = 0;
+    uint32 xbgr_fb_id = 0;
     int present_fail_in_fence_fd = -1;
     int32 out_fence = -2;
 
@@ -1514,6 +1528,18 @@ static int check_kms_fb(int fd)
     fb_legacy.handle = create.handle;
     if (ioctl(fd, DRM_IOCTL_MODE_ADDFB, &fb_legacy) >= 0)
         return fail("legacy ADDFB unexpectedly enabled");
+
+    memset(&fb, 0, sizeof(fb));
+    fb.width = create.width;
+    fb.height = create.height;
+    fb.pixel_format = DRM_FORMAT_XBGR8888;
+    fb.handles[0] = create.handle;
+    fb.pitches[0] = create.pitch;
+    fb.flags = DRM_MODE_FB_MODIFIERS;
+    fb.modifier[0] = DRM_FORMAT_MOD_LINEAR;
+    if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0 || fb.fb_id == 0)
+        return fail("XBGR8888 ADDFB2 failed");
+    xbgr_fb_id = fb.fb_id;
 
     memset(&nvcreate, 0, sizeof(nvcreate));
     nvcreate.width = 96;
@@ -1576,6 +1602,24 @@ static int check_kms_fb(int fd)
     crtc.fb_id = fb_id;
     if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
         return fail("SETCRTC failed");
+    if (get_fb_stats(&xbgr_before) < 0)
+        return fail("XBGR8888 stats before failed");
+    crtc.fb_id = xbgr_fb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
+        return fail("XBGR8888 SETCRTC failed");
+    if (get_fb_stats(&xbgr_after) < 0 ||
+        xbgr_after.display_presents <= xbgr_before.display_presents ||
+        xbgr_after.rejected_blits != xbgr_before.rejected_blits)
+        return fail("XBGR8888 present stats failed");
+    crtc.fb_id = fb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
+        return fail("SETCRTC restore failed");
+    printf("drmiftest: kms_primary_scanout_actual_format_matrix "
+           "xrgb8888_present=PASS xbgr8888_present=PASS "
+           "xbgr8888_rb_swap=CPU_CONVERT display_delta=%lu "
+           "rejected_blits_delta=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n",
+           xbgr_after.display_presents - xbgr_before.display_presents);
     memset(&crtc, 0, sizeof(crtc));
     crtc.crtc_id = 0xfeedface;
     crtc.fb_id = fb_id;
@@ -1856,6 +1900,16 @@ static int check_kms_fb(int fd)
     values[8] = create.height;
     if (plane_fb_id(fd, plane_ids[0], &atomic_plane_before) < 0)
         return fail("present fail-closed baseline plane failed");
+    memset(&obj_set, 0, sizeof(obj_set));
+    obj_set.obj_id = plane_ids[0];
+    obj_set.obj_type = DRM_MODE_OBJECT_PLANE;
+    obj_set.prop_id = plane_fb_prop;
+    obj_set.value = nvfb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &obj_set) >= 0)
+        return fail("NV12 OBJ_SETPROPERTY unexpectedly accepted");
+    if (plane_fb_id(fd, plane_ids[0], &atomic_plane_after) < 0 ||
+        atomic_plane_after != atomic_plane_before)
+        return fail("NV12 OBJ_SETPROPERTY changed plane state");
     if (open_atomic_test_fence_source(&present_fail_fence_source) < 0)
         return fail("present fail-closed fence source failed");
     present_fail_in_fence_fd =
@@ -1976,6 +2030,8 @@ static int check_kms_fb(int fd)
     printf("drmiftest: kms_present_completion_failclosed_matrix "
            "unsupported_format=NV12 setcrtc_present_fail_closed=PASS "
            "plane_formats_scanout_exclude_nv12=PASS "
+           "obj_setproperty_nv12_rejected=PASS "
+           "obj_setproperty_state_unchanged=PASS "
            "page_flip_present_fail_closed=PASS "
            "page_flip_no_event=PASS page_flip_events_delta=%lu "
            "page_flip_flips_delta=%lu "
@@ -2113,6 +2169,8 @@ static int check_kms_fb(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_CLOSEFB, &closefb) >= 0)
         return fail("CLOSEFB accepted active framebuffer");
 
+    if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &xbgr_fb_id) < 0)
+        return fail("XBGR8888 RMFB failed");
     if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) < 0)
         return fail("RMFB failed");
     memset(&destroy, 0, sizeof(destroy));
