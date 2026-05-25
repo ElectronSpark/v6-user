@@ -2289,6 +2289,9 @@ static int validate_backend(void)
            "irq_alloc=%lu/%lu msi=%lu/%lu msix=%lu/%lu "
            "legacy_irq=%lu/%lu irq_cause=%lu/%lu/%lu/%lu "
            "pm=%lu/%lu balanced=%lu remove_suspended=%lu "
+           "remove_calls=%lu remove_resume=%lu/%lu barriers=%lu "
+           "remove_active=%lu hot_remove=%lu removed=%lu "
+           "teardown=%lu/%lu/%lu/%lu/%lu/%lu "
            "native_present_credit=%lu dxg_present_transport=%lu "
            "dxg_render=%lu dxg_display=%lu dxg_sources=%lu "
            "dxg_sources_known=%lu dda_present=%lu dda_import=%lu "
@@ -2337,6 +2340,19 @@ static int validate_backend(void)
            stats.nouveau_pci_resume_count,
            stats.nouveau_pci_runtime_pm_balanced,
            stats.nouveau_pci_remove_runtime_suspended,
+           stats.nouveau_pci_remove_calls,
+           stats.nouveau_pci_remove_runtime_resume_attempts,
+           stats.nouveau_pci_remove_runtime_resume_successes,
+           stats.nouveau_pci_remove_runtime_barriers,
+           stats.nouveau_pci_remove_active_before_callback,
+           stats.nouveau_pci_hot_remove_events,
+           stats.nouveau_pci_removed,
+           stats.nouveau_pci_bar_iounmaps,
+           stats.nouveau_pci_irq_unregisters,
+           stats.nouveau_pci_irq_vectors_freed,
+           stats.nouveau_pci_bus_master_clears,
+           stats.nouveau_pci_device_disables,
+           stats.nouveau_pci_drvdata_cleared,
            stats.nouveau_pci_native_present_credit,
            stats.dxg_present_helper_transport_present,
            stats.dxg_present_dxg_adapter_render_supported,
@@ -2400,6 +2416,12 @@ static int validate_backend(void)
            "irq_cause_valid=%lu irq_cause_acks=%lu irq_spurious=%lu "
            "suspend_count=%lu resume_count=%lu "
            "pm_balanced=%lu remove_while_suspended=%lu "
+           "remove_calls=%lu remove_resume_attempts=%lu "
+           "remove_resume_successes=%lu remove_barriers=%lu "
+           "remove_active_before_callback=%lu hot_remove_events=%lu "
+           "removed=%lu bar_iounmaps=%lu irq_unregisters=%lu "
+           "irq_vectors_freed=%lu bus_master_clears=%lu "
+           "device_disables=%lu drvdata_cleared=%lu "
            "native_present_credit=%lu status=PENDING\n",
            stats.nouveau_pci_registered,
            stats.nouveau_pci_probe_accepts,
@@ -2462,6 +2484,19 @@ static int validate_backend(void)
            stats.nouveau_pci_resume_count,
            stats.nouveau_pci_runtime_pm_balanced,
            stats.nouveau_pci_remove_runtime_suspended,
+           stats.nouveau_pci_remove_calls,
+           stats.nouveau_pci_remove_runtime_resume_attempts,
+           stats.nouveau_pci_remove_runtime_resume_successes,
+           stats.nouveau_pci_remove_runtime_barriers,
+           stats.nouveau_pci_remove_active_before_callback,
+           stats.nouveau_pci_hot_remove_events,
+           stats.nouveau_pci_removed,
+           stats.nouveau_pci_bar_iounmaps,
+           stats.nouveau_pci_irq_unregisters,
+           stats.nouveau_pci_irq_vectors_freed,
+           stats.nouveau_pci_bus_master_clears,
+           stats.nouveau_pci_device_disables,
+           stats.nouveau_pci_drvdata_cleared,
            stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
            "accepts=%lu gpup_only=%s dma_mask=%s coherent_dma_mask=%s "
@@ -2549,6 +2584,39 @@ static int validate_backend(void)
            stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
                (stats.nouveau_pci_irq_cause_acks != 0 ? "PASS" :
                                                          "DIAGNOSTIC"),
+           stats.nouveau_pci_native_present_credit);
+    printf("gpu_core_c_validator nouveau_pci_remove_pm_matrix "
+           "accepts=%lu remove_calls=%lu runtime_resume_attempts=%lu "
+           "runtime_resume_successes=%lu runtime_barriers=%lu "
+           "runtime_resume_before_remove=%s remove_while_suspended=%lu "
+           "hot_remove_events=%lu removed=%lu bar_iounmaps=%lu "
+           "irq_unregisters=%lu irq_vectors_freed=%lu "
+           "bus_master_clears=%lu device_disables=%lu "
+           "drvdata_cleared=%lu teardown=%s native_present_credit=%lu "
+           "opengl_submit_credit=0 status=PENDING\n",
+           stats.nouveau_pci_probe_accepts,
+           stats.nouveau_pci_remove_calls,
+           stats.nouveau_pci_remove_runtime_resume_attempts,
+           stats.nouveau_pci_remove_runtime_resume_successes,
+           stats.nouveau_pci_remove_runtime_barriers,
+           stats.nouveau_pci_probe_accepts == 0 ? "NOT_APPLICABLE" :
+               (stats.nouveau_pci_removes == 0 ? "DEFERRED" :
+                   (stats.nouveau_pci_remove_runtime_suspended == 0 ?
+                        "PASS" : "FAIL")),
+           stats.nouveau_pci_remove_runtime_suspended,
+           stats.nouveau_pci_hot_remove_events,
+           stats.nouveau_pci_removed,
+           stats.nouveau_pci_bar_iounmaps,
+           stats.nouveau_pci_irq_unregisters,
+           stats.nouveau_pci_irq_vectors_freed,
+           stats.nouveau_pci_bus_master_clears,
+           stats.nouveau_pci_device_disables,
+           stats.nouveau_pci_drvdata_cleared,
+           stats.nouveau_pci_probe_accepts == 0 ? "GPU_P_FAIL_CLOSED" :
+               (stats.nouveau_pci_removes == 0 ? "DEFERRED" :
+                   (stats.nouveau_pci_drvdata_cleared != 0 &&
+                    stats.nouveau_pci_device_disables != 0 ? "PASS" :
+                                                             "FAIL")),
            stats.nouveau_pci_native_present_credit);
     printf("gpu_core_c_validator nouveau_getparam_provenance_matrix "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
@@ -2703,8 +2771,17 @@ static int validate_backend(void)
         }
         if (stats.nouveau_pci_irq_delivery_claimed != 0 &&
             (stats.nouveau_pci_irq_handler_registered == 0 ||
-             stats.nouveau_pci_irq_delivery_enabled == 0)) {
-            note_fail("backend", "dda_nouveau_irq_delivery_without_handler");
+             stats.nouveau_pci_irq_delivery_enabled == 0 ||
+             stats.nouveau_pci_irq_cause_valid == 0 ||
+             stats.nouveau_pci_irq_cause_acks == 0)) {
+            note_fail("backend", "dda_nouveau_irq_delivery_without_cause_ack");
+            ok = 0;
+        }
+        if (stats.nouveau_pci_remove_runtime_resume_successes >
+                stats.nouveau_pci_remove_runtime_resume_attempts ||
+            stats.nouveau_pci_remove_runtime_resume_attempts >
+                stats.nouveau_pci_remove_runtime_barriers) {
+            note_fail("backend", "dda_nouveau_remove_pm_order_broken");
             ok = 0;
         }
         if (stats.nouveau_getparams !=
@@ -2779,7 +2856,20 @@ static int validate_backend(void)
             stats.nouveau_pci_dma_map_last_ret != 0 ||
             stats.nouveau_pci_suspend_count != 0 ||
             stats.nouveau_pci_resume_count != 0 ||
-            stats.nouveau_pci_runtime_suspended != 0) {
+            stats.nouveau_pci_runtime_suspended != 0 ||
+            stats.nouveau_pci_remove_calls != 0 ||
+            stats.nouveau_pci_remove_runtime_resume_attempts != 0 ||
+            stats.nouveau_pci_remove_runtime_resume_successes != 0 ||
+            stats.nouveau_pci_remove_runtime_barriers != 0 ||
+            stats.nouveau_pci_remove_active_before_callback != 0 ||
+            stats.nouveau_pci_hot_remove_events != 0 ||
+            stats.nouveau_pci_removed != 0 ||
+            stats.nouveau_pci_bar_iounmaps != 0 ||
+            stats.nouveau_pci_irq_unregisters != 0 ||
+            stats.nouveau_pci_irq_vectors_freed != 0 ||
+            stats.nouveau_pci_bus_master_clears != 0 ||
+            stats.nouveau_pci_device_disables != 0 ||
+            stats.nouveau_pci_drvdata_cleared != 0) {
             note_fail("backend", "nouveau_pci_resources_without_accept");
             ok = 0;
         }
@@ -2807,8 +2897,11 @@ static int validate_backend(void)
             stats.nouveau_pci_irq_cause_reads ||
         stats.nouveau_pci_irq_cause_acks >
             stats.nouveau_pci_irq_cause_valid ||
-        stats.nouveau_pci_irq_handler_invocations <
-            stats.nouveau_pci_irq_delivery_claimed) {
+        stats.nouveau_pci_irq_cause_reads >
+            stats.nouveau_pci_irq_handler_invocations ||
+        (stats.nouveau_pci_irq_delivery_claimed != 0 &&
+         (stats.nouveau_pci_irq_cause_valid == 0 ||
+          stats.nouveau_pci_irq_cause_acks == 0))) {
         note_fail("backend", "nouveau_pci_irq_provenance_inconsistent");
         ok = 0;
     }
@@ -2896,6 +2989,16 @@ static int validate_backend(void)
                    "device_cause=GPU_P_FAIL_CLOSED "
                    "native_present_credit=0 opengl_submit_credit=0 "
                    "status=PASS\n");
+            printf("gpu_core_c_validator nouveau_pci_remove_pm_matrix "
+                   "accepts=0 remove_calls=0 runtime_resume_attempts=0 "
+                   "runtime_resume_successes=0 runtime_barriers=0 "
+                   "runtime_resume_before_remove=NOT_APPLICABLE "
+                   "remove_while_suspended=0 hot_remove_events=0 "
+                   "removed=0 bar_iounmaps=0 irq_unregisters=0 "
+                   "irq_vectors_freed=0 bus_master_clears=0 "
+                   "device_disables=0 drvdata_cleared=0 "
+                   "teardown=GPU_P_FAIL_CLOSED native_present_credit=0 "
+                   "opengl_submit_credit=0 status=PASS\n");
         } else {
             printf("gpu_core_c_validator nouveau_pci_runtime_contract_matrix "
                    "accepts=%lu gpup_only=NO dma_mask=PASS "
@@ -2960,12 +3063,45 @@ static int validate_backend(void)
                    stats.nouveau_pci_irq_spurious,
                    stats.nouveau_pci_irq_cause_acks != 0 ? "PASS" :
                                                             "DIAGNOSTIC");
+            printf("gpu_core_c_validator nouveau_pci_remove_pm_matrix "
+                   "accepts=%lu remove_calls=%lu "
+                   "runtime_resume_attempts=%lu "
+                   "runtime_resume_successes=%lu runtime_barriers=%lu "
+                   "runtime_resume_before_remove=%s "
+                   "remove_while_suspended=%lu hot_remove_events=%lu "
+                   "removed=%lu bar_iounmaps=%lu irq_unregisters=%lu "
+                   "irq_vectors_freed=%lu bus_master_clears=%lu "
+                   "device_disables=%lu drvdata_cleared=%lu "
+                   "teardown=%s native_present_credit=0 "
+                   "opengl_submit_credit=0 status=DIAGNOSTIC\n",
+                   stats.nouveau_pci_probe_accepts,
+                   stats.nouveau_pci_remove_calls,
+                   stats.nouveau_pci_remove_runtime_resume_attempts,
+                   stats.nouveau_pci_remove_runtime_resume_successes,
+                   stats.nouveau_pci_remove_runtime_barriers,
+                   stats.nouveau_pci_removes == 0 ? "DEFERRED" :
+                       (stats.nouveau_pci_remove_runtime_suspended == 0 ?
+                            "PASS" : "FAIL"),
+                   stats.nouveau_pci_remove_runtime_suspended,
+                   stats.nouveau_pci_hot_remove_events,
+                   stats.nouveau_pci_removed,
+                   stats.nouveau_pci_bar_iounmaps,
+                   stats.nouveau_pci_irq_unregisters,
+                   stats.nouveau_pci_irq_vectors_freed,
+                   stats.nouveau_pci_bus_master_clears,
+                   stats.nouveau_pci_device_disables,
+                   stats.nouveau_pci_drvdata_cleared,
+                   stats.nouveau_pci_removes == 0 ? "DEFERRED" :
+                       (stats.nouveau_pci_drvdata_cleared != 0 &&
+                        stats.nouveau_pci_device_disables != 0 ? "PASS" :
+                                                                 "FAIL"));
         }
         if (stats.nouveau_pci_probe_accepts == 0) {
             printf("gpu_core_c_validator nouveau_gpup_failclosed_matrix "
                    "accepts=0 backend_dda_nouveau=0 reject_reason=PASS "
                    "no_fake_bar=PASS no_fake_dma=PASS no_fake_irq=PASS "
-                   "no_fake_getparam=PASS no_fake_present=PASS "
+                   "no_fake_getparam=PASS no_fake_remove=PASS "
+                   "no_fake_present=PASS "
                    "native_present_credit=0 opengl_submit_credit=0 "
                    "status=PASS\n");
         }

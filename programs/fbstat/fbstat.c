@@ -793,6 +793,31 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_runtime_pm_balanced);
     printf("nouveau_pci_remove_runtime_suspended %lu\n",
            stats.nouveau_pci_remove_runtime_suspended);
+    printf("nouveau_pci_remove_calls %lu\n",
+           stats.nouveau_pci_remove_calls);
+    printf("nouveau_pci_remove_runtime_resume_attempts %lu\n",
+           stats.nouveau_pci_remove_runtime_resume_attempts);
+    printf("nouveau_pci_remove_runtime_resume_successes %lu\n",
+           stats.nouveau_pci_remove_runtime_resume_successes);
+    printf("nouveau_pci_remove_runtime_barriers %lu\n",
+           stats.nouveau_pci_remove_runtime_barriers);
+    printf("nouveau_pci_remove_active_before_callback %lu\n",
+           stats.nouveau_pci_remove_active_before_callback);
+    printf("nouveau_pci_hot_remove_events %lu\n",
+           stats.nouveau_pci_hot_remove_events);
+    printf("nouveau_pci_removed %lu\n", stats.nouveau_pci_removed);
+    printf("nouveau_pci_bar_iounmaps %lu\n",
+           stats.nouveau_pci_bar_iounmaps);
+    printf("nouveau_pci_irq_unregisters %lu\n",
+           stats.nouveau_pci_irq_unregisters);
+    printf("nouveau_pci_irq_vectors_freed %lu\n",
+           stats.nouveau_pci_irq_vectors_freed);
+    printf("nouveau_pci_bus_master_clears %lu\n",
+           stats.nouveau_pci_bus_master_clears);
+    printf("nouveau_pci_device_disables %lu\n",
+           stats.nouveau_pci_device_disables);
+    printf("nouveau_pci_drvdata_cleared %lu\n",
+           stats.nouveau_pci_drvdata_cleared);
     printf("nouveau_pci_bar0_len %lu\n", stats.nouveau_pci_bar0_len);
     printf("nouveau_pci_bar1_len %lu\n", stats.nouveau_pci_bar1_len);
     printf("nouveau_pci_irq %lu\n", stats.nouveau_pci_irq);
@@ -926,7 +951,13 @@ int main(int argc, char *argv[])
            "dma_map_failures=%lu dma_unmaps=%lu dma_last_size=%lu "
            "dma_last_addr=0x%lx dma_last_ret=%lu "
            "suspend_count=%lu resume_count=%lu pm_balanced=%lu "
-           "remove_while_suspended=%lu "
+           "remove_while_suspended=%lu remove_calls=%lu "
+           "remove_resume_attempts=%lu remove_resume_successes=%lu "
+           "remove_barriers=%lu remove_active_before_callback=%lu "
+           "hot_remove_events=%lu removed=%lu bar_iounmaps=%lu "
+           "irq_unregisters=%lu irq_vectors_freed=%lu "
+           "bus_master_clears=%lu device_disables=%lu "
+           "drvdata_cleared=%lu "
            "native_present_credit=%lu\n",
            stats.nouveau_pci_registered,
            stats.nouveau_pci_probe_accepts,
@@ -988,6 +1019,19 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_resume_count,
            stats.nouveau_pci_runtime_pm_balanced,
            stats.nouveau_pci_remove_runtime_suspended,
+           stats.nouveau_pci_remove_calls,
+           stats.nouveau_pci_remove_runtime_resume_attempts,
+           stats.nouveau_pci_remove_runtime_resume_successes,
+           stats.nouveau_pci_remove_runtime_barriers,
+           stats.nouveau_pci_remove_active_before_callback,
+           stats.nouveau_pci_hot_remove_events,
+           stats.nouveau_pci_removed,
+           stats.nouveau_pci_bar_iounmaps,
+           stats.nouveau_pci_irq_unregisters,
+           stats.nouveau_pci_irq_vectors_freed,
+           stats.nouveau_pci_bus_master_clears,
+           stats.nouveau_pci_device_disables,
+           stats.nouveau_pci_drvdata_cleared,
            stats.nouveau_pci_native_present_credit);
     {
         const int accepts = stats.nouveau_pci_probe_accepts != 0;
@@ -1111,6 +1155,44 @@ int main(int argc, char *argv[])
                irq_cause,
                stats.nouveau_pci_native_present_credit,
                accepts ? "DIAGNOSTIC" : "PASS");
+        printf("nouveau_pci_remove_pm_matrix "
+               "accepts=%lu remove_calls=%lu "
+               "runtime_resume_attempts=%lu "
+               "runtime_resume_successes=%lu runtime_barriers=%lu "
+               "runtime_resume_before_remove=%s "
+               "remove_while_suspended=%lu hot_remove_events=%lu "
+               "removed=%lu bar_iounmaps=%lu irq_unregisters=%lu "
+               "irq_vectors_freed=%lu bus_master_clears=%lu "
+               "device_disables=%lu drvdata_cleared=%lu "
+               "teardown=%s native_present_credit=%lu "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               stats.nouveau_pci_remove_calls,
+               stats.nouveau_pci_remove_runtime_resume_attempts,
+               stats.nouveau_pci_remove_runtime_resume_successes,
+               stats.nouveau_pci_remove_runtime_barriers,
+               accepts ? (stats.nouveau_pci_removes == 0 ?
+                              "DEFERRED" :
+                              (stats.nouveau_pci_remove_runtime_suspended == 0 ?
+                                   "PASS" : "FAIL")) :
+                         "NOT_APPLICABLE",
+               stats.nouveau_pci_remove_runtime_suspended,
+               stats.nouveau_pci_hot_remove_events,
+               stats.nouveau_pci_removed,
+               stats.nouveau_pci_bar_iounmaps,
+               stats.nouveau_pci_irq_unregisters,
+               stats.nouveau_pci_irq_vectors_freed,
+               stats.nouveau_pci_bus_master_clears,
+               stats.nouveau_pci_device_disables,
+               stats.nouveau_pci_drvdata_cleared,
+               accepts ? (stats.nouveau_pci_removes == 0 ?
+                              "DEFERRED" :
+                              (stats.nouveau_pci_drvdata_cleared != 0 &&
+                               stats.nouveau_pci_device_disables != 0 ?
+                                   "PASS" : "FAIL")) :
+                         "GPU_P_FAIL_CLOSED",
+               stats.nouveau_pci_native_present_credit,
+               accepts ? "DIAGNOSTIC" : "PASS");
     }
     printf("nouveau_getparam_provenance_matrix stats "
            "getparams=%lu dda_facts=%lu synthetic_facts=%lu "
@@ -1175,6 +1257,20 @@ int main(int argc, char *argv[])
             stats.dxg_present_dda_nouveau_import_path_present == 0 &&
             stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
             (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) == 0;
+        int no_fake_remove =
+            stats.nouveau_pci_remove_calls == 0 &&
+            stats.nouveau_pci_remove_runtime_resume_attempts == 0 &&
+            stats.nouveau_pci_remove_runtime_resume_successes == 0 &&
+            stats.nouveau_pci_remove_runtime_barriers == 0 &&
+            stats.nouveau_pci_remove_active_before_callback == 0 &&
+            stats.nouveau_pci_hot_remove_events == 0 &&
+            stats.nouveau_pci_removed == 0 &&
+            stats.nouveau_pci_bar_iounmaps == 0 &&
+            stats.nouveau_pci_irq_unregisters == 0 &&
+            stats.nouveau_pci_irq_vectors_freed == 0 &&
+            stats.nouveau_pci_bus_master_clears == 0 &&
+            stats.nouveau_pci_device_disables == 0 &&
+            stats.nouveau_pci_drvdata_cleared == 0;
         int rejected =
             stats.nouveau_pci_probes == 0 ||
             stats.nouveau_pci_probe_reject_dxg_present != 0 ||
@@ -1183,16 +1279,19 @@ int main(int argc, char *argv[])
         printf("nouveau_gpup_failclosed_matrix "
                "accepts=0 backend_dda_nouveau=0 reject_reason=%s "
                "no_fake_bar=%s no_fake_dma=%s no_fake_irq=%s "
-               "no_fake_getparam=%s no_fake_present=%s "
+               "no_fake_getparam=%s no_fake_remove=%s "
+               "no_fake_present=%s "
                "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
                rejected ? "PASS" : "MISSING",
                no_fake_bar ? "PASS" : "FAIL",
                no_fake_dma ? "PASS" : "FAIL",
                no_fake_irq ? "PASS" : "FAIL",
                no_fake_getparams ? "PASS" : "FAIL",
+               no_fake_remove ? "PASS" : "FAIL",
                no_fake_present ? "PASS" : "FAIL",
                (rejected && no_fake_bar && no_fake_dma && no_fake_irq &&
-               no_fake_getparams && no_fake_present) ? "PASS" : "FAIL");
+               no_fake_getparams && no_fake_remove && no_fake_present) ?
+                   "PASS" : "FAIL");
     }
     if (stats.nouveau_pci_probe_accepts != 0) {
         int balanced =
