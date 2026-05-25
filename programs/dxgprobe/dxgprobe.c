@@ -10602,6 +10602,22 @@ out:
                query.helper_transport_present == 0 &&
                query.display_target_kind == FB_GPU_DXG_DISPLAY_TARGET_NONE ?
                "PASS" : "FAIL");
+    printf("wsl_standard_alloc_surface_abi_matrix "
+           "shared_primary_size=%lu shadow_size=%lu staging_size=%lu "
+           "gdi_size=%lu command_union=sharedprimary,shadow,staging,gdi "
+           "wsl_reference=drivers/hv/dxgkrnl/dxgvmbus.h "
+           "standard_alloc_role=private_driver_data "
+           "selected_lane=gpup_dxg_scanout_bind display_bind_ioctl=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           (uint64)sizeof(struct d3dkmdt_sharedprimarysurfacedata),
+           (uint64)sizeof(struct d3dkmdt_shadowsurfacedata),
+           (uint64)sizeof(struct d3dkmdt_stagingsurfacedata),
+           (uint64)sizeof(struct d3dkmdt_gdisurfacedata),
+           sizeof(struct d3dkmdt_sharedprimarysurfacedata) == 24 &&
+                   sizeof(struct d3dkmdt_shadowsurfacedata) == 16 &&
+                   sizeof(struct d3dkmdt_stagingsurfacedata) == 12 &&
+                   sizeof(struct d3dkmdt_gdisurfacedata) == 24 ?
+               "PASS" : "FAIL");
 
     if (fb_fd >= 0)
         close(fb_fd);

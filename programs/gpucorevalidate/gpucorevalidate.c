@@ -1997,6 +1997,30 @@ static int validate_present_source_matrix(void)
                               output,
                               "dxg_resource_scanout_bind_host_abi_matrix",
                               "status=PASS");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "wsl_standard_alloc_surface_abi_matrix");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "shared_primary_size=24");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "shadow_size=16");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "staging_size=12");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "gdi_size=24");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "command_union=sharedprimary,shadow,staging,gdi");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "standard_alloc_role=private_driver_data");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "display_bind_ioctl=0");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("wsl_standard_alloc_surface_abi_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("wsl_standard_alloc_surface_abi_matrix",
+                              output,
+                              "wsl_standard_alloc_surface_abi_matrix",
+                              "status=PASS");
 
     if (failures != before)
         return -1;
@@ -2048,6 +2072,12 @@ static int validate_present_source_matrix(void)
            "transport_present=0 display_target_kind=0 present_id=0 "
            "completed=0 native_present_credit=0 opengl_submit_credit=0 "
            "status=PASS\n");
+    printf("gpu_core_c_validator "
+           "wsl_standard_alloc_surface_abi_matrix "
+           "shared_primary_size=24 shadow_size=16 staging_size=12 "
+           "gdi_size=24 command_union=sharedprimary,shadow,staging,gdi "
+           "standard_alloc_role=private_driver_data display_bind_ioctl=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
     return 0;
 }
 
