@@ -407,6 +407,25 @@ int main(int argc, char *argv[])
         printf("dxg_vgpu_open %u\n", backend.dxg_vgpu_open);
         printf("dxg_global_status %u\n", backend.dxg_global_status);
         printf("dxg_vgpu_status %u\n", backend.dxg_vgpu_status);
+        printf("hyperv_opengl_submit_gate_matrix "
+               "backend=%s backend_opengl_submit=%u "
+               "requires_native_present=1 requires_finite_fps=1 "
+               "requires_webkit_shared_surface=1 "
+               "native_present_credit=%lu display_target_kind=%lu "
+               "present_id=%lu completed=%lu "
+               "backend_gate=%s status=%s\n",
+               backend_name(backend.backend),
+               backend_opengl_submit,
+               0UL,
+               stats.dxg_present_display_target_kind,
+               0UL,
+               0UL,
+               backend_opengl_submit ? "open" : "closed",
+               backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+                       backend_opengl_submit == 0 &&
+                       stats.dxg_present_display_target_kind ==
+                           FB_GPU_DXG_DISPLAY_TARGET_NONE ?
+                   "PASS" : "DIAGNOSTIC");
     }
     printf("gpu_diagnostics_separation_matrix "
            "generic_scanout=drm-kms-fb generic_scanout_prefixes=drm,kms,fb "

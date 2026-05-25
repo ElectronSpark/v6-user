@@ -2170,6 +2170,22 @@ static int validate_backend(void)
            stats.dxg_present_dda_nouveau_present,
            stats.dxg_present_dda_nouveau_import_path_present,
            stats.dxg_present_dda_nouveau_scanout_bind_present);
+    printf("gpu_core_c_validator hyperv_opengl_submit_gate_matrix "
+           "backend=%u backend_opengl_submit=%u "
+           "requires_native_present=1 requires_finite_fps=1 "
+           "requires_webkit_shared_surface=1 native_present_credit=0 "
+           "display_target_kind=%lu present_id=0 completed=0 "
+           "backend_gate=%s status=%s\n",
+           backend.backend,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           stats.dxg_present_display_target_kind,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0 ?
+               "open" : "closed",
+           backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
+                   (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0 &&
+                   stats.dxg_present_display_target_kind ==
+                       FB_GPU_DXG_DISPLAY_TARGET_NONE ?
+               "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator nouveau_pci_dma_resource_matrix "
            "registered=%lu accepts=%lu reject_dxg_present=%lu "
            "reject_no_bars=%lu dma_mask_configured=%lu "
