@@ -29,6 +29,14 @@ struct ttm_resv_stats {
     uint64 validate_failures;
     uint64 pinned_bytes;
     uint64 native_accel_credit;
+    uint64 ww_contexts;
+    uint64 ww_ordered_acquires;
+    uint64 ww_deadlock_retries;
+    uint64 ww_wound_backoffs;
+    uint64 ww_multi_object;
+    uint64 ww_release_balance;
+    uint64 ww_max_acquired;
+    uint64 ww_validate_failures;
 };
 
 struct ttm_move_path_stats {
@@ -70,6 +78,14 @@ static int read_ttm_resv_stats(int fd, struct ttm_resv_stats *snap)
     snap->validate_failures = stats.ttm_validate_failures;
     snap->pinned_bytes = stats.ttm_pinned_bytes;
     snap->native_accel_credit = stats.ttm_native_accel_credit;
+    snap->ww_contexts = stats.ttm_resv_ww_contexts;
+    snap->ww_ordered_acquires = stats.ttm_resv_ww_ordered_acquires;
+    snap->ww_deadlock_retries = stats.ttm_resv_ww_deadlock_retries;
+    snap->ww_wound_backoffs = stats.ttm_resv_ww_wound_backoffs;
+    snap->ww_multi_object = stats.ttm_resv_ww_multi_object;
+    snap->ww_release_balance = stats.ttm_resv_ww_release_balance;
+    snap->ww_max_acquired = stats.ttm_resv_ww_max_acquired;
+    snap->ww_validate_failures = stats.ttm_resv_ww_validate_failures;
     return 0;
 }
 
@@ -308,6 +324,8 @@ int main(int argc, char **argv)
     struct fb_gpu_ttm_validate ttm2;
     struct ttm_resv_stats resv_before;
     struct ttm_resv_stats resv_after;
+    struct ttm_resv_stats ww_before;
+    struct ttm_resv_stats ww_after;
     struct ttm_move_path_stats move_start;
     struct ttm_move_path_stats move_before;
     uint64 moves;
@@ -329,6 +347,12 @@ int main(int argc, char **argv)
     uint64 resv_evict_pinned_rejects_delta = 0;
     uint64 resv_evict_busy_rejects_delta = 0;
     uint64 resv_pinned_before_evict = 0;
+    uint64 ww_contexts_delta = 0;
+    uint64 ww_ordered_acquires_delta = 0;
+    uint64 ww_deadlock_retries_delta = 0;
+    uint64 ww_wound_backoffs_delta = 0;
+    uint64 ww_multi_object_delta = 0;
+    uint64 ww_release_balance_delta = 0;
     uint64 content_migrations = 0;
     uint64 cpu_copy_fallback_compatible = 0;
     uint64 metadata_noop_checks = 0;
@@ -462,6 +486,37 @@ int main(int argc, char **argv)
         resv_after.exclusive_fences - resv_before.exclusive_fences;
     resv_shared_fences_delta =
         resv_after.shared_fences - resv_before.shared_fences;
+
+    ww_before = resv_after;
+    memset(&ttm2, 0, sizeof(ttm2));
+    ttm2.handle = bo2.handle;
+    ttm2.flags = FB_GPU_TTM_F_WW_VALIDATE;
+    ttm2.peer_handle = bo1.handle;
+    if (ttm_ioctl(fd, &ttm2) < 0)
+        goto out_fail;
+    if (read_ttm_resv_stats(fd, &ww_after) < 0)
+        goto out_fail;
+    if (ww_after.ww_contexts < ww_before.ww_contexts + 1 ||
+        ww_after.ww_ordered_acquires < ww_before.ww_ordered_acquires + 2 ||
+        ww_after.ww_deadlock_retries < ww_before.ww_deadlock_retries + 1 ||
+        ww_after.ww_wound_backoffs < ww_before.ww_wound_backoffs + 1 ||
+        ww_after.ww_multi_object < ww_before.ww_multi_object + 1 ||
+        ww_after.ww_release_balance < ww_before.ww_release_balance + 2 ||
+        ww_after.ww_max_acquired < 2 ||
+        ww_after.ww_validate_failures != ww_before.ww_validate_failures ||
+        ww_after.native_accel_credit != ww_before.native_accel_credit)
+        goto out_fail;
+    ww_contexts_delta = ww_after.ww_contexts - ww_before.ww_contexts;
+    ww_ordered_acquires_delta =
+        ww_after.ww_ordered_acquires - ww_before.ww_ordered_acquires;
+    ww_deadlock_retries_delta =
+        ww_after.ww_deadlock_retries - ww_before.ww_deadlock_retries;
+    ww_wound_backoffs_delta =
+        ww_after.ww_wound_backoffs - ww_before.ww_wound_backoffs;
+    ww_multi_object_delta =
+        ww_after.ww_multi_object - ww_before.ww_multi_object;
+    ww_release_balance_delta =
+        ww_after.ww_release_balance - ww_before.ww_release_balance;
 
     if (set_ttm_check_content(fd, bo1.handle, FB_GPU_TTM_PL_SYSTEM, 0,
                               bo1.addr, bo1.size, &ttm) < 0)
@@ -718,6 +773,16 @@ int main(int argc, char **argv)
            resv_after.attach_dmabuf_import -
                resv_before.attach_dmabuf_import,
            resv_after.last_attach_point);
+    printf("ttmtest: ttm_dma_resv_ww_mutex_matrix "
+           "ww_contexts_delta=%lu ordered_acquires_delta=%lu "
+           "deadlock_retries_delta=%lu wound_backoffs_delta=%lu "
+           "multi_object_delta=%lu release_balance_delta=%lu "
+           "max_acquired=%lu validate_failures_delta=0 "
+           "native_accel_credit_delta=0 status=PASS\n",
+           ww_contexts_delta, ww_ordered_acquires_delta,
+           ww_deadlock_retries_delta, ww_wound_backoffs_delta,
+           ww_multi_object_delta, ww_release_balance_delta,
+           ww_after.ww_max_acquired);
     printf("ttmtest: ttm_eviction_negative_matrix "
            "pinned_evict_rejected=1 pinned_before=%lu "
            "pinned_bytes_restored=1 validate_failures_delta=%lu "

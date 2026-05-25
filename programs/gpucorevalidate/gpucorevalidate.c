@@ -1661,6 +1661,26 @@ static int validate_ttm_resv_matrix(void)
                          "native_accel_credit_delta=0");
     require_output_token("ttm_resv_wait_matrix", output,
                          "status=PASS");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "ttm_dma_resv_ww_mutex_matrix");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "ww_contexts_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "ordered_acquires_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "deadlock_retries_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "wound_backoffs_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "multi_object_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "release_balance_delta=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "max_acquired=");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "validate_failures_delta=0");
+    require_output_token("ttm_dma_resv_ww_mutex_matrix", output,
+                         "native_accel_credit_delta=0 status=PASS");
     require_output_token("ttm_eviction_negative_matrix", output,
                          "ttm_eviction_negative_matrix");
     require_output_token("ttm_eviction_negative_matrix", output,
@@ -1707,6 +1727,7 @@ static int validate_ttm_resv_matrix(void)
            "reserved_set_placement_rejected=1 "
            "reserved_force_evict_rejected=1 "
            "pinned_evict_rejected=1 native_accel_credit_delta=0 "
+           "ttm_dma_resv_ww_mutex_matrix=PASS "
            "ttm_move_path_matrix=PASS "
            "status=PASS\n");
     return 0;
