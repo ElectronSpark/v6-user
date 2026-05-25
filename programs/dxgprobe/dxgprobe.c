@@ -9846,6 +9846,10 @@ static int probe_present_source_failclosed_contract(
     int software_path_rejection = 0;
     int owner_cleanup = 0;
     int hyperv_gate = 0;
+    int d3d12_resource_fd_lifetime_pass = 0;
+    int d3d12_present_admission_pass = 0;
+    int d3d12_acquire_fence_lifetime_pass = 0;
+    int d3d12_bind_contract_failclosed_pass = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10291,6 +10295,44 @@ static int probe_present_source_failclosed_contract(
     hyperv_gate =
         backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    d3d12_resource_fd_lifetime_pass =
+        share_rc == 0 && shared_handle != 0 &&
+        register_rc == 0 && reg.resource_fd == (int32)shared_handle &&
+        reg.present_source != 0 && invalid_resource_fd_rc < 0 &&
+        unverified_resource_failclosed && owner_cleanup &&
+        stale_bind_contract_failclosed && no_present_credit &&
+        hyperv_gate;
+    d3d12_present_admission_pass =
+        register_rc == 0 && provenance_complete &&
+        query.source_live == 1 &&
+        query.adapter_identity == FB_GPU_DXG_PRESENT_ADAPTER_MATCH &&
+        query.adapter_luid_low == adapter_luid.a &&
+        query.adapter_luid_high == adapter_luid.b &&
+        bind_contract_failclosed &&
+        bind_contract.device == device.v &&
+        bind_contract.resource == create_allocation.resource.v &&
+        bind_contract.allocation == allocation_info.allocation.v &&
+        bind_contract.allocation_count == 1 &&
+        bind_contract.width == reg.width &&
+        bind_contract.height == reg.height &&
+        bind_contract.pitch == reg.pitch &&
+        bind_contract.format == reg.format &&
+        bind_contract.modifier == reg.modifier &&
+        negative_register_metadata && negative_commit_metadata &&
+        negative_source_identity && unverified_resource_failclosed &&
+        adapter_mismatch_failclosed && negative_no_present_credit &&
+        hyperv_gate;
+    d3d12_acquire_fence_lifetime_pass =
+        create_sync_rc == 0 && create_sync.sync_object.v != 0 &&
+        wait_sync_failclosed && wait_sync_metadata &&
+        wait_query.sync_object == create_sync.sync_object.v &&
+        wait_query.fence_value == wait_commit.fence_value &&
+        wait_sync_no_present_credit && hyperv_gate;
+    d3d12_bind_contract_failclosed_pass =
+        bind_contract_failclosed && foreign_bind_contract_failclosed &&
+        stale_bind_contract_failclosed && software_path_rejection &&
+        bind_contract.present_id == 0 && bind_contract.completed == 0 &&
+        hyperv_gate;
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
@@ -10468,6 +10510,76 @@ out:
            query.helper_transport_present,
            negative_no_present_credit,
            software_path_rejection ? "PASS" : "FAIL");
+    printf("d3d12_shared_resource_fd_lifetime_matrix "
+           "share_export=PASS resource_fd=%lu register_live_fd=%s "
+           "invalid_fd_rejected=%s unverified_resource_fd=%s "
+           "stale_source_after_owner_close=%s cleanup_balance=%s "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           shared_handle,
+           register_rc == 0 && reg.resource_fd == (int32)shared_handle ?
+               "PASS" : "FAIL",
+           invalid_resource_fd_rc < 0 ? "PASS" : "FAIL",
+           unverified_resource_failclosed ? "PASS" : "FAIL",
+           stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           owner_cleanup ? "PASS" : "FAIL",
+           d3d12_resource_fd_lifetime_pass ? "PASS" : "FAIL");
+    printf("d3d12_present_source_admission_matrix "
+           "same_adapter_luid=%s resource_fd=PASS d3dkmt_handles=%s "
+           "dimensions=%s format_modifier=%s allocation_count=%u "
+           "wait_sync_metadata=%s unverified_resource_fd=%s "
+           "adapter_mismatch=%s source_owner=%s failclosed=%s "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           query.adapter_identity == FB_GPU_DXG_PRESENT_ADAPTER_MATCH &&
+               query.adapter_luid_low == adapter_luid.a &&
+               query.adapter_luid_high == adapter_luid.b ?
+               "PASS" : "FAIL",
+           bind_contract.device == device.v &&
+               bind_contract.resource == create_allocation.resource.v &&
+               bind_contract.allocation == allocation_info.allocation.v ?
+               "PASS" : "FAIL",
+           bind_contract.width == reg.width &&
+               bind_contract.height == reg.height &&
+               bind_contract.pitch == reg.pitch ? "PASS" : "FAIL",
+           bind_contract.format == reg.format &&
+               bind_contract.modifier == reg.modifier ? "PASS" : "FAIL",
+           bind_contract.allocation_count,
+           wait_sync_metadata ? "PASS" : "FAIL",
+           unverified_resource_failclosed ? "PASS" : "FAIL",
+           adapter_mismatch_failclosed ? "PASS" : "FAIL",
+           foreign_bind_contract_failclosed &&
+               stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           failclosed ? "PASS" : "FAIL",
+           d3d12_present_admission_pass ? "PASS" : "FAIL");
+    printf("d3d12_acquire_fence_lifetime_matrix "
+           "sync_create_rc=%d sync_object=0x%x monitored_fence=PASS "
+           "wait_metadata=%s wait_commit_failclosed=%s "
+           "query_sync_matches=%s stale_source_cleanup=%s "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           create_sync_rc, create_sync.sync_object.v,
+           wait_sync_metadata ? "PASS" : "FAIL",
+           wait_sync_failclosed ? "PASS" : "FAIL",
+           wait_query.sync_object == create_sync.sync_object.v &&
+               wait_query.fence_value == wait_commit.fence_value ?
+               "PASS" : "FAIL",
+           stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           d3d12_acquire_fence_lifetime_pass ? "PASS" : "FAIL");
+    printf("d3d12_present_bind_contract_failclosed_matrix "
+           "selected_lane=%lu completion_source=%lu "
+           "required_metadata=0x%lx lifetime=0x%lx "
+           "foreign_source=%s stale_source=%s software_paths_rejected=%s "
+           "missing_host_abi=%lu transport_present=%lu "
+           "present_id=0 completed=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           bind_contract.selected_lane, bind_contract.completion_source,
+           bind_contract.required_metadata, bind_contract.lifetime,
+           foreign_bind_contract_failclosed ? "PASS" : "FAIL",
+           stale_bind_contract_failclosed ? "PASS" : "FAIL",
+           software_path_rejection ? "PASS" : "FAIL",
+           query.missing_host_abi, query.helper_transport_present,
+           d3d12_bind_contract_failclosed_pass ? "PASS" : "FAIL");
 
     if (fb_fd >= 0)
         close(fb_fd);

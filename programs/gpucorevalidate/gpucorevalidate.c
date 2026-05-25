@@ -1873,6 +1873,95 @@ static int validate_present_source_matrix(void)
                               output,
                               "present_source_software_path_rejection_matrix",
                               "status=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "d3d12_shared_resource_fd_lifetime_matrix");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "register_live_fd=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "invalid_fd_rejected=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "unverified_resource_fd=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "stale_source_after_owner_close=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "cleanup_balance=PASS");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("d3d12_shared_resource_fd_lifetime_matrix", output,
+                         "opengl_submit_credit=0");
+    require_output_line_token("d3d12_shared_resource_fd_lifetime_matrix",
+                              output,
+                              "d3d12_shared_resource_fd_lifetime_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "d3d12_present_source_admission_matrix");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "same_adapter_luid=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "resource_fd=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "d3dkmt_handles=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "dimensions=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "format_modifier=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "wait_sync_metadata=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "unverified_resource_fd=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "adapter_mismatch=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "source_owner=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "failclosed=PASS");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("d3d12_present_source_admission_matrix", output,
+                         "opengl_submit_credit=0");
+    require_output_line_token("d3d12_present_source_admission_matrix",
+                              output,
+                              "d3d12_present_source_admission_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "d3d12_acquire_fence_lifetime_matrix");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "monitored_fence=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "wait_metadata=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "wait_commit_failclosed=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "query_sync_matches=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "stale_source_cleanup=PASS");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "native_present_credit=0");
+    require_output_token("d3d12_acquire_fence_lifetime_matrix", output,
+                         "opengl_submit_credit=0");
+    require_output_line_token("d3d12_acquire_fence_lifetime_matrix",
+                              output,
+                              "d3d12_acquire_fence_lifetime_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output,
+                         "d3d12_present_bind_contract_failclosed_matrix");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "foreign_source=PASS");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "stale_source=PASS");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "software_paths_rejected=PASS");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "transport_present=0");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_present_bind_contract_failclosed_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_present_bind_contract_failclosed_matrix",
+                              output,
+                              "d3d12_present_bind_contract_failclosed_matrix",
+                              "status=PASS");
 
     if (failures != before)
         return -1;
@@ -1895,6 +1984,27 @@ static int validate_present_source_matrix(void)
            "callback_only=REJECTED release_only=REJECTED "
            "display_target_kind=0 native_present_claim=0 "
            "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator d3d12_shared_resource_fd_lifetime_matrix "
+           "register_live_fd=PASS invalid_fd_rejected=PASS "
+           "unverified_resource_fd=PASS stale_source_after_owner_close=PASS "
+           "cleanup_balance=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator d3d12_present_source_admission_matrix "
+           "same_adapter_luid=PASS resource_fd=PASS d3dkmt_handles=PASS "
+           "dimensions=PASS format_modifier=PASS wait_sync_metadata=PASS "
+           "unverified_resource_fd=PASS adapter_mismatch=PASS "
+           "source_owner=PASS failclosed=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator d3d12_acquire_fence_lifetime_matrix "
+           "monitored_fence=PASS wait_metadata=PASS "
+           "wait_commit_failclosed=PASS query_sync_matches=PASS "
+           "stale_source_cleanup=PASS native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n");
+    printf("gpu_core_c_validator "
+           "d3d12_present_bind_contract_failclosed_matrix "
+           "foreign_source=PASS stale_source=PASS "
+           "software_paths_rejected=PASS transport_present=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=PASS\n");
     return 0;
 }
 
