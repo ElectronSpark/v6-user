@@ -4454,7 +4454,7 @@ static int validate_backend(void)
                    backend_opengl_submit == 0 ?
                "PASS" : "FAIL");
     printf("gpu_core_c_validator gpu_remaining_holistic_skeleton_matrix "
-           "skeleton_version=2 active_open_items=10 "
+           "skeleton_version=2 active_open_items=12 "
            "plan_source=GPU_REMAINING_GAPS.md "
            "ordered_chunks=display_bind,native_completion,fps,backend,webkit "
            "display_bind_source_gate=closed "

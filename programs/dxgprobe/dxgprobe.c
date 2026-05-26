@@ -12850,7 +12850,7 @@ out:
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
            gpu_remaining_plan_dependency_skeleton_pass ? "PASS" : "FAIL");
     printf("gpu_remaining_holistic_skeleton_matrix "
-           "skeleton_version=2 active_open_items=10 "
+           "skeleton_version=2 active_open_items=12 "
            "plan_source=GPU_REMAINING_GAPS.md "
            "ordered_chunks=display_bind,native_completion,fps,backend,webkit "
            "display_bind_source_gate=closed "
