@@ -440,7 +440,8 @@ int main(int argc, char *argv[])
         stats.dxg_display_bind_pending_active == 0 &&
         stats.dxg_display_bind_pending_created >=
             stats.dxg_display_bind_pending_completed +
-            stats.dxg_display_bind_pending_failclosed &&
+            stats.dxg_display_bind_pending_failclosed +
+            stats.dxg_display_bind_pending_cancelled &&
         (stats.dxg_display_bind_pending_created == 0 ||
          (stats.dxg_display_bind_pending_sequence != 0 &&
           stats.dxg_display_bind_pending_peak != 0 &&
@@ -454,6 +455,17 @@ int main(int argc, char *argv[])
     display_bind_provider_pending_publication_ok =
         stats.dxg_display_bind_provider_submits == 0 ||
         (stats.dxg_display_bind_provider_publication_attempts != 0 &&
+         stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_source_generation ==
+             stats.dxg_display_bind_source_generation &&
+         stats.dxg_display_bind_provider_pending_resource_generation ==
+             stats.dxg_display_bind_resource_generation &&
+         stats.dxg_display_bind_pending_last_source_generation ==
+             stats.dxg_display_bind_provider_pending_source_generation &&
+         stats.dxg_display_bind_pending_last_resource_generation ==
+             stats.dxg_display_bind_provider_pending_resource_generation &&
          stats.dxg_display_bind_provider_publish_before_send == 0 &&
          stats.dxg_display_bind_provider_transport_pending_id == 0 &&
          stats.dxg_display_bind_provider_command_id == 0 &&
@@ -462,12 +474,15 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
          stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
          stats.dxg_display_bind_provider_refs_released == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi_refs_released == 0 &&
          stats.dxg_display_bind_provider_no_host_abi != 0 &&
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
          stats.dxg_display_bind_transport_present == 0 &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
          backend_opengl_submit == 0);
     display_bind_id_shape_ok =
         ((stats.dxg_display_bind_present_id == 0 &&
@@ -553,6 +568,8 @@ int main(int argc, char *argv[])
     stale_source_zero_credit_ok =
         stats.dxg_display_bind_late_completion_after_release == 0 &&
         stats.dxg_display_bind_after_close_nonzero_id_rejects == 0 &&
+        (stats.dxg_display_bind_after_close_queries == 0 ||
+         stats.dxg_display_bind_stale_source_rejects != 0) &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
@@ -751,15 +768,41 @@ int main(int argc, char *argv[])
     printf("d3d12_display_bind_provider_pending_publication_matrix "
            "provider_submits=%lu publication_attempts=%lu "
            "host_abi_present=0 sender_present=0 completion_present=0 "
+           "owner_generation=%lu provider_source_generation=%lu "
+           "provider_resource_generation=%lu pending_owner_generation=%lu "
+           "pending_source_generation=%lu pending_resource_generation=%lu "
+           "owner_generation_required=1 source_generation_required=1 "
+           "resource_generation_required=1 pending_generation_match=%s "
            "publish_before_send=%lu transport_pending_id=%lu "
            "command_id=%lu transaction_id=%lu channel=%s "
            "completion_demux_registered=%lu resolved_or_cancelled=%lu "
-           "refs_released=%lu provider_no_host_abi=%lu "
+           "refs_released=%lu no_host_abi_cancelled=%lu "
+           "no_host_abi_refs_released=%lu pending_cancelled=%lu "
+           "publish_before_send_order=blocked "
+           "cancellation_ref_release_credit=0 provider_no_host_abi=%lu "
            "provider_no_sender=%lu provider_no_completion=%lu "
            "present_id=%lu completed=%lu native_present_credit=0 "
            "opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_provider_submits,
            stats.dxg_display_bind_provider_publication_attempts,
+           stats.dxg_display_bind_provider_pending_owner_generation,
+           stats.dxg_display_bind_provider_pending_source_generation,
+           stats.dxg_display_bind_provider_pending_resource_generation,
+           stats.dxg_display_bind_pending_last_owner_generation,
+           stats.dxg_display_bind_pending_last_source_generation,
+           stats.dxg_display_bind_pending_last_resource_generation,
+           stats.dxg_display_bind_provider_submits == 0 ?
+               "NOT_SAMPLED" :
+           (stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats.dxg_display_bind_pending_last_owner_generation ==
+                       stats.dxg_display_bind_provider_pending_owner_generation &&
+                   stats.dxg_display_bind_pending_last_source_generation ==
+                       stats.dxg_display_bind_provider_pending_source_generation &&
+                   stats.dxg_display_bind_pending_last_resource_generation ==
+                       stats.dxg_display_bind_provider_pending_resource_generation) ?
+               "PASS" : "FAIL",
            stats.dxg_display_bind_provider_publish_before_send,
            stats.dxg_display_bind_provider_transport_pending_id,
            stats.dxg_display_bind_provider_command_id,
@@ -768,6 +811,9 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_completion_demux_registered,
            stats.dxg_display_bind_provider_resolved_or_cancelled,
            stats.dxg_display_bind_provider_refs_released,
+           stats.dxg_display_bind_provider_no_host_abi_cancelled,
+           stats.dxg_display_bind_provider_no_host_abi_refs_released,
+           stats.dxg_display_bind_pending_cancelled,
            stats.dxg_display_bind_provider_no_host_abi,
            stats.dxg_display_bind_provider_no_sender,
            stats.dxg_display_bind_provider_no_completion,
@@ -837,7 +883,8 @@ int main(int argc, char *argv[])
            "after_close_nonzero_id_rejects=%lu "
            "global_present_id_after_close=%lu "
            "global_completed_after_close=%lu native_present_credit=%lu "
-           "opengl_submit_credit=%d webkit_accel_credit=0 status=%s\n",
+           "opengl_submit_credit=%d stale_completion_rejected=%s "
+           "late_completion_rejected=%s webkit_accel_credit=0 status=%s\n",
            stats.dxg_display_bind_after_close_queries,
            stats.dxg_display_bind_stale_source_rejects,
            stats.dxg_display_bind_release_clears,
@@ -849,6 +896,10 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_completed_id,
            stats.nouveau_pci_native_present_credit,
            backend_opengl_submit,
+           stats.dxg_display_bind_stale_completion_rejects != 0 ?
+               "PASS" : "PENDING",
+           stats.dxg_display_bind_late_completion_after_release == 0 ?
+               "PASS" : "FAIL",
            stale_source_zero_credit_ok ? "PASS" : "FAIL");
     printf("d3d12_native_completion_not_kms_matrix "
            "generic_display_last_complete=%lu "

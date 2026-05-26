@@ -537,13 +537,55 @@ static int validate_fbstat_aggregate_matrix(void)
                               "publication_attempts=");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
+                              "owner_generation_required=1");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "owner_generation=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "source_generation=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "resource_generation=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "source_generation_required=1");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "resource_generation_required=1");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "pending_generation_match=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
                               "publish_before_send=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "publish_before_send_order=blocked");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
                               "transport_pending_id=0");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
                               "completion_demux_registered=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "resolved_or_cancelled=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "refs_released=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "pending_cancelled=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "cancellation_ref_release_credit=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "opengl_submit_credit=0");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
                               "status=PASS_FAILCLOSED");
@@ -561,7 +603,22 @@ static int validate_fbstat_aggregate_matrix(void)
                               "late_completion_after_release=0");
     require_output_line_token("fbstat_display_bind_stale_source", output,
                               stale_source_anchor,
+                              "stale_completion_rejects=");
+    require_output_line_token("fbstat_display_bind_stale_source", output,
+                              stale_source_anchor,
+                              "stale_completion_rejected=");
+    require_output_line_token("fbstat_display_bind_stale_source", output,
+                              stale_source_anchor,
+                              "late_completion_rejected=PASS");
+    require_output_line_token("fbstat_display_bind_stale_source", output,
+                              stale_source_anchor,
                               "global_present_id_after_close=0");
+    require_output_line_token("fbstat_display_bind_stale_source", output,
+                              stale_source_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_display_bind_stale_source", output,
+                              stale_source_anchor,
+                              "opengl_submit_credit=0");
     require_output_line_token("fbstat_display_bind_stale_source", output,
                               stale_source_anchor,
                               "status=PASS");
@@ -2200,7 +2257,7 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_present_syncfile_preopen_matrix", output,
                          "sync_file=");
     require_output_token("d3d12_present_syncfile_preopen_matrix", output,
-                         "opened_sync=0x");
+                         "opened_sync=");
     require_output_token("d3d12_present_syncfile_preopen_matrix", output,
                          "wrong_fd_kind_rejected=PASS");
     require_output_token("d3d12_present_syncfile_preopen_matrix", output,
@@ -2360,6 +2417,8 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_pending_lifetime_matrix",
                          output, "failclosed_delta=");
     require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "cancelled_delta=0");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
                          output, "last_status=95");
     require_output_token("d3d12_display_bind_pending_lifetime_matrix",
                          output, "native_present_credit=0");
@@ -2410,7 +2469,27 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "publication_attempts_delta=");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "owner_generation_required=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "owner_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "query_source_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "display_bind_source_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "query_resource_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "display_bind_resource_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "source_generation_required=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "resource_generation_required=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "pending_generation_match=PASS");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "publish_before_send=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "publish_before_send_order=blocked");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "transport_pending_id=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
@@ -2419,6 +2498,10 @@ static int validate_present_source_matrix(void)
                          output, "resolved_or_cancelled=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "refs_released=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "pending_cancelled_delta=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "cancellation_ref_release_credit=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "provider_no_host_abi=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
@@ -2546,7 +2629,13 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
                          output, "release_clears=");
     require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
+                         output, "stale_generation_rejected=PASS");
+    require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
+                         output, "stale_completion_rejected=PASS");
+    require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
                          output, "late_completion_after_release=0");
+    require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
+                         output, "late_completion_rejected=PASS");
     require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
                          output, "global_present_id_after_close=0");
     require_output_token("d3d12_display_bind_stale_source_zero_credit_matrix",
@@ -3183,7 +3272,8 @@ static int validate_backend(void)
         stats.dxg_display_bind_pending_active == 0 &&
         stats.dxg_display_bind_pending_created >=
             stats.dxg_display_bind_pending_completed +
-            stats.dxg_display_bind_pending_failclosed &&
+            stats.dxg_display_bind_pending_failclosed +
+            stats.dxg_display_bind_pending_cancelled &&
         (stats.dxg_display_bind_pending_created == 0 ||
          (stats.dxg_display_bind_pending_sequence != 0 &&
           stats.dxg_display_bind_pending_peak != 0 &&
@@ -3211,6 +3301,19 @@ static int validate_backend(void)
     display_bind_provider_pending_publication_ok =
         stats.dxg_display_bind_provider_submits == 0 ||
         (stats.dxg_display_bind_provider_publication_attempts != 0 &&
+         stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_source_generation ==
+             stats.dxg_display_bind_source_generation &&
+         stats.dxg_display_bind_provider_pending_resource_generation ==
+             stats.dxg_display_bind_resource_generation &&
+         stats.dxg_display_bind_pending_last_owner_generation ==
+             stats.dxg_display_bind_provider_pending_owner_generation &&
+         stats.dxg_display_bind_pending_last_source_generation ==
+             stats.dxg_display_bind_provider_pending_source_generation &&
+         stats.dxg_display_bind_pending_last_resource_generation ==
+             stats.dxg_display_bind_provider_pending_resource_generation &&
          stats.dxg_display_bind_provider_publish_before_send == 0 &&
          stats.dxg_display_bind_provider_transport_pending_id == 0 &&
          stats.dxg_display_bind_provider_command_id == 0 &&
@@ -3219,12 +3322,15 @@ static int validate_backend(void)
          stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
          stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
          stats.dxg_display_bind_provider_refs_released == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi_refs_released == 0 &&
          stats.dxg_display_bind_provider_no_host_abi != 0 &&
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
          stats.dxg_display_bind_transport_present == 0 &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
          stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
          stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
          backend_opengl_submit == 0);
@@ -3284,6 +3390,8 @@ static int validate_backend(void)
     stale_source_zero_credit_ok =
         stats.dxg_display_bind_late_completion_after_release == 0 &&
         stats.dxg_display_bind_after_close_nonzero_id_rejects == 0 &&
+        (stats.dxg_display_bind_after_close_queries == 0 ||
+         stats.dxg_display_bind_stale_source_rejects != 0) &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
@@ -3915,15 +4023,42 @@ static int validate_backend(void)
            "d3d12_display_bind_provider_pending_publication_matrix "
            "provider_submits=%lu publication_attempts=%lu "
            "host_abi_present=0 sender_present=0 "
-           "completion_present=0 publish_before_send=%lu "
+           "completion_present=0 owner_generation=%lu "
+           "provider_source_generation=%lu provider_resource_generation=%lu "
+           "pending_owner_generation=%lu pending_source_generation=%lu "
+           "pending_resource_generation=%lu "
+           "owner_generation_required=1 source_generation_required=1 "
+           "resource_generation_required=1 pending_generation_match=%s "
+           "publish_before_send=%lu "
            "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
            "channel=%s completion_demux_registered=%lu "
            "resolved_or_cancelled=%lu refs_released=%lu "
+           "no_host_abi_cancelled=%lu no_host_abi_refs_released=%lu "
+           "pending_cancelled=%lu publish_before_send_order=blocked "
+           "cancellation_ref_release_credit=0 "
            "provider_no_host_abi=%lu provider_no_sender=%lu "
            "provider_no_completion=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_provider_submits,
            stats.dxg_display_bind_provider_publication_attempts,
+           stats.dxg_display_bind_provider_pending_owner_generation,
+           stats.dxg_display_bind_provider_pending_source_generation,
+           stats.dxg_display_bind_provider_pending_resource_generation,
+           stats.dxg_display_bind_pending_last_owner_generation,
+           stats.dxg_display_bind_pending_last_source_generation,
+           stats.dxg_display_bind_pending_last_resource_generation,
+           stats.dxg_display_bind_provider_submits == 0 ?
+               "NOT_SAMPLED" :
+           (stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats.dxg_display_bind_pending_last_owner_generation ==
+                       stats.dxg_display_bind_provider_pending_owner_generation &&
+                   stats.dxg_display_bind_pending_last_source_generation ==
+                       stats.dxg_display_bind_provider_pending_source_generation &&
+                   stats.dxg_display_bind_pending_last_resource_generation ==
+                       stats.dxg_display_bind_provider_pending_resource_generation) ?
+               "PASS" : "FAIL",
            stats.dxg_display_bind_provider_publish_before_send,
            stats.dxg_display_bind_provider_transport_pending_id,
            stats.dxg_display_bind_provider_command_id,
@@ -3932,6 +4067,9 @@ static int validate_backend(void)
            stats.dxg_display_bind_provider_completion_demux_registered,
            stats.dxg_display_bind_provider_resolved_or_cancelled,
            stats.dxg_display_bind_provider_refs_released,
+           stats.dxg_display_bind_provider_no_host_abi_cancelled,
+           stats.dxg_display_bind_provider_no_host_abi_refs_released,
+           stats.dxg_display_bind_pending_cancelled,
            stats.dxg_display_bind_provider_no_host_abi,
            stats.dxg_display_bind_provider_no_sender,
            stats.dxg_display_bind_provider_no_completion,
@@ -4002,7 +4140,8 @@ static int validate_backend(void)
            "after_close_nonzero_id_rejects=%lu "
            "global_present_id_after_close=%lu "
            "global_completed_after_close=%lu native_present_credit=%lu "
-           "opengl_submit_credit=%u webkit_accel_credit=0 status=%s\n",
+           "opengl_submit_credit=%u stale_completion_rejected=%s "
+           "late_completion_rejected=%s webkit_accel_credit=0 status=%s\n",
            stats.dxg_display_bind_after_close_queries,
            stats.dxg_display_bind_stale_source_rejects,
            stats.dxg_display_bind_release_clears,
@@ -4014,6 +4153,10 @@ static int validate_backend(void)
            stats.dxg_display_bind_completed_id,
            stats.nouveau_pci_native_present_credit,
            backend_opengl_submit,
+           stats.dxg_display_bind_stale_completion_rejects != 0 ?
+               "PASS" : "PENDING",
+           stats.dxg_display_bind_late_completion_after_release == 0 ?
+               "PASS" : "FAIL",
            stale_source_zero_credit_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator d3d12_native_completion_not_kms_matrix "
            "generic_display_last_complete=%lu "

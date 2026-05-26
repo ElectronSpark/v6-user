@@ -10974,6 +10974,8 @@ static int probe_present_source_failclosed_contract(
             stats_before.dxg_display_bind_pending_completed &&
         stats_after.dxg_display_bind_pending_failclosed >
             stats_before.dxg_display_bind_pending_failclosed &&
+        stats_after.dxg_display_bind_pending_cancelled ==
+            stats_before.dxg_display_bind_pending_cancelled &&
         stats_after.dxg_display_bind_pending_last_status == EOPNOTSUPP &&
         stats_after.dxg_display_bind_pending_last_source_generation != 0 &&
         stats_after.dxg_display_bind_pending_last_resource_generation != 0 &&
@@ -11014,6 +11016,17 @@ static int probe_present_source_failclosed_contract(
             stats_before.dxg_display_bind_provider_submits &&
         stats_after.dxg_display_bind_provider_publication_attempts >
             stats_before.dxg_display_bind_provider_publication_attempts &&
+        query.source_generation != 0 &&
+        query.resource_generation != 0 &&
+        stats_after.dxg_display_bind_provider_pending_owner_generation != 0 &&
+        stats_after.dxg_display_bind_provider_pending_source_generation != 0 &&
+        stats_after.dxg_display_bind_provider_pending_resource_generation != 0 &&
+        stats_after.dxg_display_bind_pending_last_owner_generation ==
+            stats_after.dxg_display_bind_provider_pending_owner_generation &&
+        stats_after.dxg_display_bind_pending_last_source_generation ==
+            stats_after.dxg_display_bind_provider_pending_source_generation &&
+        stats_after.dxg_display_bind_pending_last_resource_generation ==
+            stats_after.dxg_display_bind_provider_pending_resource_generation &&
         stats_after.dxg_display_bind_provider_publish_before_send == 0 &&
         stats_after.dxg_display_bind_provider_transport_pending_id == 0 &&
         stats_after.dxg_display_bind_provider_command_id == 0 &&
@@ -11022,6 +11035,10 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_provider_completion_demux_registered == 0 &&
         stats_after.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
         stats_after.dxg_display_bind_provider_refs_released == 0 &&
+        stats_after.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
+        stats_after.dxg_display_bind_provider_no_host_abi_refs_released == 0 &&
+        stats_after.dxg_display_bind_pending_cancelled ==
+            stats_before.dxg_display_bind_pending_cancelled &&
         stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
         stats_after.dxg_display_bind_provider_no_sender == 1 &&
         stats_after.dxg_display_bind_provider_no_completion == 1 &&
@@ -11030,6 +11047,7 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_completed_id == 0 &&
         stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
         no_present_credit && hyperv_gate;
     d3d12_display_bind_success_shape_pass =
         stats_after_rc == 0 &&
@@ -11147,6 +11165,10 @@ static int probe_present_source_failclosed_contract(
             stats_before.dxg_display_bind_after_close_queries &&
         stats_closed.dxg_display_bind_stale_source_rejects >
             stats_before.dxg_display_bind_stale_source_rejects &&
+        stats_closed.dxg_display_bind_stale_generation_rejects >
+            stats_before.dxg_display_bind_stale_generation_rejects &&
+        stats_closed.dxg_display_bind_stale_completion_rejects >
+            stats_before.dxg_display_bind_stale_completion_rejects &&
         stats_closed.dxg_display_bind_late_completion_after_release == 0 &&
         stats_closed.dxg_display_bind_after_close_nonzero_id_rejects == 0 &&
         after_close_query_rc < 0 &&
@@ -11986,10 +12008,23 @@ out:
     printf("d3d12_display_bind_provider_pending_publication_matrix "
            "provider_submits_delta=%lu publication_attempts_delta=%lu "
            "host_abi_present=0 sender_present=0 "
-           "completion_present=0 publish_before_send=%lu "
+           "completion_present=0 owner_generation=%lu "
+           "query_source_generation=%lu contract_source_generation=%lu "
+           "display_bind_source_generation=%lu query_resource_generation=%lu "
+           "contract_resource_generation=%lu "
+           "display_bind_resource_generation=%lu "
+           "provider_source_generation=%lu provider_resource_generation=%lu "
+           "pending_owner_generation=%lu pending_source_generation=%lu "
+           "pending_resource_generation=%lu "
+           "owner_generation_required=1 source_generation_required=1 "
+           "resource_generation_required=1 pending_generation_match=%s "
+           "publish_before_send=%lu "
            "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
            "channel=%s completion_demux_registered=%lu "
            "resolved_or_cancelled=%lu refs_released=%lu "
+           "no_host_abi_cancelled=%lu no_host_abi_refs_released=%lu "
+           "pending_cancelled_delta=%lu publish_before_send_order=blocked "
+           "cancellation_ref_release_credit=0 "
            "provider_no_host_abi=%lu provider_no_sender=%lu "
            "provider_no_completion=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 "
@@ -11998,6 +12033,30 @@ out:
                stats_before.dxg_display_bind_provider_submits,
            stats_after.dxg_display_bind_provider_publication_attempts -
                stats_before.dxg_display_bind_provider_publication_attempts,
+           stats_after.dxg_display_bind_provider_pending_owner_generation,
+           query.source_generation,
+           bind_contract.source_generation,
+           stats_after.dxg_display_bind_source_generation,
+           query.resource_generation,
+           bind_contract.resource_generation,
+           stats_after.dxg_display_bind_resource_generation,
+           stats_after.dxg_display_bind_provider_pending_source_generation,
+           stats_after.dxg_display_bind_provider_pending_resource_generation,
+           stats_after.dxg_display_bind_pending_last_owner_generation,
+           stats_after.dxg_display_bind_pending_last_source_generation,
+           stats_after.dxg_display_bind_pending_last_resource_generation,
+           stats_after.dxg_display_bind_provider_pending_owner_generation != 0 &&
+                   stats_after.dxg_display_bind_provider_pending_source_generation != 0 &&
+                   stats_after.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats_after.dxg_display_bind_pending_last_owner_generation ==
+                   stats_after.dxg_display_bind_provider_pending_owner_generation &&
+                   stats_after.dxg_display_bind_pending_last_source_generation ==
+                   stats_after.dxg_display_bind_provider_pending_source_generation &&
+                   stats_after.dxg_display_bind_pending_last_resource_generation ==
+                   stats_after.dxg_display_bind_provider_pending_resource_generation &&
+                   query.source_generation != 0 &&
+                   query.resource_generation != 0 ?
+               "PASS" : "FAIL",
            stats_after.dxg_display_bind_provider_publish_before_send,
            stats_after.dxg_display_bind_provider_transport_pending_id,
            stats_after.dxg_display_bind_provider_command_id,
@@ -12007,6 +12066,10 @@ out:
            stats_after.dxg_display_bind_provider_completion_demux_registered,
            stats_after.dxg_display_bind_provider_resolved_or_cancelled,
            stats_after.dxg_display_bind_provider_refs_released,
+           stats_after.dxg_display_bind_provider_no_host_abi_cancelled,
+           stats_after.dxg_display_bind_provider_no_host_abi_refs_released,
+           stats_after.dxg_display_bind_pending_cancelled -
+               stats_before.dxg_display_bind_pending_cancelled,
            stats_after.dxg_display_bind_provider_no_host_abi,
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,
@@ -12130,7 +12193,9 @@ out:
            "global_present_id_after_close=%lu "
            "global_completed_after_close=%lu "
            "native_present_credit=%lu opengl_submit_credit=%u "
-           "webkit_accel_credit=0 cleanup_state=%s status=%s\n",
+           "stale_generation_rejected=%s stale_completion_rejected=%s "
+           "late_completion_rejected=%s webkit_accel_credit=0 "
+           "cleanup_state=%s status=%s\n",
            stats_closed.dxg_present_release_sources -
                stats_before.dxg_present_release_sources,
            stats_closed.dxg_display_bind_after_close_queries -
@@ -12153,6 +12218,14 @@ out:
            stats_closed.dxg_display_bind_completed_id,
            stats_closed.nouveau_pci_native_present_credit,
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           stats_closed.dxg_display_bind_stale_generation_rejects >
+                   stats_before.dxg_display_bind_stale_generation_rejects ?
+               "PASS" : "FAIL",
+           stats_closed.dxg_display_bind_stale_completion_rejects >
+                   stats_before.dxg_display_bind_stale_completion_rejects ?
+               "PASS" : "FAIL",
+           stats_closed.dxg_display_bind_late_completion_after_release == 0 ?
+               "PASS" : "FAIL",
            d3d12_display_bind_stale_source_cleanup_immediate ?
                "immediate" : "deferred_until_process_exit",
            d3d12_display_bind_stale_source_zero_credit_pass ? "PASS" :
