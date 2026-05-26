@@ -3018,6 +3018,29 @@ static int validate_present_source_matrix(void)
     require_output_line_token(
         "dxg_host_to_vm_presenthistory_completion_matrix", output,
         "dxg_host_to_vm_presenthistory_completion_matrix", "status=PASS");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output,
+                         "dxg_presenthistory_orphan_completion_rejection_matrix");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "propagate_presenthistory_cmd=1");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "provider_pending_match=0");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "completion_demux_registered=0");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "display_bind_present_id=0");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "display_bind_completed_id=0");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "orphan_completion_rejected=1");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("dxg_presenthistory_orphan_completion_rejection_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token(
+        "dxg_presenthistory_orphan_completion_rejection_matrix", output,
+        "dxg_presenthistory_orphan_completion_rejection_matrix",
+        "status=PASS");
     require_output_token("dxg_native_present_lane_rejection_matrix",
                          output,
                          "dxg_native_present_lane_rejection_matrix");
@@ -6012,6 +6035,27 @@ static int validate_backend(void)
                        stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
                        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                       stats.dxg_scanout_bind_completion_successes == 0 &&
+                       stats.dxg_display_bind_present_id == 0 &&
+                       stats.dxg_display_bind_completed_id == 0 ?
+                   "PASS" : "FAIL");
+        printf("gpu_core_c_validator "
+               "dxg_presenthistory_orphan_completion_rejection_matrix "
+               "propagate_presenthistory_cmd=%lu presenthistory_packets=0 "
+               "provider_pending_match=0 completion_demux_registered=%lu "
+               "provider_resolve_delta=0 completion_successes=%lu "
+               "display_bind_present_id=%lu display_bind_completed_id=%lu "
+               "orphan_completion_rejected=1 native_present_credit=0 "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
+               stats.dxg_display_bind_provider_completion_demux_registered,
+               stats.dxg_scanout_bind_completion_successes,
+               stats.dxg_display_bind_present_id,
+               stats.dxg_display_bind_completed_id,
+               stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
+                       stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                       stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                       stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
                        stats.dxg_scanout_bind_completion_successes == 0 &&
                        stats.dxg_display_bind_present_id == 0 &&
                        stats.dxg_display_bind_completed_id == 0 ?
