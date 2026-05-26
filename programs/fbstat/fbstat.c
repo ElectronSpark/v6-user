@@ -406,6 +406,7 @@ int main(int argc, char *argv[])
     int display_bind_request_metadata_ok = 0;
     int display_bind_pending_lifetime_ok = 0;
     int display_bind_provider_pending_publication_ok = 0;
+    int display_bind_provider_packet_lifetime_ok = 0;
     int display_bind_provider_no_send_preflight_ok = 0;
     int stale_source_zero_credit_ok = 0;
     int stale_async_completion_contract_ok = 0;
@@ -550,6 +551,26 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
          stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
+         backend_opengl_submit == 0);
+    display_bind_provider_packet_lifetime_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_provider_publication_attempts != 0 &&
+         stats.dxg_display_bind_provider_publish_before_send == 0 &&
+         stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+         stats.dxg_display_bind_provider_command_id == 0 &&
+         stats.dxg_display_bind_provider_transaction_id == 0 &&
+         stats.dxg_display_bind_provider_channel == 0 &&
+         stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+         stats.dxg_display_bind_provider_resolved_or_cancelled != 0 &&
+         stats.dxg_display_bind_provider_refs_released != 0 &&
+         stats.dxg_display_bind_pending_active == 0 &&
+         stats.dxg_display_bind_host_saw_packet == 0 &&
+         stats.dxg_display_bind_transport_source ==
+             FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+         stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0 &&
          stats.nouveau_pci_native_present_credit == 0 &&
@@ -1152,6 +1173,38 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            display_bind_provider_pending_publication_ok ?
+               "PASS_FAILCLOSED" : "FAIL");
+    printf("d3d12_display_bind_provider_packet_lifetime_matrix "
+           "provider_submits=%lu publication_attempts=%lu "
+           "packet_listed=0 request_id=0 transport_pending_id=%lu "
+           "command_id=%lu transaction_id=%lu channel=%s "
+           "packet_completed=0 wait_cancelled=0 "
+           "packet_removed_on_cancel=0 completion_demux_registered=%lu "
+           "resolved_or_cancelled=%lu refs_released=%lu "
+           "pending_active=%lu host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "wsl_presenthistory_completion_credit=%lu "
+           "present_id=%lu completed=%lu native_present_credit=%lu "
+           "opengl_submit_credit=%d webkit_accel_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_publication_attempts,
+           stats.dxg_display_bind_provider_transport_pending_id,
+           stats.dxg_display_bind_provider_command_id,
+           stats.dxg_display_bind_provider_transaction_id,
+           stats.dxg_display_bind_provider_channel == 0 ? "none" : "other",
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_provider_resolved_or_cancelled,
+           stats.dxg_display_bind_provider_refs_released,
+           stats.dxg_display_bind_pending_active,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           display_bind_provider_packet_lifetime_ok ?
                "PASS_FAILCLOSED" : "FAIL");
     printf("d3d12_display_bind_provider_no_send_preflight_matrix "
            "provider_submits=%lu request_metadata_complete=%lu "
