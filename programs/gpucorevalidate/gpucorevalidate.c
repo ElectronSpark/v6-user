@@ -4460,6 +4460,28 @@ static int validate_backend(void)
                        stats.dxg_scanout_bind_last_completed == 0 ?
                    "PASS" : "FAIL");
         printf("gpu_core_c_validator "
+               "dxg_presenthistory_telemetry_not_completion_matrix "
+               "presenthistory_cmd=%lu propagate_presenthistory_cmd=%lu "
+               "linux_inband_handler=absent sender_contracts=%lu "
+               "completion_contracts=%lu completion_successes=%lu "
+               "display_bind_present_id=%lu display_bind_completed=%lu "
+               "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+               stats.dxg_scanout_bind_candidate_presenthistory_cmd,
+               stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
+               stats.dxg_scanout_bind_candidate_sender_contracts,
+               stats.dxg_scanout_bind_candidate_completion_contracts,
+               stats.dxg_scanout_bind_completion_successes,
+               stats.dxg_display_bind_present_id,
+               stats.dxg_display_bind_completed_id,
+               stats.dxg_scanout_bind_candidate_presenthistory_cmd == 34 &&
+                       stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
+                       stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                       stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                       stats.dxg_scanout_bind_completion_successes == 0 &&
+                       stats.dxg_display_bind_present_id == 0 &&
+                       stats.dxg_display_bind_completed_id == 0 ?
+                   "PASS" : "FAIL");
+        printf("gpu_core_c_validator "
                "dxg_native_present_lane_rejection_matrix "
                "wsl_presenthistory_enum_only=REJECTED "
                "wsl_presenthistory_sender_contract=%lu "
