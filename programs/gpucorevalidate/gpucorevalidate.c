@@ -19,6 +19,46 @@ static int contains(const char *haystack, const char *needle)
     return 0;
 }
 
+static int token_boundary(char c)
+{
+    return c == 0 || c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static int output_token_match_at(const char *start, const char *end,
+                                 const char *p, const char *token, uint len)
+{
+    if (p != start && !token_boundary(p[-1]))
+        return 0;
+    if (memcmp(p, token, len) != 0)
+        return 0;
+    if (p + len == end || token_boundary(p[len]))
+        return 1;
+    return len > 0 && token[len - 1] == '=';
+}
+
+static int output_has_token(const char *start, const char *end,
+                            const char *token)
+{
+    uint len = strlen(token);
+    const char *last;
+
+    if (len == 0)
+        return 1;
+    if ((uint)(end - start) < len)
+        return 0;
+    last = end - len;
+    for (const char *p = start; p <= last; p++) {
+        if (output_token_match_at(start, end, p, token, len))
+            return 1;
+    }
+    return 0;
+}
+
+static int output_contains_token(const char *output, const char *token)
+{
+    return output_has_token(output, output + strlen(output), token);
+}
+
 static void note_fail(const char *step, const char *why)
 {
     failures++;
@@ -191,7 +231,7 @@ static int run_child_capture(const char *name, char **argv,
 static int require_output_token(const char *step, const char *output,
                                 const char *token)
 {
-    if (contains(output, token))
+    if (output_contains_token(output, token))
         return 0;
     failures++;
     printf("gpu_core_c_validator step=%s status=FAIL missing_token=%s\n",
@@ -202,7 +242,7 @@ static int require_output_token(const char *step, const char *output,
 static int reject_output_token(const char *step, const char *output,
                                const char *token)
 {
-    if (!contains(output, token))
+    if (!output_contains_token(output, token))
         return 0;
     failures++;
     printf("gpu_core_c_validator step=%s status=FAIL unexpected_token=%s\n",
@@ -224,16 +264,8 @@ static int output_line_has_token(const char *output, const char *anchor,
             end++;
         has_anchor = 0;
         has_token = 0;
-        for (const char *p = line; p < end; p++) {
-            uint alen = strlen(anchor);
-            uint tlen = strlen(token);
-            if (!has_anchor && p + alen <= end &&
-                memcmp(p, anchor, alen) == 0)
-                has_anchor = 1;
-            if (!has_token && p + tlen <= end &&
-                memcmp(p, token, tlen) == 0)
-                has_token = 1;
-        }
+        has_anchor = output_has_token(line, end, anchor);
+        has_token = output_has_token(line, end, token);
         if (has_anchor && has_token)
             return 1;
         line = *end == '\n' ? end + 1 : end;
@@ -1626,9 +1658,14 @@ static int validate_drm_syncobj_matrix(void)
         reject_output_token("drm_atomic_fence_matrix", output,
                             "atomic_out_fence_placeholder=1");
         reject_output_token("drm_atomic_fence_matrix", output,
+                            "out_fence_placeholder=1");
+        reject_output_token("drm_atomic_fence_matrix", output,
                             "atomic_fence_kernel=placeholder");
         reject_output_token("drm_atomic_fence_matrix", output,
                             "atomic_fence_kernel=missing_fields");
+        reject_output_line_token("drm_atomic_fence_matrix", output,
+                                 "atomic_fence_matrix",
+                                 "out_fence_placeholder=1");
         reject_output_line_token("drm_atomic_fence_matrix", output,
                                  "atomic_fence_matrix", "status=DEFERRED");
     } else if (contains(output, "atomic_fence_kernel=missing_fields")) {

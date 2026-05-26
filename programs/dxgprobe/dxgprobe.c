@@ -5317,6 +5317,98 @@ static char *dxg_find_text(char *s, const char *needle)
     return 0;
 }
 
+static int dxg_is_line_end(char c)
+{
+    return c == 0 || c == '\n' || c == '\r';
+}
+
+static char *dxg_find_status_line(char *s, const char *name)
+{
+    char *p = s;
+
+    if (s == 0 || name == 0 || *name == 0)
+        return 0;
+    while (*p != 0) {
+        if (dxg_prefix_eq(p, name))
+            return p;
+        while (!dxg_is_line_end(*p))
+            p++;
+        while (*p == '\n' || *p == '\r')
+            p++;
+    }
+    return 0;
+}
+
+static int dxg_is_field_boundary(char c)
+{
+    return c == 0 || c == ' ' || c == '\t';
+}
+
+static char *dxg_find_field_on_line(char *line, const char *name)
+{
+    char *p;
+    char *first_value;
+
+    if (line == 0 || name == 0 || *name == 0)
+        return 0;
+    first_value = line;
+    while (!dxg_is_line_end(*first_value) && *first_value != '=')
+        first_value++;
+    if (*first_value == '=')
+        first_value++;
+    for (p = line; !dxg_is_line_end(*p); p++) {
+        char prev = p == line ? 0 : p[-1];
+
+        if ((p == first_value || dxg_is_field_boundary(prev)) &&
+            dxg_prefix_eq(p, name))
+            return p;
+    }
+    return 0;
+}
+
+static int dxg_parse_uint_after_field_on_line(char *line, const char *name,
+                                              uint32 *out)
+{
+    char *p;
+    int seen = 0;
+    uint64 value = 0;
+    int base = 10;
+    int neg = 0;
+
+    p = dxg_find_field_on_line(line, name);
+    if (p == 0)
+        return -1;
+    p += strlen(name);
+    if (*p == '-') {
+        neg = 1;
+        p++;
+    }
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    }
+    for (; !dxg_is_line_end(*p); p++) {
+        int digit;
+
+        if (*p >= '0' && *p <= '9')
+            digit = *p - '0';
+        else if (*p >= 'a' && *p <= 'f')
+            digit = 10 + *p - 'a';
+        else if (*p >= 'A' && *p <= 'F')
+            digit = 10 + *p - 'A';
+        else
+            break;
+        if (digit >= base)
+            break;
+        value = value * base + digit;
+        seen = 1;
+    }
+    if (!seen || (!dxg_is_line_end(*p) && !dxg_is_field_boundary(*p)))
+        return -1;
+    *out = neg ? (uint32)(-(int64)value) : (uint32)value;
+    return 0;
+}
+
 static int dxg_parse_uint_after(char *line, const char *name, uint32 *out)
 {
     char *p;
@@ -11278,26 +11370,32 @@ static int probe_present_source_failclosed_contract(
     {
         char *dxg_status = read_dxg_status_buffer();
         char *host_to_vm = dxg_status != 0 ?
-            dxg_find_text(dxg_status, "dxg_host_to_vm_last=") : 0;
+            dxg_find_status_line(dxg_status, "dxg_host_to_vm_last=") : 0;
 
         if (host_to_vm != 0) {
-            (void)dxg_parse_uint_after(host_to_vm, "packets:",
-                                       &host_to_vm_packets);
-            (void)dxg_parse_uint_after(host_to_vm, "unknown:",
-                                       &host_to_vm_unknown);
-            (void)dxg_parse_uint_after(host_to_vm, "cmd:",
-                                       &host_to_vm_last_cmd);
-            (void)dxg_parse_uint_after(host_to_vm, "channel:",
-                                       &host_to_vm_last_channel);
-            (void)dxg_parse_uint_after(host_to_vm, "payload:",
-                                       &host_to_vm_last_payload);
-            (void)dxg_parse_uint_after(host_to_vm, "presenthistory:",
-                                       &host_to_vm_presenthistory);
-            (void)dxg_parse_uint_after(host_to_vm, "presenthistory_len:",
-                                       &host_to_vm_presenthistory_len);
-            (void)dxg_parse_uint_after(host_to_vm,
-                                       "presenthistory_head_len:",
-                                       &host_to_vm_presenthistory_head_len);
+            (void)dxg_parse_uint_after_field_on_line(host_to_vm,
+                                                     "packets:",
+                                                     &host_to_vm_packets);
+            (void)dxg_parse_uint_after_field_on_line(host_to_vm,
+                                                     "unknown:",
+                                                     &host_to_vm_unknown);
+            (void)dxg_parse_uint_after_field_on_line(host_to_vm, "cmd:",
+                                                     &host_to_vm_last_cmd);
+            (void)dxg_parse_uint_after_field_on_line(host_to_vm,
+                                                     "channel:",
+                                                     &host_to_vm_last_channel);
+            (void)dxg_parse_uint_after_field_on_line(host_to_vm,
+                                                     "payload:",
+                                                     &host_to_vm_last_payload);
+            (void)dxg_parse_uint_after_field_on_line(
+                host_to_vm, "presenthistory:",
+                &host_to_vm_presenthistory);
+            (void)dxg_parse_uint_after_field_on_line(
+                host_to_vm, "presenthistory_len:",
+                &host_to_vm_presenthistory_len);
+            (void)dxg_parse_uint_after_field_on_line(
+                host_to_vm, "presenthistory_head_len:",
+                &host_to_vm_presenthistory_head_len);
         }
         d3d12_host_to_vm_presenthistory_absent_pass =
             host_to_vm != 0 &&
