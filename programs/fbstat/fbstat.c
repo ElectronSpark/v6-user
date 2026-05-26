@@ -397,6 +397,7 @@ int main(int argc, char *argv[])
     int standard_alloc_not_display_bind_ok = 0;
     int dda_nouveau_separate_display_not_bind_ok = 0;
     int foreign_prime_import_gap_ok = 0;
+    int public_present_api_not_guest_bind_ok = 0;
     int nouveau_display_kms_ready = 0;
     int nouveau_native_display_claimed = 0;
     int nouveau_atomic_pageflip_backend_missing_ok = 0;
@@ -645,6 +646,22 @@ int main(int argc, char *argv[])
         stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
+    public_present_api_not_guest_bind_ok =
+        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_present_helper_transport_present == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
         backend_opengl_submit == 0;
     nouveau_display_kms_ready =
@@ -1045,6 +1062,29 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            standard_alloc_not_display_bind_ok ? "PASS" : "FAIL");
+    printf("public_present_api_not_guest_bind_matrix "
+           "reactos_d3dkmt_present_api=known "
+           "reactos_present_redirected_api=known "
+           "directx_shared_handle_api=known "
+           "directx_sharing_contract_hwnd_only=1 "
+           "wslg_local_source=absent freerdp_local_source=absent "
+           "rdp_frame_transport=copy_or_dirty_frame "
+           "guest_vmbus_display_bind_contract=0 "
+           "guest_resource_bind_contracts=%lu "
+           "guest_completion_contracts=%lu "
+           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=%u "
+           "webkit_accel_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           backend_opengl_submit,
+           public_present_api_not_guest_bind_ok ? "PASS" : "FAIL");
     printf("gpu_remaining_plan_dependency_skeleton_matrix "
            "root_display_bind_gate=closed native_present_gate=closed "
            "real_display_bind_sender=%lu real_display_bind_completion=%lu "
@@ -1080,6 +1120,7 @@ int main(int argc, char *argv[])
                    generic_completion_not_native_ok &&
                    standard_alloc_not_display_bind_ok &&
                    dda_nouveau_separate_display_not_bind_ok &&
+                   public_present_api_not_guest_bind_ok &&
                    stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
                    stats.dxg_display_bind_present_id == 0 &&

@@ -409,6 +409,8 @@ static int validate_fbstat_aggregate_matrix(void)
         "wsl_standard_alloc_not_display_bind_matrix";
     const char *foreign_prime_anchor =
         "foreign_prime_import_gap_matrix";
+    const char *public_present_anchor =
+        "public_present_api_not_guest_bind_matrix";
     const char *plan_dependency_anchor =
         "gpu_remaining_plan_dependency_skeleton_matrix";
     uint64 attempts = 0;
@@ -679,6 +681,45 @@ static int validate_fbstat_aggregate_matrix(void)
                               "opengl_submit_credit=0");
     require_output_line_token("fbstat_foreign_prime_import_gap", output,
                               foreign_prime_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "reactos_d3dkmt_present_api=known");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "directx_sharing_contract_hwnd_only=1");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "wslg_local_source=absent");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "freerdp_local_source=absent");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "rdp_frame_transport=copy_or_dirty_frame");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "guest_vmbus_display_bind_contract=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "gpup_sender_contract=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "gpup_completion_contract=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "transport_present=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
+                              "webkit_accel_credit=0");
+    require_output_line_token("fbstat_public_present_api_not_guest_bind",
+                              output, public_present_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_plan_dependency_blockers", output,
                               plan_dependency_anchor,
@@ -3224,6 +3265,7 @@ static int validate_backend(void)
     int wsl_submit_present_fields_not_bind_ok;
     int wsl_stdalloc_and_alloc_flags_not_bind_ok;
     int wsl_trace_display_bind_negative_ok;
+    int public_present_api_not_guest_bind_ok;
     int provider_credit_gate_negative_ok;
     int dda_nouveau_non_readback_display_proof_ok;
     int host_display_bind_source_catalog_ok;
@@ -3650,6 +3692,22 @@ static int validate_backend(void)
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
         backend_opengl_submit == 0;
+    public_present_api_not_guest_bind_ok =
+        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_present_helper_transport_present == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
     provider_credit_gate_negative_ok =
         provider_credit_gate_ok &&
         (stats.dxg_display_bind_provider_submits == 0 ||
@@ -3710,6 +3768,7 @@ static int validate_backend(void)
         wsl_submit_present_fields_not_bind_ok &&
         wsl_stdalloc_and_alloc_flags_not_bind_ok &&
         wsl_trace_display_bind_negative_ok &&
+        public_present_api_not_guest_bind_ok &&
         provider_credit_gate_negative_ok &&
         dda_nouveau_separate_display_not_bind_ok &&
         dda_nouveau_non_readback_display_proof_ok &&
@@ -3971,6 +4030,30 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            wsl_trace_display_bind_negative_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator "
+           "public_present_api_not_guest_bind_matrix "
+           "reactos_d3dkmt_present_api=known "
+           "reactos_present_redirected_api=known "
+           "directx_shared_handle_api=known "
+           "directx_sharing_contract_hwnd_only=1 "
+           "wslg_local_source=absent freerdp_local_source=absent "
+           "rdp_frame_transport=copy_or_dirty_frame "
+           "guest_vmbus_display_bind_contract=0 "
+           "guest_resource_bind_contracts=%lu "
+           "guest_completion_contracts=%lu "
+           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=%u "
+           "webkit_accel_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           backend_opengl_submit,
+           public_present_api_not_guest_bind_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator provider_credit_gate_negative_matrix "
            "provider_submits=%lu "
            "host_abi_present=%u sender_present=%u completion_present=%u "
@@ -5257,6 +5340,10 @@ static int validate_backend(void)
     }
     if (!wsl_trace_display_bind_negative_ok) {
         note_fail("backend", "wsl_trace_display_bind_claimed");
+        ok = 0;
+    }
+    if (!public_present_api_not_guest_bind_ok) {
+        note_fail("backend", "public_present_api_claimed_guest_bind");
         ok = 0;
     }
     if (!provider_credit_gate_negative_ok) {
