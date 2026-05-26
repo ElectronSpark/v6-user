@@ -10296,6 +10296,7 @@ static int probe_present_source_failclosed_contract(
     int public_present_api_not_guest_bind_pass = 0;
     int provider_credit_gate_negative_pass = 0;
     int dda_nouveau_non_readback_display_proof_pass = 0;
+    int d3d12_display_bind_host_abi_discovery_pass = 0;
     int host_display_bind_source_catalog_pass = 0;
     int d3d12_completion_source_authority_pass = 0;
     int native_present_completion_source_namespace_pass = 0;
@@ -11034,10 +11035,10 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_provider_transaction_id == 0 &&
         stats_after.dxg_display_bind_provider_channel == 0 &&
         stats_after.dxg_display_bind_provider_completion_demux_registered == 0 &&
-        stats_after.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
-        stats_after.dxg_display_bind_provider_refs_released == 0 &&
-        stats_after.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
-        stats_after.dxg_display_bind_provider_no_host_abi_refs_released == 0 &&
+        stats_after.dxg_display_bind_provider_resolved_or_cancelled != 0 &&
+        stats_after.dxg_display_bind_provider_refs_released != 0 &&
+        stats_after.dxg_display_bind_provider_no_host_abi_cancelled != 0 &&
+        stats_after.dxg_display_bind_provider_no_host_abi_refs_released != 0 &&
         stats_after.dxg_display_bind_pending_cancelled ==
             stats_before.dxg_display_bind_pending_cancelled &&
         stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
@@ -11304,6 +11305,24 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_scanout_bind_completion_successes ==
             stats_before.dxg_scanout_bind_completion_successes &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    d3d12_display_bind_host_abi_discovery_pass =
+        stats_after_rc == 0 &&
+        wsl_uapi_namespace_negative_pass &&
+        public_present_api_not_guest_bind_pass &&
+        provider_credit_gate_negative_pass &&
+        d3d12_dda_nouveau_separate_display_not_bind_pass &&
+        stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats_after.dxg_present_helper_transport_present == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats_after.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+        stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     dda_nouveau_non_readback_display_proof_pass =
         stats_after_rc == 0 &&
         (((stats_after.nouveau_pci_probe_accepts == 0 &&
@@ -11348,6 +11367,7 @@ static int probe_present_source_failclosed_contract(
         wsl_trace_display_bind_negative_pass &&
         public_present_api_not_guest_bind_pass &&
         provider_credit_gate_negative_pass &&
+        d3d12_display_bind_host_abi_discovery_pass &&
         d3d12_dda_nouveau_separate_display_not_bind_pass &&
         dda_nouveau_non_readback_display_proof_pass &&
         ((stats_after.dxg_display_bind_provider_submits ==
@@ -11470,6 +11490,7 @@ static int probe_present_source_failclosed_contract(
         wsl_trace_display_bind_negative_pass &&
         public_present_api_not_guest_bind_pass &&
         provider_credit_gate_negative_pass &&
+        d3d12_display_bind_host_abi_discovery_pass &&
         dda_nouveau_non_readback_display_proof_pass &&
         host_display_bind_source_catalog_pass &&
         d3d12_completion_source_authority_pass &&
@@ -11510,6 +11531,7 @@ static int probe_present_source_failclosed_contract(
            wsl_trace_display_bind_negative_pass &&
            public_present_api_not_guest_bind_pass &&
            provider_credit_gate_negative_pass &&
+           d3d12_display_bind_host_abi_discovery_pass &&
            dda_nouveau_non_readback_display_proof_pass &&
            d3d12_completion_source_authority_pass &&
            native_present_completion_source_namespace_pass &&
@@ -11613,6 +11635,33 @@ out:
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,
            host_display_bind_source_catalog_pass ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_host_abi_discovery_matrix "
+           "custom_host_tool=0 wsl_dxg_display_bind_ioctl=0 "
+           "wsl_display_bind_ioctl_absent=1 "
+           "wslg_frame_path=absent freerdp_frame_path=absent "
+           "rdp_frame_path=copy_or_dirty_frame "
+           "gpup_dxg_sender_contract=%lu "
+           "gpup_dxg_completion_contract=%lu "
+           "completion_demux_contract=%lu "
+           "dda_nouveau_d3d12_import=%lu "
+           "dda_nouveau_scanout_bind=%lu "
+           "dda_nouveau_hw_flip_completion=%s "
+           "provider_state=failclosed provider_failclosed=1 "
+           "host_abi_present=0 sender_present=0 completion_present=0 "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_display_bind_provider_completion_demux_registered,
+           stats_after.dxg_present_dda_nouveau_import_path_present,
+           stats_after.dxg_present_dda_nouveau_scanout_bind_present,
+           stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_host_abi_discovery_pass ? "PASS" : "FAIL");
     printf("d3d12_completion_source_authority_matrix "
            "accepted_completion_source=display_bind_provider "
            "submit_ntstatus_as_completion=0 "
@@ -12737,6 +12786,33 @@ out:
            stats_after.dxg_display_bind_completed_id,
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
            public_present_api_not_guest_bind_pass ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_host_abi_discovery_matrix "
+           "custom_host_tool=0 wsl_dxg_display_bind_ioctl=0 "
+           "wsl_display_bind_ioctl_absent=1 "
+           "wslg_frame_path=absent freerdp_frame_path=absent "
+           "rdp_frame_path=copy_or_dirty_frame "
+           "gpup_dxg_sender_contract=%lu "
+           "gpup_dxg_completion_contract=%lu "
+           "completion_demux_contract=%lu "
+           "dda_nouveau_d3d12_import=%lu "
+           "dda_nouveau_scanout_bind=%lu "
+           "dda_nouveau_hw_flip_completion=%s "
+           "provider_state=failclosed provider_failclosed=1 "
+           "host_abi_present=0 sender_present=0 completion_present=0 "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_display_bind_provider_completion_demux_registered,
+           stats_after.dxg_present_dda_nouveau_import_path_present,
+           stats_after.dxg_present_dda_nouveau_scanout_bind_present,
+           stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_host_abi_discovery_pass ? "PASS" : "FAIL");
     printf("provider_credit_gate_negative_matrix "
            "provider_submits_delta=%lu "
            "host_abi_present=%u sender_present=%u completion_present=%u "

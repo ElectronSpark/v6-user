@@ -411,6 +411,8 @@ static int validate_fbstat_aggregate_matrix(void)
         "foreign_prime_import_gap_matrix";
     const char *public_present_anchor =
         "public_present_api_not_guest_bind_matrix";
+    const char *host_abi_discovery_anchor =
+        "d3d12_display_bind_host_abi_discovery_matrix";
     const char *plan_dependency_anchor =
         "gpu_remaining_plan_dependency_skeleton_matrix";
     uint64 attempts = 0;
@@ -576,10 +578,10 @@ static int validate_fbstat_aggregate_matrix(void)
                               "completion_demux_registered=0");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
-                              "resolved_or_cancelled=0");
+                              "resolved_or_cancelled=");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
-                              "refs_released=0");
+                              "refs_released=");
     require_output_line_token("fbstat_display_bind_provider_publication",
                               output, provider_publication_anchor,
                               "pending_cancelled=");
@@ -720,6 +722,66 @@ static int validate_fbstat_aggregate_matrix(void)
                               "webkit_accel_credit=0");
     require_output_line_token("fbstat_public_present_api_not_guest_bind",
                               output, public_present_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "custom_host_tool=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "wsl_dxg_display_bind_ioctl=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "wsl_display_bind_ioctl_absent=1");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "wslg_frame_path=absent");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "freerdp_frame_path=absent");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "rdp_frame_path=copy_or_dirty_frame");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "gpup_dxg_sender_contract=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "gpup_dxg_completion_contract=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "completion_demux_contract=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "dda_nouveau_d3d12_import=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "dda_nouveau_scanout_bind=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "dda_nouveau_hw_flip_completion=ABSENT");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "provider_state=failclosed");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "transport_present=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "present_id=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "completed=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
+                              "webkit_accel_credit=0");
+    require_output_line_token("fbstat_display_bind_host_abi_discovery",
+                              output, host_abi_discovery_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_plan_dependency_blockers", output,
                               plan_dependency_anchor,
@@ -2659,9 +2721,13 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "completion_demux_registered=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
-                         output, "resolved_or_cancelled=0");
+                         output, "resolved_or_cancelled=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
-                         output, "refs_released=0");
+                         output, "refs_released=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "no_host_abi_cancelled=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "no_host_abi_refs_released=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "pending_cancelled_delta=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
@@ -3268,6 +3334,7 @@ static int validate_backend(void)
     int public_present_api_not_guest_bind_ok;
     int provider_credit_gate_negative_ok;
     int dda_nouveau_non_readback_display_proof_ok;
+    int d3d12_display_bind_host_abi_discovery_ok;
     int host_display_bind_source_catalog_ok;
     int d3d12_completion_source_authority_ok;
     int native_present_completion_source_namespace_ok;
@@ -3530,10 +3597,15 @@ static int validate_backend(void)
          stats.dxg_display_bind_provider_transaction_id == 0 &&
          stats.dxg_display_bind_provider_channel == 0 &&
          stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
-         stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
-         stats.dxg_display_bind_provider_refs_released == 0 &&
-         stats.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
-         stats.dxg_display_bind_provider_no_host_abi_refs_released == 0 &&
+         ((stats.dxg_display_bind_provider_resolved_or_cancelled != 0 &&
+           stats.dxg_display_bind_provider_refs_released != 0 &&
+           stats.dxg_display_bind_provider_no_host_abi_cancelled != 0 &&
+           stats.dxg_display_bind_provider_no_host_abi_refs_released != 0) ||
+          (stats.dxg_display_bind_provider_submits == 0 &&
+           stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
+           stats.dxg_display_bind_provider_refs_released == 0 &&
+           stats.dxg_display_bind_provider_no_host_abi_cancelled == 0 &&
+           stats.dxg_display_bind_provider_no_host_abi_refs_released == 0)) &&
          stats.dxg_display_bind_provider_no_host_abi != 0 &&
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
@@ -3720,6 +3792,23 @@ static int validate_backend(void)
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
         backend_opengl_submit == 0;
+    d3d12_display_bind_host_abi_discovery_ok =
+        wsl_uapi_negative_ok &&
+        public_present_api_not_guest_bind_ok &&
+        provider_credit_gate_negative_ok &&
+        dda_nouveau_separate_display_not_bind_ok &&
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_present_helper_transport_present == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+        stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
     dda_nouveau_non_readback_display_proof_ok =
         (stats.nouveau_pci_probe_accepts == 0 &&
          stats.nouveau_display_probe_attempts == 0 &&
@@ -3770,6 +3859,7 @@ static int validate_backend(void)
         wsl_trace_display_bind_negative_ok &&
         public_present_api_not_guest_bind_ok &&
         provider_credit_gate_negative_ok &&
+        d3d12_display_bind_host_abi_discovery_ok &&
         dda_nouveau_separate_display_not_bind_ok &&
         dda_nouveau_non_readback_display_proof_ok &&
         ((stats.dxg_display_bind_provider_submits == 0 &&
@@ -4054,6 +4144,34 @@ static int validate_backend(void)
            stats.dxg_display_bind_completed_id,
            backend_opengl_submit,
            public_present_api_not_guest_bind_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator "
+           "d3d12_display_bind_host_abi_discovery_matrix "
+           "custom_host_tool=0 wsl_dxg_display_bind_ioctl=0 "
+           "wsl_display_bind_ioctl_absent=1 "
+           "wslg_frame_path=absent freerdp_frame_path=absent "
+           "rdp_frame_path=copy_or_dirty_frame "
+           "gpup_dxg_sender_contract=%lu "
+           "gpup_dxg_completion_contract=%lu "
+           "completion_demux_contract=%lu "
+           "dda_nouveau_d3d12_import=%lu "
+           "dda_nouveau_scanout_bind=%lu "
+           "dda_nouveau_hw_flip_completion=%s "
+           "provider_state=failclosed provider_failclosed=1 "
+           "host_abi_present=0 sender_present=0 completion_present=0 "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_present_dda_nouveau_import_path_present,
+           stats.dxg_present_dda_nouveau_scanout_bind_present,
+           stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           d3d12_display_bind_host_abi_discovery_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator provider_credit_gate_negative_matrix "
            "provider_submits=%lu "
            "host_abi_present=%u sender_present=%u completion_present=%u "
@@ -4525,6 +4643,7 @@ static int validate_backend(void)
                    wsl_stdalloc_and_alloc_flags_not_bind_ok &&
                    wsl_trace_display_bind_negative_ok &&
                    provider_credit_gate_negative_ok &&
+                   d3d12_display_bind_host_abi_discovery_ok &&
                    dda_nouveau_non_readback_display_proof_ok &&
                    host_display_bind_source_catalog_ok &&
                    stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
@@ -5350,6 +5469,10 @@ static int validate_backend(void)
         note_fail("backend", "provider_credit_gate_not_failclosed");
         ok = 0;
     }
+    if (!d3d12_display_bind_host_abi_discovery_ok) {
+        note_fail("backend", "display_bind_host_abi_discovery_opened");
+        ok = 0;
+    }
     if (!dda_nouveau_non_readback_display_proof_ok) {
         note_fail("backend", "dda_nouveau_non_readback_display_not_proven");
         ok = 0;
@@ -6121,6 +6244,7 @@ static int validate_backend(void)
                        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
                        stats.dxg_present_dxg_adapter_display_supported == 0 &&
                        stats.dxg_present_dxg_adapter_sources == 0 &&
+                       stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
                        stats.kms_present_last_lane ==
                            FB_GPU_KMS_PRESENT_LANE_NONE &&
                        stats.kms_page_flip_events_native_hw == 0 &&
