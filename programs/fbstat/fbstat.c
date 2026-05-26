@@ -413,6 +413,7 @@ int main(int argc, char *argv[])
     int stale_source_zero_credit_ok = 0;
     int stale_async_completion_contract_ok = 0;
     int generic_completion_not_native_ok = 0;
+    int native_completion_consumer_escrow_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
     int dda_nouveau_separate_display_not_bind_ok = 0;
     int foreign_prime_import_gap_ok = 0;
@@ -725,7 +726,7 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_completion_demux_registered != 0 &&
          stats.dxg_display_bind_transport_source ==
              FB_GPU_DXG_DISPLAY_BIND_SOURCE_NON_WSL_DXGKRNL_EXTENSION &&
-         stats.dxg_display_bind_host_saw_packet != 0 &&
+         stats.dxg_display_bind_host_saw_packet == 1 &&
          stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
          stats.dxg_display_bind_provider_no_host_abi == 0 &&
          stats.dxg_display_bind_provider_no_sender == 0 &&
@@ -793,6 +794,27 @@ int main(int argc, char *argv[])
         stats.dxg_display_bind_completed_id == 0 &&
         stats.kms_vblank_source_nouveau_hw == 0 &&
         stats.kms_page_flip_events_native_hw == 0;
+    native_completion_consumer_escrow_ok =
+        native_completion_lifetime_ok &&
+        provider_credit_gate_ok &&
+        generic_completion_not_native_ok &&
+        stats.dxg_present_helper_transport_present == 0 &&
+        stats.dxg_present_display_target_kind ==
+            FB_GPU_DXG_DISPLAY_TARGET_NONE &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_transport_source ==
+            FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+        (stats.dxg_display_bind_provider_submits == 0 ||
+         stats.dxg_display_bind_provider_no_completion != 0) &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
     standard_alloc_not_display_bind_ok =
         (stats.dxg_scanout_bind_standard_alloc_private_data == 0 ||
          stats.dxg_scanout_bind_standard_alloc_display_bind_absent != 0) &&
@@ -1598,6 +1620,35 @@ int main(int argc, char *argv[])
            stats.kms_page_flip_events_software_blit,
            stats.kms_page_flip_events_native_hw,
            generic_completion_not_native_ok ? "PASS" : "FAIL");
+    printf("d3d12_native_completion_consumer_escrow_matrix "
+           "display_bind_gate=closed provider_completion_present=0 "
+           "transport_present=%lu transport_pending_id=%lu "
+           "completion_demux_registered=%lu host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s present_id=%lu completed=%lu "
+           "resource_generation=%lu provider_no_completion=%lu "
+           "callback_release_credit=0 frame_callback_credit=0 "
+           "final_handoff_credit=0 fps_visible_credit=0 "
+           "content_progress_credit=0 webkit_accel_credit=0 "
+           "callback_release_order=blocked release_order=blocked "
+           "consumer_visible_credit=blocked "
+           "close_before_signal_cancel=deferred "
+           "display_target_kind=%lu native_present_credit=%lu "
+           "opengl_submit_credit=%d status=%s\n",
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_provider_transport_pending_id,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_present_display_target_kind,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           native_completion_consumer_escrow_ok ?
+               "PASS_FAILCLOSED" : "FAIL");
     printf("wsl_standard_alloc_not_display_bind_matrix "
            "standard_alloc_private_data=%lu "
            "standard_alloc_display_bind_absent=%lu "
