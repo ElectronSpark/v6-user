@@ -491,6 +491,13 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
          stats.dxg_display_bind_provider_pending_source_generation != 0 &&
          stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_dxgprocess_generation ==
+             stats.dxg_display_bind_provider_pending_owner_generation &&
+         stats.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid != 0 &&
+         stats.dxg_display_bind_provider_pending_parent_resource_ref_held != 0 &&
+         stats.dxg_display_bind_provider_pending_opened_child_ref_held != 0 &&
+         stats.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
          stats.dxg_display_bind_provider_pending_source_generation ==
              stats.dxg_display_bind_source_generation &&
          stats.dxg_display_bind_provider_pending_resource_generation ==
@@ -921,6 +928,10 @@ int main(int argc, char *argv[])
            "owner_generation=%lu provider_source_generation=%lu "
            "provider_resource_generation=%lu pending_owner_generation=%lu "
            "pending_source_generation=%lu pending_resource_generation=%lu "
+           "dxgprocess_generation=%lu process_adapter_generation=%lu "
+           "hmgr_index_unique_valid=%lu parent_resource_ref_held=%lu "
+           "opened_child_ref_held=%lu syncobject_ref_held=%lu "
+           "owner_close_cancelled=%lu "
            "owner_generation_required=1 source_generation_required=1 "
            "resource_generation_required=1 pending_generation_match=%s "
            "publish_before_send=%lu transport_pending_id=%lu "
@@ -938,6 +949,13 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_pending_owner_generation,
            stats.dxg_display_bind_provider_pending_source_generation,
            stats.dxg_display_bind_provider_pending_resource_generation,
+           stats.dxg_display_bind_provider_pending_dxgprocess_generation,
+           stats.dxg_display_bind_provider_pending_process_adapter_generation,
+           stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid,
+           stats.dxg_display_bind_provider_pending_parent_resource_ref_held,
+           stats.dxg_display_bind_provider_pending_opened_child_ref_held,
+           stats.dxg_display_bind_provider_pending_syncobject_ref_held,
+           stats.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats.dxg_display_bind_pending_last_owner_generation,
            stats.dxg_display_bind_pending_last_source_generation,
            stats.dxg_display_bind_pending_last_resource_generation,

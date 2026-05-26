@@ -2713,6 +2713,20 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "pending_generation_match=PASS");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "dxgprocess_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "process_adapter_generation=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "hmgr_index_unique_valid=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "parent_resource_ref_held=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "opened_child_ref_held=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "syncobject_ref_held=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "owner_close_cancelled=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "publish_before_send=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "publish_before_send_order=blocked");
@@ -3604,6 +3618,13 @@ static int validate_backend(void)
          stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
          stats.dxg_display_bind_provider_pending_source_generation != 0 &&
          stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_dxgprocess_generation ==
+             stats.dxg_display_bind_provider_pending_owner_generation &&
+         stats.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid != 0 &&
+         stats.dxg_display_bind_provider_pending_parent_resource_ref_held != 0 &&
+         stats.dxg_display_bind_provider_pending_opened_child_ref_held != 0 &&
+         stats.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
          stats.dxg_display_bind_provider_pending_source_generation ==
              stats.dxg_display_bind_source_generation &&
          stats.dxg_display_bind_provider_pending_resource_generation ==
@@ -4457,6 +4478,10 @@ static int validate_backend(void)
            "provider_source_generation=%lu provider_resource_generation=%lu "
            "pending_owner_generation=%lu pending_source_generation=%lu "
            "pending_resource_generation=%lu "
+           "dxgprocess_generation=%lu process_adapter_generation=%lu "
+           "hmgr_index_unique_valid=%lu parent_resource_ref_held=%lu "
+           "opened_child_ref_held=%lu syncobject_ref_held=%lu "
+           "owner_close_cancelled=%lu "
            "owner_generation_required=1 source_generation_required=1 "
            "resource_generation_required=1 pending_generation_match=%s "
            "publish_before_send=%lu "
@@ -4477,11 +4502,25 @@ static int validate_backend(void)
            stats.dxg_display_bind_pending_last_owner_generation,
            stats.dxg_display_bind_pending_last_source_generation,
            stats.dxg_display_bind_pending_last_resource_generation,
+           stats.dxg_display_bind_provider_pending_dxgprocess_generation,
+           stats.dxg_display_bind_provider_pending_process_adapter_generation,
+           stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid,
+           stats.dxg_display_bind_provider_pending_parent_resource_ref_held,
+           stats.dxg_display_bind_provider_pending_opened_child_ref_held,
+           stats.dxg_display_bind_provider_pending_syncobject_ref_held,
+           stats.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats.dxg_display_bind_provider_submits == 0 ?
                "NOT_SAMPLED" :
            (stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
                    stats.dxg_display_bind_provider_pending_source_generation != 0 &&
                    stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_dxgprocess_generation ==
+                       stats.dxg_display_bind_provider_pending_owner_generation &&
+                   stats.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid != 0 &&
+                   stats.dxg_display_bind_provider_pending_parent_resource_ref_held != 0 &&
+                   stats.dxg_display_bind_provider_pending_opened_child_ref_held != 0 &&
+                   stats.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
                    stats.dxg_display_bind_pending_last_owner_generation ==
                        stats.dxg_display_bind_provider_pending_owner_generation &&
                    stats.dxg_display_bind_pending_last_source_generation ==

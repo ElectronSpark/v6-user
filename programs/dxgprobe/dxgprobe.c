@@ -11024,6 +11024,13 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_provider_pending_owner_generation != 0 &&
         stats_after.dxg_display_bind_provider_pending_source_generation != 0 &&
         stats_after.dxg_display_bind_provider_pending_resource_generation != 0 &&
+        stats_after.dxg_display_bind_provider_pending_dxgprocess_generation ==
+            stats_after.dxg_display_bind_provider_pending_owner_generation &&
+        stats_after.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
+        stats_after.dxg_display_bind_provider_pending_hmgr_index_unique_valid == 1 &&
+        stats_after.dxg_display_bind_provider_pending_parent_resource_ref_held == 1 &&
+        stats_after.dxg_display_bind_provider_pending_opened_child_ref_held == 1 &&
+        stats_after.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
         stats_after.dxg_display_bind_pending_last_owner_generation ==
             stats_after.dxg_display_bind_provider_pending_owner_generation &&
         stats_after.dxg_display_bind_pending_last_source_generation ==
@@ -12101,6 +12108,10 @@ out:
            "provider_source_generation=%lu provider_resource_generation=%lu "
            "pending_owner_generation=%lu pending_source_generation=%lu "
            "pending_resource_generation=%lu "
+           "dxgprocess_generation=%lu process_adapter_generation=%lu "
+           "hmgr_index_unique_valid=%lu parent_resource_ref_held=%lu "
+           "opened_child_ref_held=%lu syncobject_ref_held=%lu "
+           "owner_close_cancelled=%lu "
            "owner_generation_required=1 source_generation_required=1 "
            "resource_generation_required=1 pending_generation_match=%s "
            "publish_before_send=%lu "
@@ -12130,9 +12141,23 @@ out:
            stats_after.dxg_display_bind_pending_last_owner_generation,
            stats_after.dxg_display_bind_pending_last_source_generation,
            stats_after.dxg_display_bind_pending_last_resource_generation,
+           stats_after.dxg_display_bind_provider_pending_dxgprocess_generation,
+           stats_after.dxg_display_bind_provider_pending_process_adapter_generation,
+           stats_after.dxg_display_bind_provider_pending_hmgr_index_unique_valid,
+           stats_after.dxg_display_bind_provider_pending_parent_resource_ref_held,
+           stats_after.dxg_display_bind_provider_pending_opened_child_ref_held,
+           stats_after.dxg_display_bind_provider_pending_syncobject_ref_held,
+           stats_after.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats_after.dxg_display_bind_provider_pending_owner_generation != 0 &&
                    stats_after.dxg_display_bind_provider_pending_source_generation != 0 &&
                    stats_after.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats_after.dxg_display_bind_provider_pending_dxgprocess_generation ==
+                   stats_after.dxg_display_bind_provider_pending_owner_generation &&
+                   stats_after.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
+                   stats_after.dxg_display_bind_provider_pending_hmgr_index_unique_valid == 1 &&
+                   stats_after.dxg_display_bind_provider_pending_parent_resource_ref_held == 1 &&
+                   stats_after.dxg_display_bind_provider_pending_opened_child_ref_held == 1 &&
+                   stats_after.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
                    stats_after.dxg_display_bind_pending_last_owner_generation ==
                    stats_after.dxg_display_bind_provider_pending_owner_generation &&
                    stats_after.dxg_display_bind_pending_last_source_generation ==
