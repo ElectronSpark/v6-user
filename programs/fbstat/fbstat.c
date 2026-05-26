@@ -363,6 +363,7 @@ int main(int argc, char *argv[])
     int display_bind_success_shape_ok = 0;
     int provider_credit_gate_ok = 0;
     int native_completion_lifetime_ok = 0;
+    int display_bind_request_metadata_ok = 0;
     int stale_source_zero_credit_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
@@ -426,6 +427,13 @@ int main(int argc, char *argv[])
          (stats.dxg_display_bind_provider_no_host_abi == 1 &&
           stats.dxg_display_bind_provider_no_sender == 1 &&
           stats.dxg_display_bind_provider_no_completion == 1));
+    display_bind_request_metadata_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_request_metadata_complete == 1 &&
+         stats.dxg_display_bind_request_sync_metadata_complete == 1 &&
+         stats.dxg_display_bind_request_missing_metadata == 0 &&
+         stats.dxg_display_bind_source_generation != 0 &&
+         stats.dxg_display_bind_resource_generation != 0);
     display_bind_id_shape_ok =
         ((stats.dxg_display_bind_present_id == 0 &&
           stats.dxg_display_bind_completed_id == 0) ||
@@ -670,6 +678,22 @@ int main(int argc, char *argv[])
            stats.nouveau_pci_native_present_credit,
            backend_opengl_submit,
            provider_credit_gate_ok ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_request_metadata_matrix "
+           "provider_submits=%lu request_metadata_complete=%lu "
+           "request_sync_metadata_complete=%lu missing_metadata=0x%lx "
+           "required_metadata=0x%lx source_generation=%lu "
+           "resource_generation=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_request_metadata_complete,
+           stats.dxg_display_bind_request_sync_metadata_complete,
+           stats.dxg_display_bind_request_missing_metadata,
+           stats.dxg_display_bind_required_metadata,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           display_bind_request_metadata_ok ? "PASS" : "FAIL");
     printf("d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
@@ -2548,6 +2572,12 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_no_sender);
     printf("dxg_display_bind_provider_no_completion %lu\n",
            stats.dxg_display_bind_provider_no_completion);
+    printf("dxg_display_bind_request_metadata_complete %lu\n",
+           stats.dxg_display_bind_request_metadata_complete);
+    printf("dxg_display_bind_request_sync_metadata_complete %lu\n",
+           stats.dxg_display_bind_request_sync_metadata_complete);
+    printf("dxg_display_bind_request_missing_metadata 0x%lx\n",
+           stats.dxg_display_bind_request_missing_metadata);
     printf("dxg_display_bind_lock_dropped_submits %lu\n",
            stats.dxg_display_bind_lock_dropped_submits);
     printf("dxg_display_bind_revalidate_attempts %lu\n",

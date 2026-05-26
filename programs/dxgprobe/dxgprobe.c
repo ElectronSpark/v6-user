@@ -10122,6 +10122,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_display_bind_success_shape_pass = 0;
     int d3d12_display_bind_query_fields_pass = 0;
     int d3d12_provider_credit_gate_pass = 0;
+    int d3d12_display_bind_request_metadata_pass = 0;
     int d3d12_native_completion_lifetime_pass = 0;
     int d3d12_display_bind_stale_source_zero_credit_pass = 0;
     int d3d12_native_completion_not_kms_pass = 0;
@@ -10765,6 +10766,33 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
         stats_after.dxg_display_bind_provider_no_sender == 1 &&
         stats_after.dxg_display_bind_provider_no_completion == 1;
+    d3d12_display_bind_request_metadata_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_display_bind_provider_submits >
+            stats_before.dxg_display_bind_provider_submits &&
+        stats_after.dxg_display_bind_request_metadata_complete == 1 &&
+        stats_after.dxg_display_bind_request_sync_metadata_complete == 1 &&
+        stats_after.dxg_display_bind_request_missing_metadata == 0 &&
+        (stats_after.dxg_display_bind_required_metadata &
+         (FB_GPU_DXG_PRESENT_META_DEVICE |
+          FB_GPU_DXG_PRESENT_META_RESOURCE |
+          FB_GPU_DXG_PRESENT_META_ALLOCATION |
+          FB_GPU_DXG_PRESENT_META_DIMENSIONS |
+          FB_GPU_DXG_PRESENT_META_FORMAT |
+          FB_GPU_DXG_PRESENT_META_MODIFIER |
+          FB_GPU_DXG_PRESENT_META_ADAPTER_LUID)) ==
+        (FB_GPU_DXG_PRESENT_META_DEVICE |
+         FB_GPU_DXG_PRESENT_META_RESOURCE |
+         FB_GPU_DXG_PRESENT_META_ALLOCATION |
+         FB_GPU_DXG_PRESENT_META_DIMENSIONS |
+         FB_GPU_DXG_PRESENT_META_FORMAT |
+         FB_GPU_DXG_PRESENT_META_MODIFIER |
+         FB_GPU_DXG_PRESENT_META_ADAPTER_LUID) &&
+        stats_after.dxg_display_bind_source_generation != 0 &&
+        stats_after.dxg_display_bind_resource_generation != 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        no_present_credit && hyperv_gate;
     d3d12_display_bind_success_shape_pass =
         stats_after_rc == 0 &&
         (((backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0 &&
@@ -11321,6 +11349,23 @@ out:
            stats_after.nouveau_pci_native_present_credit,
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
            d3d12_provider_credit_gate_pass ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_request_metadata_matrix "
+           "provider_submits_delta=%lu request_metadata_complete=%lu "
+           "request_sync_metadata_complete=%lu missing_metadata=0x%lx "
+           "required_metadata=0x%lx source_generation=%lu "
+           "resource_generation=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_display_bind_provider_submits -
+               stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_request_metadata_complete,
+           stats_after.dxg_display_bind_request_sync_metadata_complete,
+           stats_after.dxg_display_bind_request_missing_metadata,
+           stats_after.dxg_display_bind_required_metadata,
+           stats_after.dxg_display_bind_source_generation,
+           stats_after.dxg_display_bind_resource_generation,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_request_metadata_pass ? "PASS" : "FAIL");
     printf("d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
