@@ -10127,6 +10127,15 @@ static int probe_present_source_failclosed_contract(
     int d3d12_native_completion_not_kms_pass = 0;
     int d3d12_standard_alloc_not_display_bind_pass = 0;
     int d3d12_dda_nouveau_separate_display_not_bind_pass = 0;
+    int d3d12_host_to_vm_presenthistory_absent_pass = 0;
+    uint32 host_to_vm_packets = 0;
+    uint32 host_to_vm_unknown = 0;
+    uint32 host_to_vm_last_cmd = 0;
+    uint32 host_to_vm_last_channel = 0;
+    uint32 host_to_vm_last_payload = 0;
+    uint32 host_to_vm_presenthistory = 0;
+    uint32 host_to_vm_presenthistory_len = 0;
+    uint32 host_to_vm_presenthistory_head_len = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10906,6 +10915,43 @@ static int probe_present_source_failclosed_contract(
             stats_before.dxg_scanout_bind_completion_successes &&
         stats_after.nouveau_pci_native_present_credit == 0 &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    {
+        char *dxg_status = read_dxg_status_buffer();
+        char *host_to_vm = dxg_status != 0 ?
+            dxg_find_text(dxg_status, "dxg_host_to_vm_last=") : 0;
+
+        if (host_to_vm != 0) {
+            (void)dxg_parse_uint_after(host_to_vm, "packets:",
+                                       &host_to_vm_packets);
+            (void)dxg_parse_uint_after(host_to_vm, "unknown:",
+                                       &host_to_vm_unknown);
+            (void)dxg_parse_uint_after(host_to_vm, "cmd:",
+                                       &host_to_vm_last_cmd);
+            (void)dxg_parse_uint_after(host_to_vm, "channel:",
+                                       &host_to_vm_last_channel);
+            (void)dxg_parse_uint_after(host_to_vm, "payload:",
+                                       &host_to_vm_last_payload);
+            (void)dxg_parse_uint_after(host_to_vm, "presenthistory:",
+                                       &host_to_vm_presenthistory);
+            (void)dxg_parse_uint_after(host_to_vm, "presenthistory_len:",
+                                       &host_to_vm_presenthistory_len);
+            (void)dxg_parse_uint_after(host_to_vm,
+                                       "presenthistory_head_len:",
+                                       &host_to_vm_presenthistory_head_len);
+        }
+        d3d12_host_to_vm_presenthistory_absent_pass =
+            host_to_vm != 0 &&
+            host_to_vm_presenthistory == 0 &&
+            host_to_vm_presenthistory_head_len == 0 &&
+            stats_after.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1 &&
+            stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+            stats_after.dxg_display_bind_present_id == 0 &&
+            stats_after.dxg_display_bind_completed_id == 0 &&
+            stats_after.dxg_scanout_bind_completion_successes ==
+                stats_before.dxg_scanout_bind_completion_successes;
+        if (dxg_status != 0)
+            free(dxg_status);
+    }
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
@@ -10921,6 +10967,7 @@ static int probe_present_source_failclosed_contract(
            d3d12_native_completion_not_kms_pass &&
            d3d12_standard_alloc_not_display_bind_pass &&
            d3d12_dda_nouveau_separate_display_not_bind_pass &&
+           d3d12_host_to_vm_presenthistory_absent_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -11680,6 +11727,25 @@ out:
                    bind_contract.present_id == 0 &&
                    bind_contract.completed == 0 ?
                "PASS" : "FAIL");
+    printf("dxg_host_to_vm_presenthistory_completion_matrix "
+           "host_to_vm_packets=%u unknown_packets=%u last_cmd=%u "
+           "last_channel=%u last_payload=%u "
+           "propagate_presenthistory_cmd=%lu presenthistory_packets=%u "
+           "presenthistory_len=%u presenthistory_head_len=%u "
+           "completion_contracts=%lu "
+           "completion_successes_delta=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           host_to_vm_packets, host_to_vm_unknown, host_to_vm_last_cmd,
+           host_to_vm_last_channel, host_to_vm_last_payload,
+           stats_after.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
+           host_to_vm_presenthistory, host_to_vm_presenthistory_len,
+           host_to_vm_presenthistory_head_len,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_scanout_bind_completion_successes -
+               stats_before.dxg_scanout_bind_completion_successes,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_host_to_vm_presenthistory_absent_pass ? "PASS" : "FAIL");
     printf("dxg_native_present_lane_rejection_matrix "
            "wsl_presenthistory_enum_only=REJECTED "
            "wsl_presenthistory_sender_contract=%lu "

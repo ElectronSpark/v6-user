@@ -2485,6 +2485,28 @@ static int validate_present_source_matrix(void)
                               output,
                               "dxg_scanout_bind_candidate_command_matrix",
                               "status=PASS");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output,
+                         "dxg_host_to_vm_presenthistory_completion_matrix");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "propagate_presenthistory_cmd=1");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "presenthistory_packets=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "presenthistory_head_len=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "completion_contracts=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "present_id=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "completed=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token(
+        "dxg_host_to_vm_presenthistory_completion_matrix", output,
+        "dxg_host_to_vm_presenthistory_completion_matrix", "status=PASS");
     require_output_token("dxg_native_present_lane_rejection_matrix",
                          output,
                          "dxg_native_present_lane_rejection_matrix");
