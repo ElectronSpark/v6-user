@@ -3519,6 +3519,50 @@ static int validate_present_source_matrix(void)
                               output,
                               "dxg_scanout_bind_candidate_command_matrix",
                               "status=PASS");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "wsl_dxg_ioctl_namespace_probe_matrix");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "last_known_ioctl_nr=0x49");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "display_bind_probe_nr=0x4a");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "wrong_type_rc=-1");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "wrong_size_rc=-1");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "wrong_dir_rc=-1");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "after_last_rc=-1");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "future_high_rc=-1");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "accepted_ioctls=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "display_bind_ioctl_present=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "present_source_ioctl_present=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "present_completion_ioctl_present=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "linux_ioctl_contracts=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "resource_bind_contracts=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "display_completion_contracts=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "transport_present=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "present_id=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "completed=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("wsl_dxg_ioctl_namespace_probe_matrix",
+                              output,
+                              "wsl_dxg_ioctl_namespace_probe_matrix",
+                              "status=PASS");
     require_output_token("dxg_host_to_vm_presenthistory_completion_matrix",
                          output,
                          "dxg_host_to_vm_presenthistory_completion_matrix");
@@ -4896,9 +4940,12 @@ static int validate_backend(void)
                    (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0 ?
                "PASS" : "DIAGNOSTIC");
     printf("gpu_core_c_validator wsl_dxg_uapi_namespace_negative_matrix "
-           "uapi_namespace_checked=1 last_known_ioctl_nr=0x49 "
+           "uapi_namespace_checked=1 ioctl_namespace=linux_dxgkrnl "
+           "last_known_ioctl_nr=0x49 checked_range=0x00-0x49 "
            "display_bind_ioctl_present=0 present_source_ioctl_present=0 "
-           "present_completion_ioctl_present=0 linux_ioctl_contracts=%lu "
+           "present_completion_ioctl_present=0 "
+           "out_of_namespace_native_present_ioctl=0 "
+           "linux_ioctl_contracts=%lu "
            "resource_bind_contracts=%lu display_completion_contracts=%lu "
            "transport_present=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -7408,9 +7455,12 @@ static int validate_backend(void)
                backend.backend);
         printf("gpu_core_c_validator "
                "wsl_dxg_uapi_namespace_negative_matrix "
-               "uapi_namespace_checked=1 last_known_ioctl_nr=0x49 "
+               "uapi_namespace_checked=1 ioctl_namespace=linux_dxgkrnl "
+               "last_known_ioctl_nr=0x49 checked_range=0x00-0x49 "
                "display_bind_ioctl_present=0 present_source_ioctl_present=0 "
-               "present_completion_ioctl_present=0 linux_ioctl_contracts=%lu "
+               "present_completion_ioctl_present=0 "
+               "out_of_namespace_native_present_ioctl=0 "
+               "linux_ioctl_contracts=%lu "
                "resource_bind_contracts=%lu "
                "display_completion_contracts=%lu transport_present=%lu "
                "present_id=%lu completed=%lu native_present_credit=0 "

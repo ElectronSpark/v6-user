@@ -34,6 +34,14 @@ display_bind_transport_source_name(uint64 value)
     }
 }
 
+static int dxgprobe_negative_ioctl(int fd, uint32 cmd)
+{
+    uint64 scratch[4];
+
+    memset(scratch, 0, sizeof(scratch));
+    return ioctl(fd, cmd, scratch);
+}
+
 static int g_paging_fence_wait_seconds = DXGPROBE_DEFAULT_FENCE_WAIT_SECONDS;
 static uint32 g_sync_create_flags = 0x3;
 static uint32 g_sync_open_flags;
@@ -10471,6 +10479,7 @@ static int probe_present_source_failclosed_contract(
     int dxg_presenthistory_orphan_completion_rejection_pass = 0;
     int gpu_remaining_plan_dependency_skeleton_pass = 0;
     int wsl_uapi_namespace_negative_pass = 0;
+    int wsl_ioctl_namespace_probe_pass = 0;
     int wsl_adapter_display_caps_negative_pass = 0;
     int wsl_submit_present_fields_not_bind_pass = 0;
     int wsl_stdalloc_and_alloc_flags_not_bind_pass = 0;
@@ -10493,6 +10502,13 @@ static int probe_present_source_failclosed_contract(
     uint32 host_to_vm_presenthistory = 0;
     uint32 host_to_vm_presenthistory_len = 0;
     uint32 host_to_vm_presenthistory_head_len = 0;
+    int wsl_wrong_type_rc = -1;
+    int wsl_wrong_size_rc = -1;
+    int wsl_wrong_dir_rc = -1;
+    int wsl_after_last_rc = -1;
+    int wsl_future_high_rc = -1;
+    uint32 wsl_after_last_nr = 0x4a;
+    uint32 wsl_future_high_nr = 0x7f;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10567,6 +10583,17 @@ static int probe_present_source_failclosed_contract(
     stats_before_rc = ioctl(fb_fd, FB_GPU_GET_STATS, &stats_before);
     if (backend_rc < 0 || stats_before_rc < 0)
         goto out;
+    wsl_wrong_type_rc = dxgprobe_negative_ioctl(
+        fd, _IOWR(0x48, 0x49, struct d3dkmt_isfeatureenabled));
+    wsl_wrong_size_rc = dxgprobe_negative_ioctl(
+        fd, _IOC(_IOC_READ | _IOC_WRITE, 0x47, 0x49, sizeof(uint64)));
+    wsl_wrong_dir_rc = dxgprobe_negative_ioctl(
+        fd, _IOC(_IOC_READ, 0x47, 0x49,
+                 sizeof(struct d3dkmt_isfeatureenabled)));
+    wsl_after_last_rc = dxgprobe_negative_ioctl(
+        fd, _IOWR(0x47, 0x4a, struct d3dkmt_isfeatureenabled));
+    wsl_future_high_rc = dxgprobe_negative_ioctl(
+        fd, _IOWR(0x47, 0x7f, struct d3dkmt_isfeatureenabled));
 
     reg.dxg_fd = fd;
     reg.resource_fd = (int32)shared_handle;
@@ -11500,6 +11527,21 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_transport_present == 0 &&
         stats_after.dxg_display_bind_present_id == 0 &&
         stats_after.dxg_display_bind_completed_id == 0;
+    wsl_ioctl_namespace_probe_pass =
+        wsl_uapi_namespace_negative_pass &&
+        wsl_wrong_type_rc < 0 &&
+        wsl_wrong_size_rc < 0 &&
+        wsl_wrong_dir_rc < 0 &&
+        wsl_after_last_rc < 0 &&
+        wsl_future_high_rc < 0 &&
+        stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     wsl_adapter_display_caps_negative_pass =
         stats_after_rc == 0 &&
         stats_after.dxg_present_dxg_adapter_display_supported == 0 &&
@@ -11644,6 +11686,7 @@ static int probe_present_source_failclosed_contract(
     host_display_bind_source_catalog_pass =
         stats_after_rc == 0 &&
         wsl_uapi_namespace_negative_pass &&
+        wsl_ioctl_namespace_probe_pass &&
         wsl_adapter_display_caps_negative_pass &&
         wsl_submit_present_fields_not_bind_pass &&
         wsl_stdalloc_and_alloc_flags_not_bind_pass &&
@@ -13327,9 +13370,12 @@ out:
            dda_nouveau_d3d12_bridge_disjoint_pass ?
                "PASS_FAILCLOSED" : "FAIL");
     printf("wsl_dxg_uapi_namespace_negative_matrix "
-           "uapi_namespace_checked=1 last_known_ioctl_nr=0x49 "
+           "uapi_namespace_checked=1 ioctl_namespace=linux_dxgkrnl "
+           "last_known_ioctl_nr=0x49 checked_range=0x00-0x49 "
            "display_bind_ioctl_present=0 present_source_ioctl_present=0 "
-           "present_completion_ioctl_present=0 linux_ioctl_contracts=%lu "
+           "present_completion_ioctl_present=0 "
+           "out_of_namespace_native_present_ioctl=0 "
+           "linux_ioctl_contracts=%lu "
            "resource_bind_contracts=%lu display_completion_contracts=%lu "
            "transport_present=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -13340,6 +13386,26 @@ out:
            stats_after.dxg_display_bind_present_id,
            stats_after.dxg_display_bind_completed_id,
            wsl_uapi_namespace_negative_pass ? "PASS" : "FAIL");
+    printf("wsl_dxg_ioctl_namespace_probe_matrix "
+           "last_known_ioctl_nr=0x49 display_bind_probe_nr=0x%x "
+           "future_high_nr=0x%x wrong_type_rc=%d wrong_size_rc=%d "
+           "wrong_dir_rc=%d after_last_rc=%d future_high_rc=%d "
+           "accepted_ioctls=0 display_bind_ioctl_present=0 "
+           "present_source_ioctl_present=0 present_completion_ioctl_present=0 "
+           "linux_ioctl_contracts=%lu resource_bind_contracts=%lu "
+           "display_completion_contracts=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           wsl_after_last_nr, wsl_future_high_nr, wsl_wrong_type_rc,
+           wsl_wrong_size_rc, wsl_wrong_dir_rc, wsl_after_last_rc,
+           wsl_future_high_rc,
+           stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_ioctl_namespace_probe_pass ? "PASS" : "FAIL");
     printf("wsl_dxg_adapter_display_caps_negative_matrix "
            "display_supported=%lu post_device=0 "
            "indirect_display_device=0 display_sources=%lu "
