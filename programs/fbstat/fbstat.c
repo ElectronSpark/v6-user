@@ -366,6 +366,7 @@ int main(int argc, char *argv[])
     int stale_source_zero_credit_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
+    int dda_nouveau_separate_display_not_bind_ok = 0;
     int fd;
 
     if (argc == 2) {
@@ -528,6 +529,18 @@ int main(int argc, char *argv[])
         stats.dxg_display_bind_transport_present == 0 &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0;
+    dda_nouveau_separate_display_not_bind_ok =
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+        stats.dxg_scanout_bind_dda_resource_import_absent != 0 &&
+        stats.dxg_scanout_bind_dda_scanout_bind_absent != 0 &&
+        stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
 
     if (have_backend) {
         printf("backend %s flags 0x%x renderer %s\n",
@@ -2732,6 +2745,30 @@ int main(int argc, char *argv[])
                    stats.dxg_present_dda_nouveau_import_path_present == 0 &&
                    stats.dxg_present_dda_nouveau_scanout_bind_present == 0 ?
                "PASS" : "DIAGNOSTIC");
+    printf("d3d12_dda_nouveau_separate_display_not_bind_matrix "
+           "dda_backend_flag=%u dda_pci_display_present=%lu "
+           "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+           "dda_hw_flip_completion=%s separate_pci_display_path=%s "
+           "display_bind_present_id=%lu display_bind_completed=%lu "
+           "scanout_bind_successes=%lu completion_successes=%lu "
+           "native_present_credit=%lu opengl_submit_credit=%d "
+           "status=%s\n",
+           have_backend &&
+               (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) != 0,
+           stats.dxg_scanout_bind_dda_pci_display_present,
+           stats.dxg_present_dda_nouveau_import_path_present,
+           stats.dxg_present_dda_nouveau_scanout_bind_present,
+           stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats.dxg_scanout_bind_dda_pci_display_present != 0 ?
+               "REJECTED_D3D12_IMPORT_MISSING" : "ABSENT",
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           dda_nouveau_separate_display_not_bind_ok ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
            "same_adapter_resource_only=%lu syncfile_only=%lu "

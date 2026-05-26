@@ -10126,6 +10126,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_display_bind_stale_source_zero_credit_pass = 0;
     int d3d12_native_completion_not_kms_pass = 0;
     int d3d12_standard_alloc_not_display_bind_pass = 0;
+    int d3d12_dda_nouveau_separate_display_not_bind_pass = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -10890,6 +10891,21 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_transport_present == 0 &&
         stats_after.dxg_display_bind_present_id == 0 &&
         stats_after.dxg_display_bind_completed_id == 0;
+    d3d12_dda_nouveau_separate_display_not_bind_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats_after.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
+        stats_after.dxg_scanout_bind_dda_resource_import_absent != 0 &&
+        stats_after.dxg_scanout_bind_dda_scanout_bind_absent != 0 &&
+        stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     pass = provenance_complete && no_present_credit && failclosed &&
            bind_contract_failclosed && foreign_bind_contract_failclosed &&
            wait_sync_failclosed && negative_metadata_pass &&
@@ -10904,6 +10920,7 @@ static int probe_present_source_failclosed_contract(
            d3d12_display_bind_stale_source_zero_credit_pass &&
            d3d12_native_completion_not_kms_pass &&
            d3d12_standard_alloc_not_display_bind_pass &&
+           d3d12_dda_nouveau_separate_display_not_bind_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -11712,6 +11729,32 @@ out:
                    stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
                    stats_after.dxg_present_dda_nouveau_scanout_bind_present == 0 ?
                "PASS" : "FAIL");
+    printf("d3d12_dda_nouveau_separate_display_not_bind_matrix "
+           "dda_backend_flag=%u dda_pci_display_present=%lu "
+           "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+           "dda_hw_flip_completion=%s separate_pci_display_path=%s "
+           "display_bind_present_id=%lu display_bind_completed=%lu "
+           "scanout_bind_success_delta=%lu completion_success_delta=%lu "
+           "native_present_credit=%lu opengl_submit_credit=%u "
+           "status=%s\n",
+           (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) != 0,
+           stats_after.dxg_scanout_bind_dda_pci_display_present,
+           stats_after.dxg_present_dda_nouveau_import_path_present,
+           stats_after.dxg_present_dda_nouveau_scanout_bind_present,
+           stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats_after.dxg_scanout_bind_dda_pci_display_present != 0 ?
+               "REJECTED_D3D12_IMPORT_MISSING" : "ABSENT",
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           stats_after.dxg_scanout_bind_successes -
+               stats_before.dxg_scanout_bind_successes,
+           stats_after.dxg_scanout_bind_completion_successes -
+               stats_before.dxg_scanout_bind_completion_successes,
+           stats_after.nouveau_pci_native_present_credit,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           d3d12_dda_nouveau_separate_display_not_bind_pass ? "PASS" :
+               "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
            "same_adapter_resource_only=%lu syncfile_only=%lu "
