@@ -365,6 +365,7 @@ int main(int argc, char *argv[])
     int native_completion_lifetime_ok = 0;
     int display_bind_request_metadata_ok = 0;
     int display_bind_pending_lifetime_ok = 0;
+    int display_bind_provider_pending_publication_ok = 0;
     int stale_source_zero_credit_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
@@ -450,6 +451,24 @@ int main(int argc, char *argv[])
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
         backend_opengl_submit == 0;
+    display_bind_provider_pending_publication_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_provider_publication_attempts != 0 &&
+         stats.dxg_display_bind_provider_publish_before_send == 0 &&
+         stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+         stats.dxg_display_bind_provider_command_id == 0 &&
+         stats.dxg_display_bind_provider_transaction_id == 0 &&
+         stats.dxg_display_bind_provider_channel == 0 &&
+         stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+         stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
+         stats.dxg_display_bind_provider_refs_released == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi != 0 &&
+         stats.dxg_display_bind_provider_no_sender != 0 &&
+         stats.dxg_display_bind_provider_no_completion != 0 &&
+         stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         backend_opengl_submit == 0);
     display_bind_id_shape_ok =
         ((stats.dxg_display_bind_present_id == 0 &&
           stats.dxg_display_bind_completed_id == 0) ||
@@ -729,6 +748,33 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            display_bind_request_metadata_ok ? "PASS" : "FAIL");
+    printf("d3d12_display_bind_provider_pending_publication_matrix "
+           "provider_submits=%lu publication_attempts=%lu "
+           "host_abi_present=0 sender_present=0 completion_present=0 "
+           "publish_before_send=%lu transport_pending_id=%lu "
+           "command_id=%lu transaction_id=%lu channel=%s "
+           "completion_demux_registered=%lu resolved_or_cancelled=%lu "
+           "refs_released=%lu provider_no_host_abi=%lu "
+           "provider_no_sender=%lu provider_no_completion=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_publication_attempts,
+           stats.dxg_display_bind_provider_publish_before_send,
+           stats.dxg_display_bind_provider_transport_pending_id,
+           stats.dxg_display_bind_provider_command_id,
+           stats.dxg_display_bind_provider_transaction_id,
+           stats.dxg_display_bind_provider_channel == 0 ? "none" : "other",
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_provider_resolved_or_cancelled,
+           stats.dxg_display_bind_provider_refs_released,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           display_bind_provider_pending_publication_ok ?
+               "PASS_FAILCLOSED" : "FAIL");
     printf("d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
@@ -2607,6 +2653,24 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_no_sender);
     printf("dxg_display_bind_provider_no_completion %lu\n",
            stats.dxg_display_bind_provider_no_completion);
+    printf("dxg_display_bind_provider_publication_attempts %lu\n",
+           stats.dxg_display_bind_provider_publication_attempts);
+    printf("dxg_display_bind_provider_publish_before_send %lu\n",
+           stats.dxg_display_bind_provider_publish_before_send);
+    printf("dxg_display_bind_provider_transport_pending_id %lu\n",
+           stats.dxg_display_bind_provider_transport_pending_id);
+    printf("dxg_display_bind_provider_command_id %lu\n",
+           stats.dxg_display_bind_provider_command_id);
+    printf("dxg_display_bind_provider_transaction_id %lu\n",
+           stats.dxg_display_bind_provider_transaction_id);
+    printf("dxg_display_bind_provider_channel %lu\n",
+           stats.dxg_display_bind_provider_channel);
+    printf("dxg_display_bind_provider_completion_demux_registered %lu\n",
+           stats.dxg_display_bind_provider_completion_demux_registered);
+    printf("dxg_display_bind_provider_resolved_or_cancelled %lu\n",
+           stats.dxg_display_bind_provider_resolved_or_cancelled);
+    printf("dxg_display_bind_provider_refs_released %lu\n",
+           stats.dxg_display_bind_provider_refs_released);
     printf("dxg_display_bind_request_metadata_complete %lu\n",
            stats.dxg_display_bind_request_metadata_complete);
     printf("dxg_display_bind_request_sync_metadata_complete %lu\n",

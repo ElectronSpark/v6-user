@@ -10920,6 +10920,16 @@ static int probe_present_source_failclosed_contract(
         stats_after_rc == 0 &&
         stats_after.dxg_display_bind_provider_submits >
             stats_before.dxg_display_bind_provider_submits &&
+        stats_after.dxg_display_bind_provider_publication_attempts >
+            stats_before.dxg_display_bind_provider_publication_attempts &&
+        stats_after.dxg_display_bind_provider_publish_before_send == 0 &&
+        stats_after.dxg_display_bind_provider_transport_pending_id == 0 &&
+        stats_after.dxg_display_bind_provider_command_id == 0 &&
+        stats_after.dxg_display_bind_provider_transaction_id == 0 &&
+        stats_after.dxg_display_bind_provider_channel == 0 &&
+        stats_after.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats_after.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
+        stats_after.dxg_display_bind_provider_refs_released == 0 &&
         stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
         stats_after.dxg_display_bind_provider_no_sender == 1 &&
         stats_after.dxg_display_bind_provider_no_completion == 1 &&
@@ -11876,16 +11886,29 @@ out:
            d3d12_display_bind_generation_revalidation_pass ? "PASS" :
                                                              "FAIL");
     printf("d3d12_display_bind_provider_pending_publication_matrix "
-           "provider_submits_delta=%lu host_abi_present=0 sender_present=0 "
-           "completion_present=0 publish_before_send=0 transport_pending_id=0 "
-           "command_id=0 transaction_id=0 channel=none "
-           "completion_demux_registered=0 resolved_or_cancelled=0 "
-           "refs_released=0 provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_submits_delta=%lu publication_attempts_delta=%lu "
+           "host_abi_present=0 sender_present=0 "
+           "completion_present=0 publish_before_send=%lu "
+           "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
+           "channel=%s completion_demux_registered=%lu "
+           "resolved_or_cancelled=%lu refs_released=%lu "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
            "provider_no_completion=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 "
            "status=%s\n",
            stats_after.dxg_display_bind_provider_submits -
                stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_provider_publication_attempts -
+               stats_before.dxg_display_bind_provider_publication_attempts,
+           stats_after.dxg_display_bind_provider_publish_before_send,
+           stats_after.dxg_display_bind_provider_transport_pending_id,
+           stats_after.dxg_display_bind_provider_command_id,
+           stats_after.dxg_display_bind_provider_transaction_id,
+           stats_after.dxg_display_bind_provider_channel == 0 ?
+               "none" : "other",
+           stats_after.dxg_display_bind_provider_completion_demux_registered,
+           stats_after.dxg_display_bind_provider_resolved_or_cancelled,
+           stats_after.dxg_display_bind_provider_refs_released,
            stats_after.dxg_display_bind_provider_no_host_abi,
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,

@@ -366,6 +366,8 @@ static int validate_fbstat_aggregate_matrix(void)
         "d3d12_display_bind_request_metadata_matrix";
     const char *pending_lifetime_anchor =
         "d3d12_display_bind_pending_lifetime_matrix";
+    const char *provider_publication_anchor =
+        "d3d12_display_bind_provider_pending_publication_matrix";
     const char *completion_lifetime_anchor =
         "d3d12_native_completion_lifetime_matrix";
     const char *stale_source_anchor =
@@ -498,6 +500,21 @@ static int validate_fbstat_aggregate_matrix(void)
     require_output_line_token("fbstat_display_bind_pending_lifetime", output,
                               pending_lifetime_anchor,
                               "status=PASS");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "publication_attempts=");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "publish_before_send=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "transport_pending_id=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "completion_demux_registered=0");
+    require_output_line_token("fbstat_display_bind_provider_publication",
+                              output, provider_publication_anchor,
+                              "status=PASS_FAILCLOSED");
     require_output_line_token("fbstat_native_completion_lifetime", output,
                               completion_lifetime_anchor,
                               "callbacks_after_completion_required=1");
@@ -2354,6 +2371,8 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "provider_submits_delta=");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "publication_attempts_delta=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "publish_before_send=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "transport_pending_id=0");
@@ -3154,7 +3173,16 @@ static int validate_backend(void)
          backend_opengl_submit == 0);
     display_bind_provider_pending_publication_ok =
         stats.dxg_display_bind_provider_submits == 0 ||
-        (stats.dxg_display_bind_provider_no_host_abi != 0 &&
+        (stats.dxg_display_bind_provider_publication_attempts != 0 &&
+         stats.dxg_display_bind_provider_publish_before_send == 0 &&
+         stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+         stats.dxg_display_bind_provider_command_id == 0 &&
+         stats.dxg_display_bind_provider_transaction_id == 0 &&
+         stats.dxg_display_bind_provider_channel == 0 &&
+         stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+         stats.dxg_display_bind_provider_resolved_or_cancelled == 0 &&
+         stats.dxg_display_bind_provider_refs_released == 0 &&
+         stats.dxg_display_bind_provider_no_host_abi != 0 &&
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
          stats.dxg_display_bind_transport_present == 0 &&
@@ -3848,15 +3876,25 @@ static int validate_backend(void)
            display_bind_generation_revalidation_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator "
            "d3d12_display_bind_provider_pending_publication_matrix "
-           "provider_submits=%lu host_abi_present=0 sender_present=0 "
-           "completion_present=0 publish_before_send=0 "
-           "transport_pending_id=0 command_id=0 transaction_id=0 "
-           "channel=none completion_demux_registered=0 "
-           "resolved_or_cancelled=0 refs_released=0 "
+           "provider_submits=%lu publication_attempts=%lu "
+           "host_abi_present=0 sender_present=0 "
+           "completion_present=0 publish_before_send=%lu "
+           "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
+           "channel=%s completion_demux_registered=%lu "
+           "resolved_or_cancelled=%lu refs_released=%lu "
            "provider_no_host_abi=%lu provider_no_sender=%lu "
            "provider_no_completion=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_publication_attempts,
+           stats.dxg_display_bind_provider_publish_before_send,
+           stats.dxg_display_bind_provider_transport_pending_id,
+           stats.dxg_display_bind_provider_command_id,
+           stats.dxg_display_bind_provider_transaction_id,
+           stats.dxg_display_bind_provider_channel == 0 ? "none" : "other",
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_provider_resolved_or_cancelled,
+           stats.dxg_display_bind_provider_refs_released,
            stats.dxg_display_bind_provider_no_host_abi,
            stats.dxg_display_bind_provider_no_sender,
            stats.dxg_display_bind_provider_no_completion,
