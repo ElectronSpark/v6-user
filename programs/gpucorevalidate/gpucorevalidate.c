@@ -2348,6 +2348,39 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_display_bind_generation_revalidation_matrix",
                               "status=PASS");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output,
+                         "d3d12_display_bind_provider_pending_publication_matrix");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "provider_submits_delta=");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "publish_before_send=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "transport_pending_id=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "completion_demux_registered=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "resolved_or_cancelled=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "refs_released=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "provider_no_host_abi=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "provider_no_sender=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "provider_no_completion=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "present_id=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "completed=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_display_bind_provider_pending_publication_matrix",
+                              output,
+                              "d3d12_display_bind_provider_pending_publication_matrix",
+                              "status=PASS_FAILCLOSED");
     require_output_token("d3d12_display_bind_pin_lifetime_matrix",
                          output,
                          "d3d12_display_bind_pin_lifetime_matrix");
@@ -2908,6 +2941,7 @@ static int validate_backend(void)
     int display_bind_request_metadata_ok;
     int display_bind_pending_lifetime_ok;
     int display_bind_generation_revalidation_ok;
+    int display_bind_provider_pending_publication_ok;
     int native_completion_lifetime_ok;
     int stale_source_zero_credit_ok;
     int generic_completion_not_native_ok;
@@ -3117,6 +3151,17 @@ static int validate_backend(void)
              stats.dxg_display_bind_resource_generation &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0 &&
+         backend_opengl_submit == 0);
+    display_bind_provider_pending_publication_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_provider_no_host_abi != 0 &&
+         stats.dxg_display_bind_provider_no_sender != 0 &&
+         stats.dxg_display_bind_provider_no_completion != 0 &&
+         stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+         stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
          backend_opengl_submit == 0);
     display_bind_success_shape_ok =
         (backend_opengl_submit == 0 &&
@@ -3801,6 +3846,24 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            display_bind_generation_revalidation_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator "
+           "d3d12_display_bind_provider_pending_publication_matrix "
+           "provider_submits=%lu host_abi_present=0 sender_present=0 "
+           "completion_present=0 publish_before_send=0 "
+           "transport_pending_id=0 command_id=0 transaction_id=0 "
+           "channel=none completion_demux_registered=0 "
+           "resolved_or_cancelled=0 refs_released=0 "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           display_bind_provider_pending_publication_ok ?
+               "PASS_FAILCLOSED" : "FAIL");
     printf("gpu_core_c_validator d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
@@ -3937,6 +4000,7 @@ static int validate_backend(void)
            display_bind_success_shape_ok &&
                    display_bind_pending_lifetime_ok &&
                    display_bind_generation_revalidation_ok &&
+                   display_bind_provider_pending_publication_ok &&
                    native_completion_lifetime_ok &&
                    provider_credit_gate_ok &&
                    generic_completion_not_native_ok &&
@@ -4650,6 +4714,11 @@ static int validate_backend(void)
     if (!display_bind_generation_revalidation_ok) {
         note_fail("backend",
                   "d3d12_display_bind_generation_revalidation_invalid");
+        ok = 0;
+    }
+    if (!display_bind_provider_pending_publication_ok) {
+        note_fail("backend",
+                  "d3d12_display_bind_provider_pending_publication_invalid");
         ok = 0;
     }
     if (!display_bind_success_shape_ok) {

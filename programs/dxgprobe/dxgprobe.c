@@ -10186,6 +10186,7 @@ static int probe_present_source_failclosed_contract(
     int d3d12_display_bind_request_metadata_pass = 0;
     int d3d12_display_bind_pending_lifetime_pass = 0;
     int d3d12_display_bind_generation_revalidation_pass = 0;
+    int d3d12_display_bind_provider_pending_publication_pass = 0;
     int d3d12_native_completion_lifetime_pass = 0;
     int d3d12_display_bind_stale_source_zero_credit_pass = 0;
     int d3d12_display_bind_stale_source_cleanup_immediate = 0;
@@ -10915,6 +10916,19 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_present_id == 0 &&
         stats_after.dxg_display_bind_completed_id == 0 &&
         no_present_credit && hyperv_gate;
+    d3d12_display_bind_provider_pending_publication_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_display_bind_provider_submits >
+            stats_before.dxg_display_bind_provider_submits &&
+        stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
+        stats_after.dxg_display_bind_provider_no_sender == 1 &&
+        stats_after.dxg_display_bind_provider_no_completion == 1 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        no_present_credit && hyperv_gate;
     d3d12_display_bind_success_shape_pass =
         stats_after_rc == 0 &&
         (((backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0 &&
@@ -11294,6 +11308,7 @@ static int probe_present_source_failclosed_contract(
         d3d12_provider_credit_gate_pass &&
         d3d12_display_bind_pending_lifetime_pass &&
         d3d12_display_bind_generation_revalidation_pass &&
+        d3d12_display_bind_provider_pending_publication_pass &&
         d3d12_native_completion_not_kms_pass &&
         d3d12_standard_alloc_not_display_bind_pass &&
         d3d12_dda_nouveau_separate_display_not_bind_pass &&
@@ -11328,6 +11343,7 @@ static int probe_present_source_failclosed_contract(
            d3d12_provider_credit_gate_pass &&
            d3d12_display_bind_pending_lifetime_pass &&
            d3d12_display_bind_generation_revalidation_pass &&
+           d3d12_display_bind_provider_pending_publication_pass &&
            d3d12_native_completion_lifetime_pass &&
            d3d12_display_bind_stale_source_zero_credit_pass &&
            d3d12_native_completion_not_kms_pass &&
@@ -11859,6 +11875,24 @@ out:
            stats_after.dxg_display_bind_completed_id,
            d3d12_display_bind_generation_revalidation_pass ? "PASS" :
                                                              "FAIL");
+    printf("d3d12_display_bind_provider_pending_publication_matrix "
+           "provider_submits_delta=%lu host_abi_present=0 sender_present=0 "
+           "completion_present=0 publish_before_send=0 transport_pending_id=0 "
+           "command_id=0 transaction_id=0 channel=none "
+           "completion_demux_registered=0 resolved_or_cancelled=0 "
+           "refs_released=0 provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats_after.dxg_display_bind_provider_submits -
+               stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_provider_no_host_abi,
+           stats_after.dxg_display_bind_provider_no_sender,
+           stats_after.dxg_display_bind_provider_no_completion,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_provider_pending_publication_pass ?
+               "PASS_FAILCLOSED" : "FAIL");
     printf("d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
