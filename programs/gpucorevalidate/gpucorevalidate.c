@@ -407,6 +407,8 @@ static int validate_fbstat_aggregate_matrix(void)
     const char *not_kms_anchor = "d3d12_native_completion_not_kms_matrix";
     const char *standard_alloc_anchor =
         "wsl_standard_alloc_not_display_bind_matrix";
+    const char *plan_dependency_anchor =
+        "gpu_remaining_plan_dependency_skeleton_matrix";
     uint64 attempts = 0;
     uint64 ready = 0;
     uint64 not_ready = 0;
@@ -636,6 +638,44 @@ static int validate_fbstat_aggregate_matrix(void)
                               "standard_alloc_native_present_credit=0");
     require_output_line_token("fbstat_standard_alloc_not_display_bind",
                               output, standard_alloc_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "real_display_bind_sender=0");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "real_display_bind_completion=0");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "native_completion_validator_gate=closed");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "finite_480p_gate=closed");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "backend_opengl_submit_gate=closed");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "webkit_enabled_artifact_gate=closed");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "dda_nouveau_blocker="
+                              "separate-display-not-D3D12-bind");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "dda_nouveau_reason="
+                              "DDA/Nouveau-separate-display-not-D3D12-bind");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
+                              "webkit_accel_credit=0");
+    require_output_line_token("fbstat_plan_dependency_blockers", output,
+                              plan_dependency_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
                               "nouveau_display_kms_registration_matrix",
@@ -4195,17 +4235,23 @@ static int validate_backend(void)
            standard_alloc_not_display_bind_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator gpu_remaining_plan_dependency_skeleton_matrix "
            "root_display_bind_gate=closed native_present_gate=closed "
-           "native_completion_validators=armed finite_480p_gate=closed "
+           "real_display_bind_sender=%lu real_display_bind_completion=%lu "
+           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+           "native_completion_validators=armed "
+           "native_completion_validator_gate=closed finite_480p_gate=closed "
            "demo_interaction_gate=closed backend_opengl_submit_gate=closed "
            "kvm_virgl_recheck_gate=deferred webkit_route_gate=closed "
            "webkit_content_gate=closed webkit_enabled_artifact_gate=closed "
+           "dda_nouveau_blocker=separate-display-not-D3D12-bind "
+           "dda_nouveau_reason=DDA/Nouveau-separate-display-not-D3D12-bind "
            "wsl_display_bind_ioctl=0 wsl_inband_presenthistory_handler=absent "
-           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
            "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
            "dda_hw_flip_completion=%s display_bind_present_id=%lu "
            "display_bind_completed=%lu backend_opengl_submit=%u "
            "native_present_credit=0 opengl_submit_credit=0 "
            "webkit_accel_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_present_dda_nouveau_import_path_present,
@@ -5649,20 +5695,25 @@ static int validate_backend(void)
         printf("gpu_core_c_validator "
                "gpu_remaining_plan_dependency_skeleton_matrix "
                "root_display_bind_gate=closed native_present_gate=closed "
-               "native_completion_validators=armed finite_480p_gate=closed "
-               "demo_interaction_gate=closed "
+               "real_display_bind_sender=%lu real_display_bind_completion=%lu "
+               "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+               "native_completion_validators=armed "
+               "native_completion_validator_gate=closed "
+               "finite_480p_gate=closed demo_interaction_gate=closed "
                "backend_opengl_submit_gate=closed "
-               "kvm_virgl_recheck_gate=deferred "
-               "webkit_route_gate=closed webkit_content_gate=closed "
-               "webkit_enabled_artifact_gate=closed "
+               "kvm_virgl_recheck_gate=deferred webkit_route_gate=closed "
+               "webkit_content_gate=closed webkit_enabled_artifact_gate=closed "
+               "dda_nouveau_blocker=separate-display-not-D3D12-bind "
+               "dda_nouveau_reason=DDA/Nouveau-separate-display-not-D3D12-bind "
                "wsl_display_bind_ioctl=0 "
                "wsl_inband_presenthistory_handler=absent "
-               "gpup_sender_contract=%lu gpup_completion_contract=%lu "
                "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
                "dda_hw_flip_completion=%s display_bind_present_id=%lu "
                "display_bind_completed=%lu backend_opengl_submit=%u "
                "native_present_credit=0 opengl_submit_credit=0 "
                "webkit_accel_credit=0 status=%s\n",
+               stats.dxg_scanout_bind_candidate_sender_contracts,
+               stats.dxg_scanout_bind_candidate_completion_contracts,
                stats.dxg_scanout_bind_candidate_sender_contracts,
                stats.dxg_scanout_bind_candidate_completion_contracts,
                stats.dxg_present_dda_nouveau_import_path_present,

@@ -936,6 +936,47 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            standard_alloc_not_display_bind_ok ? "PASS" : "FAIL");
+    printf("gpu_remaining_plan_dependency_skeleton_matrix "
+           "root_display_bind_gate=closed native_present_gate=closed "
+           "real_display_bind_sender=%lu real_display_bind_completion=%lu "
+           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+           "native_completion_validators=armed "
+           "native_completion_validator_gate=closed finite_480p_gate=closed "
+           "demo_interaction_gate=closed backend_opengl_submit_gate=closed "
+           "kvm_virgl_recheck_gate=deferred webkit_route_gate=closed "
+           "webkit_content_gate=closed webkit_enabled_artifact_gate=closed "
+           "dda_nouveau_blocker=separate-display-not-D3D12-bind "
+           "dda_nouveau_reason=DDA/Nouveau-separate-display-not-D3D12-bind "
+           "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+           "dda_hw_flip_completion=%s display_bind_present_id=%lu "
+           "display_bind_completed=%lu backend_opengl_submit=%u "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_present_dda_nouveau_import_path_present,
+           stats.dxg_present_dda_nouveau_scanout_bind_present,
+           stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           backend_opengl_submit,
+           display_bind_success_shape_ok &&
+                   display_bind_pending_lifetime_ok &&
+                   display_bind_provider_pending_publication_ok &&
+                   native_completion_lifetime_ok &&
+                   provider_credit_gate_ok &&
+                   generic_completion_not_native_ok &&
+                   standard_alloc_not_display_bind_ok &&
+                   dda_nouveau_separate_display_not_bind_ok &&
+                   stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+                   stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+                   stats.dxg_display_bind_present_id == 0 &&
+                   stats.dxg_display_bind_completed_id == 0 &&
+                   backend_opengl_submit == 0 ?
+               "PASS" : "FAIL");
     print_drm_node_diag("/dev/dri/card0", "primary");
     print_drm_node_diag("/dev/dri/renderD128", "render");
     printf("full_blits %lu\n", stats.full_blits);
