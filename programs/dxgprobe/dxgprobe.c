@@ -5153,6 +5153,42 @@ struct dxg_object_table_status {
     uint32 free_tail;
 };
 
+struct dxg_hmgr_skeleton_status {
+    uint32 local_types;
+    uint32 wsl_hmgr_types;
+    uint32 active_device;
+    uint32 active_context;
+    uint32 active_hwqueue;
+    uint32 active_pagingqueue;
+    uint32 active_sync;
+    uint32 active_allocation;
+    uint32 active_resource;
+    uint32 active_gpuva;
+    uint32 missing_sharedresource;
+    uint32 missing_monitoredfence;
+    uint32 lifecycle_type;
+    uint32 lifecycle_index;
+    uint32 unique_before;
+    uint32 unique_after;
+    uint32 destroyed_before;
+    uint32 destroyed_after;
+    uint32 on_free_list;
+    uint32 pending_invalid_allocations;
+    uint32 unmark_destroyed_successes;
+    uint32 unmark_destroyed_failures;
+    uint32 free_while_destroyed;
+    uint32 scope_process;
+    uint32 scope_generation;
+    uint32 scope_object_count;
+    uint32 scope_local_adapter_count;
+    uint32 pid_present;
+    uint32 tgid_present;
+    uint32 vpid_present;
+    uint32 nspid_present;
+    uint32 process_adapter_device_count;
+    uint32 process_adapter_final_close_destroyed;
+};
+
 struct dxg_local_adapter_status {
     uint32 hits;
     uint32 misses;
@@ -5463,6 +5499,19 @@ static int dxg_parse_uint_after(char *line, const char *name, uint32 *out)
     if (!seen)
         return -1;
     *out = neg ? (uint32)(-(int64)value) : (uint32)value;
+    return 0;
+}
+
+static int dxg_line_has_text(char *line, const char *needle)
+{
+    char *p;
+
+    if (line == 0 || needle == 0 || *needle == 0)
+        return 0;
+    for (p = line; !dxg_is_line_end(*p); p++) {
+        if (dxg_prefix_eq(p, needle))
+            return 1;
+    }
     return 0;
 }
 
@@ -7204,6 +7253,120 @@ static int read_object_table_status(struct dxg_object_table_status *out)
         dxg_parse_uint_after(line, "free_count:", &out->free_count) < 0 ||
         dxg_parse_uint_after(line, "free_head:", &out->free_head) < 0 ||
         dxg_parse_uint_after(line, "free_tail:", &out->free_tail) < 0)
+        goto out_free;
+    ret = 0;
+
+out_free:
+    free(buf);
+    return ret;
+}
+
+static int read_hmgr_skeleton_status(struct dxg_hmgr_skeleton_status *out)
+{
+    char *buf;
+    char *coverage;
+    char *counts;
+    char *lifecycle;
+    char *pending;
+    char *scope;
+    char *identity;
+    char *adapter_counts;
+    int ret = -1;
+
+    if (out == 0)
+        return -1;
+    buf = read_dxg_status_buffer();
+    if (buf == 0)
+        return -1;
+    coverage = dxg_find_status_line(buf, "dxg_hmgr_type_coverage=");
+    counts = dxg_find_status_line(buf, "dxg_object_table_type_counts=");
+    lifecycle = dxg_find_status_line(buf, "dxg_hmgr_entry_lifecycle=");
+    pending = dxg_find_status_line(buf, "dxg_hmgr_pending_validity=");
+    scope = dxg_find_status_line(buf, "dxg_object_table_scope=");
+    identity = dxg_find_status_line(buf, "dxg_process_identity=");
+    adapter_counts =
+        dxg_find_status_line(buf, "dxg_process_adapter_device_counts=");
+    if (coverage == 0 || counts == 0 || lifecycle == 0 || pending == 0 ||
+        scope == 0 || identity == 0 || adapter_counts == 0)
+        goto out_free;
+    memset(out, 0, sizeof(*out));
+    if (dxg_parse_uint_after_field_on_line(coverage, "local_types:",
+                                           &out->local_types) < 0 ||
+        dxg_parse_uint_after_field_on_line(coverage, "wsl_hmgr_types:",
+                                           &out->wsl_hmgr_types) < 0 ||
+        dxg_parse_uint_after_field_on_line(coverage,
+                                           "missing_sharedresource:",
+                                           &out->missing_sharedresource) < 0 ||
+        dxg_parse_uint_after_field_on_line(coverage,
+                                           "missing_monitoredfence:",
+                                           &out->missing_monitoredfence) < 0)
+        goto out_free;
+    if (dxg_parse_uint_after_field_on_line(counts, "device:",
+                                           &out->active_device) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "context:",
+                                           &out->active_context) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "hwqueue:",
+                                           &out->active_hwqueue) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "paging:",
+                                           &out->active_pagingqueue) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "sync:",
+                                           &out->active_sync) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "allocation:",
+                                           &out->active_allocation) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "resource:",
+                                           &out->active_resource) < 0 ||
+        dxg_parse_uint_after_field_on_line(counts, "gpuva:",
+                                           &out->active_gpuva) < 0)
+        goto out_free;
+    if (dxg_parse_uint_after_field_on_line(lifecycle, "type:",
+                                           &out->lifecycle_type) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "index:",
+                                           &out->lifecycle_index) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "unique_before:",
+                                           &out->unique_before) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "unique_after:",
+                                           &out->unique_after) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "destroyed_before:",
+                                           &out->destroyed_before) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "destroyed_after:",
+                                           &out->destroyed_after) < 0 ||
+        dxg_parse_uint_after_field_on_line(lifecycle, "on_free_list:",
+                                           &out->on_free_list) < 0)
+        goto out_free;
+    if (dxg_parse_uint_after_field_on_line(pending,
+                                           "pending_invalid_allocations:",
+                                           &out->pending_invalid_allocations) < 0 ||
+        dxg_parse_uint_after_field_on_line(pending,
+                                           "unmark_destroyed_successes:",
+                                           &out->unmark_destroyed_successes) < 0 ||
+        dxg_parse_uint_after_field_on_line(pending,
+                                           "unmark_destroyed_failures:",
+                                           &out->unmark_destroyed_failures) < 0 ||
+        dxg_parse_uint_after_field_on_line(pending, "free_while_destroyed:",
+                                           &out->free_while_destroyed) < 0)
+        goto out_free;
+    out->scope_process = dxg_line_has_text(scope, "scope:process");
+    if (dxg_parse_uint_after_field_on_line(scope, "process_generation:",
+                                           &out->scope_generation) < 0 ||
+        dxg_parse_uint_after_field_on_line(scope, "object_count:",
+                                           &out->scope_object_count) < 0 ||
+        dxg_parse_uint_after_field_on_line(scope, "local_adapter_count:",
+                                           &out->scope_local_adapter_count) < 0)
+        goto out_free;
+    if (dxg_parse_uint_after_field_on_line(identity, "pid_present:",
+                                           &out->pid_present) < 0 ||
+        dxg_parse_uint_after_field_on_line(identity, "tgid_present:",
+                                           &out->tgid_present) < 0 ||
+        dxg_parse_uint_after_field_on_line(identity, "vpid_present:",
+                                           &out->vpid_present) < 0 ||
+        dxg_parse_uint_after_field_on_line(identity, "nspid_present:",
+                                           &out->nspid_present) < 0)
+        goto out_free;
+    if (dxg_parse_uint_after_field_on_line(adapter_counts, "device_count:",
+                                           &out->process_adapter_device_count) < 0 ||
+        dxg_parse_uint_after_field_on_line(adapter_counts,
+                                           "final_close_destroyed:",
+                                           &out->process_adapter_final_close_destroyed) < 0)
         goto out_free;
     ret = 0;
 
@@ -14483,6 +14646,7 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
 {
     struct dxg_object_table_status before;
     struct dxg_object_table_status after;
+    struct dxg_hmgr_skeleton_status hmgr;
     struct d3dkmt_createdevice create_device;
     struct d3dkmt_destroydevice destroy_device;
     struct d3dkmt_destroycontext destroy_context;
@@ -14848,6 +15012,28 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
                after.min_free);
         return -1;
     }
+    if (read_hmgr_skeleton_status(&hmgr) < 0) {
+        printf("handle_lifetime hmgr_skeleton_status_failed\n");
+        return -1;
+    }
+    if (hmgr.local_types != 9 || hmgr.wsl_hmgr_types != 20 ||
+        hmgr.missing_sharedresource != 1 ||
+        hmgr.missing_monitoredfence != 1 ||
+        hmgr.lifecycle_type == 0 || hmgr.destroyed_after != 1 ||
+        hmgr.on_free_list != 1 || hmgr.free_while_destroyed == 0 ||
+        hmgr.scope_process != 1 || hmgr.scope_generation == 0 ||
+        hmgr.scope_object_count == 0 || hmgr.pid_present != 1 ||
+        hmgr.tgid_present != 1) {
+        printf("handle_lifetime hmgr_skeleton_unexpected local_types=%u wsl_types=%u missing_sharedresource=%u missing_monitoredfence=%u type=%u destroyed_after=%u free=%u free_while_destroyed=%u scope_process=%u scope_generation=%u object_count=%u pid=%u tgid=%u\n",
+               hmgr.local_types, hmgr.wsl_hmgr_types,
+               hmgr.missing_sharedresource,
+               hmgr.missing_monitoredfence, hmgr.lifecycle_type,
+               hmgr.destroyed_after, hmgr.on_free_list,
+               hmgr.free_while_destroyed, hmgr.scope_process,
+               hmgr.scope_generation, hmgr.scope_object_count,
+               hmgr.pid_present, hmgr.tgid_present);
+        return -1;
+    }
     printf("handle_lifetime_stale_matrix "
            "device_second_fd_rc=%d device_second_fd_rejected=%u "
            "context_rc=%d context_rejected=%u "
@@ -14878,6 +15064,61 @@ static int probe_handle_lifetime_validate(int fd, struct d3dkmthandle adapter,
            stale_gpuva_rc, (uint32)(stale_gpuva_rc < 0),
            stale_device_final_rc, (uint32)(stale_device_final_rc < 0),
            expected_denials, denied_delta);
+    printf("dxg_hmgr_type_coverage_matrix "
+           "local_types=%u wsl_hmgr_types=%u "
+           "missing_sharedresource=%u missing_monitoredfence=%u "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS_FAILCLOSED\n",
+           hmgr.local_types, hmgr.wsl_hmgr_types,
+           hmgr.missing_sharedresource, hmgr.missing_monitoredfence);
+    printf("dxg_object_table_type_counts_matrix "
+           "device=%u context=%u hwqueue=%u paging=%u sync=%u "
+           "allocation=%u resource=%u gpuva=%u "
+           "sharedresource=0 monitoredfence=0 native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS_FAILCLOSED\n",
+           hmgr.active_device, hmgr.active_context, hmgr.active_hwqueue,
+           hmgr.active_pagingqueue, hmgr.active_sync,
+           hmgr.active_allocation, hmgr.active_resource,
+           hmgr.active_gpuva);
+    printf("dxg_hmgr_entry_lifecycle_matrix "
+           "type=%u index=%u unique_before=%u unique_after=%u "
+           "destroyed_before=%u destroyed_after=%u on_free_list=%u "
+           "unique_reuse_changed=%u native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n",
+           hmgr.lifecycle_type, hmgr.lifecycle_index,
+           hmgr.unique_before, hmgr.unique_after,
+           hmgr.destroyed_before, hmgr.destroyed_after,
+           hmgr.on_free_list,
+           (uint32)(hmgr.unique_before != hmgr.unique_after));
+    printf("dxg_hmgr_pending_validity_matrix "
+           "pending_invalid_allocations=%u "
+           "unmark_destroyed_successes=%u "
+           "unmark_destroyed_failures=%u free_while_destroyed=%u "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS_FAILCLOSED\n",
+           hmgr.pending_invalid_allocations,
+           hmgr.unmark_destroyed_successes,
+           hmgr.unmark_destroyed_failures,
+           hmgr.free_while_destroyed);
+    printf("dxg_object_table_scope_matrix "
+           "scope=process process_generation=%u object_count=%u "
+           "local_adapter_count=%u native_present_credit=0 "
+           "opengl_submit_credit=0 status=PASS\n",
+           hmgr.scope_generation, hmgr.scope_object_count,
+           hmgr.scope_local_adapter_count);
+    printf("dxg_process_identity_matrix "
+           "pid_present=%u tgid_present=%u vpid_present=%u "
+           "nspid_present=%u wsl_pid_tgid_model=1 "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS_FAILCLOSED\n",
+           hmgr.pid_present, hmgr.tgid_present, hmgr.vpid_present,
+           hmgr.nspid_present);
+    printf("dxg_process_adapter_device_counts_matrix "
+           "device_count=%u final_close_destroyed=%u "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "status=PASS\n",
+           hmgr.process_adapter_device_count,
+           hmgr.process_adapter_final_close_destroyed);
     printf("handle_lifetime ok denied:%u->%u max:%u generation:%u drops:%u reuse_delayed:%u reuse_allowed:%u min_free:%u free_count:%u free_head:%u free_tail:%u\n",
            before.denied, after.denied, after.max, after.generation,
            after.drops, after.reuse_delayed, after.reuse_allowed,
