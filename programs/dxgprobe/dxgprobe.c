@@ -11219,6 +11219,12 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_display_bind_provider_pending_shared_parent_id != 0 &&
         stats_after.dxg_display_bind_provider_pending_shared_parent_refs != 0 &&
         stats_after.dxg_display_bind_provider_pending_shared_parent_children != 0 &&
+        stats_after.dxg_display_bind_provider_pending_shared_parent_fd_refs != 0 &&
+        stats_after.dxg_display_bind_provider_pending_shared_parent_global_share != 0 &&
+        stats_after.dxg_display_bind_provider_pending_shared_parent_host_nt_handle != 0 &&
+        stats_after.dxg_display_bind_provider_pending_opened_child_parent_id_match == 1 &&
+        stats_after.dxg_display_bind_provider_pending_opened_child_global_share_match == 1 &&
+        stats_after.dxg_display_bind_provider_pending_opened_child_sealed_generation_match == 1 &&
         stats_after.dxg_display_bind_provider_pending_shared_parent_snapshot_valid == 1 &&
         stats_after.dxg_display_bind_provider_pending_opened_child_snapshot_valid == 1 &&
         stats_after.dxg_display_bind_provider_pending_shared_parent_global_share_match == 1 &&
@@ -11228,6 +11234,9 @@ static int probe_present_source_failclosed_contract(
           stats_after.dxg_display_bind_provider_pending_syncobject_fence_value != 0 &&
           stats_after.dxg_display_bind_provider_pending_syncobject_fence_cpu_va_present == 1 &&
           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_present == 1 &&
+          stats_after.dxg_display_bind_provider_pending_syncobject_fence_kva_present == 1 &&
+          (stats_after.dxg_display_bind_provider_pending_syncobject_real_fence_gpu_va_present == 1 ||
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_alias_gap == 1) &&
           stats_after.dxg_display_bind_provider_pending_syncobject_fence_map_size != 0)) &&
         stats_after.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
         stats_after.dxg_display_bind_pending_last_owner_generation ==
@@ -12387,7 +12396,13 @@ out:
            "device_object_ref_active=%lu "
            "resource_object_ref_active=%lu allocation_object_ref_active=%lu "
            "shared_parent_id=%lu shared_parent_refs=%lu "
-           "shared_parent_children=%lu shared_parent_snapshot_valid=%lu "
+           "shared_parent_children=%lu shared_parent_fd_refs=%lu "
+           "shared_parent_host_nt_refs=%lu shared_parent_child_refs=%lu "
+           "shared_parent_global_share=%lu shared_parent_host_nt=%lu "
+           "opened_child_parent_id_match=%lu "
+           "opened_child_global_share_match=%lu "
+           "opened_child_sealed_generation_match=%lu "
+           "shared_parent_snapshot_valid=%lu "
            "opened_child_snapshot_valid=%lu "
            "shared_parent_global_share_match=%lu "
            "syncobject_object_ref_active=%lu "
@@ -12395,6 +12410,10 @@ out:
            "syncobject_monitored_fence=%lu syncobject_fence_value=%lu "
            "syncobject_fence_cpu_va_present=%lu "
            "syncobject_fence_gpu_va_present=%lu "
+           "syncobject_fence_kva_present=%lu "
+           "syncobject_fence_gpu_va_alias_gap=%lu "
+           "syncobject_real_fence_gpu_va_present=%lu "
+           "syncobject_fence_gpu_va_source=%lu "
            "syncobject_fence_map_size=%lu "
            "owner_close_cancelled=%lu "
            "owner_generation_required=1 source_generation_required=1 "
@@ -12442,6 +12461,14 @@ out:
            stats_after.dxg_display_bind_provider_pending_shared_parent_id,
            stats_after.dxg_display_bind_provider_pending_shared_parent_refs,
            stats_after.dxg_display_bind_provider_pending_shared_parent_children,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_fd_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_host_nt_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_child_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_global_share,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_host_nt_handle,
+           stats_after.dxg_display_bind_provider_pending_opened_child_parent_id_match,
+           stats_after.dxg_display_bind_provider_pending_opened_child_global_share_match,
+           stats_after.dxg_display_bind_provider_pending_opened_child_sealed_generation_match,
            stats_after.dxg_display_bind_provider_pending_shared_parent_snapshot_valid,
            stats_after.dxg_display_bind_provider_pending_opened_child_snapshot_valid,
            stats_after.dxg_display_bind_provider_pending_shared_parent_global_share_match,
@@ -12451,6 +12478,10 @@ out:
            stats_after.dxg_display_bind_provider_pending_syncobject_fence_value,
            stats_after.dxg_display_bind_provider_pending_syncobject_fence_cpu_va_present,
            stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_kva_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_alias_gap,
+           stats_after.dxg_display_bind_provider_pending_syncobject_real_fence_gpu_va_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_source,
            stats_after.dxg_display_bind_provider_pending_syncobject_fence_map_size,
            stats_after.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats_after.dxg_display_bind_provider_pending_owner_generation != 0 &&
@@ -12503,6 +12534,66 @@ out:
            stats_after.dxg_display_bind_provider_no_host_abi,
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_provider_pending_publication_pass ?
+               "PASS_FAILCLOSED" : "FAIL");
+    printf("d3d12_display_bind_provider_shared_parent_retention_matrix "
+           "shared_parent_id=%lu shared_parent_refs=%lu "
+           "shared_parent_fd_refs=%lu shared_parent_host_nt_refs=%lu "
+           "shared_parent_child_refs=%lu shared_parent_children=%lu "
+           "shared_parent_global_share=%lu shared_parent_host_nt=%lu "
+           "opened_child_parent_id_match=%lu "
+           "opened_child_global_share_match=%lu "
+           "opened_child_sealed_generation_match=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats_after.dxg_display_bind_provider_pending_shared_parent_id,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_fd_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_host_nt_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_child_refs,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_children,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_global_share,
+           stats_after.dxg_display_bind_provider_pending_shared_parent_host_nt_handle,
+           stats_after.dxg_display_bind_provider_pending_opened_child_parent_id_match,
+           stats_after.dxg_display_bind_provider_pending_opened_child_global_share_match,
+           stats_after.dxg_display_bind_provider_pending_opened_child_sealed_generation_match,
+           stats_after.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats_after.dxg_display_bind_transport_source),
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           d3d12_display_bind_provider_pending_publication_pass ?
+               "PASS_FAILCLOSED" : "FAIL");
+    printf("d3d12_display_bind_provider_sync_fence_alias_matrix "
+           "syncobject_object_ref_active=%lu "
+           "syncobject_shared_owner_present=%lu "
+           "syncobject_monitored_fence=%lu syncobject_fence_value=%lu "
+           "syncobject_fence_cpu_va_present=%lu "
+           "syncobject_fence_kva_present=%lu "
+           "syncobject_fence_gpu_va_present=%lu "
+           "syncobject_fence_gpu_va_alias_gap=%lu "
+           "syncobject_fence_map_size=%lu real_fence_gpu_va_present=%lu "
+           "gpu_va_source=%lu kva_is_real_gpu_va=0 "
+           "syncfile_dma_fence_display_completion_credit=0 "
+           "host_saw_display_bind_packet=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 "
+           "webkit_accel_credit=0 status=%s\n",
+           stats_after.dxg_display_bind_provider_pending_syncobject_object_ref_active,
+           stats_after.dxg_display_bind_provider_pending_syncobject_shared_owner_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_monitored_fence,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_value,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_cpu_va_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_kva_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_alias_gap,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_map_size,
+           stats_after.dxg_display_bind_provider_pending_syncobject_real_fence_gpu_va_present,
+           stats_after.dxg_display_bind_provider_pending_syncobject_fence_gpu_va_source,
+           stats_after.dxg_display_bind_host_saw_packet,
            stats_after.dxg_display_bind_present_id,
            stats_after.dxg_display_bind_completed_id,
            d3d12_display_bind_provider_pending_publication_pass ?
