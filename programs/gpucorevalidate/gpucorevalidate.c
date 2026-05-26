@@ -430,6 +430,8 @@ static int validate_fbstat_aggregate_matrix(void)
         "public_present_api_not_guest_bind_matrix";
     const char *host_abi_discovery_anchor =
         "d3d12_display_bind_host_abi_discovery_matrix";
+    const char *negative_abi_manifest_anchor =
+        "d3d12_negative_abi_manifest_matrix";
     const char *plan_dependency_anchor =
         "gpu_remaining_plan_dependency_skeleton_matrix";
     uint64 attempts = 0;
@@ -850,6 +852,57 @@ static int validate_fbstat_aggregate_matrix(void)
                               "webkit_accel_credit=0");
     require_output_line_token("fbstat_display_bind_host_abi_discovery",
                               output, host_abi_discovery_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "wsl_uapi_header=d3dkmthk.h");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "wsl_display_bind_ioctl=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "wsl_vmbus_file=dxgvmbus.c");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "presenthistory_cmd=34");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "redirected_flip_fence_cmd=35");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "blt_cmd=38");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "submit_hwqueue_cmd=52");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "propagate_presenthistory_cmd=1");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "resource_scanout_bind_sender=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "display_completion_demux=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "synthvid_path=gpa_dirty_rect_only");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "dda_nouveau_path=separate_pci_display");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "host_saw_display_bind_packet=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "display_bind_transport_source=none");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_negative_abi_manifest", output,
+                              negative_abi_manifest_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_plan_dependency_blockers", output,
                               plan_dependency_anchor,
@@ -3533,6 +3586,7 @@ static int validate_backend(void)
     int provider_credit_gate_negative_ok;
     int dda_nouveau_non_readback_display_proof_ok;
     int d3d12_display_bind_host_abi_discovery_ok;
+    int d3d12_negative_abi_manifest_ok;
     int host_display_bind_source_catalog_ok;
     int d3d12_completion_source_authority_ok;
     int native_present_completion_source_namespace_ok;
@@ -4126,6 +4180,12 @@ static int validate_backend(void)
         stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
         backend_opengl_submit == 0;
+    d3d12_negative_abi_manifest_ok =
+        d3d12_display_bind_host_abi_discovery_ok &&
+        stats.dxg_scanout_bind_candidate_presenthistory_cmd == 34 &&
+        stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd == 35 &&
+        stats.dxg_scanout_bind_candidate_blt_cmd == 38 &&
+        stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd == 1;
     dda_nouveau_non_readback_display_proof_ok =
         (stats.nouveau_pci_probe_accepts == 0 &&
          stats.nouveau_display_probe_attempts == 0 &&
@@ -4514,6 +4574,34 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            d3d12_display_bind_host_abi_discovery_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_negative_abi_manifest_matrix "
+           "source_audited=1 wsl_uapi_header=d3dkmthk.h "
+           "wsl_uapi_namespace_checked=1 wsl_last_ioctl_nr=0x49 "
+           "wsl_display_bind_ioctl=0 wsl_vmbus_file=dxgvmbus.c "
+           "presenthistory_cmd=%lu redirected_flip_fence_cmd=%lu "
+           "blt_cmd=%lu submit_hwqueue_cmd=52 "
+           "propagate_presenthistory_cmd=%lu "
+           "presenthistory_is_telemetry=1 vm_pkt_comp_reply_only=1 "
+           "resource_scanout_bind_sender=0 display_completion_demux=%lu "
+           "synthvid_path=gpa_dirty_rect_only "
+           "dda_nouveau_path=separate_pci_display "
+           "dda_d3d12_import=%lu dda_scanout_bind=%lu "
+           "dda_hw_flip_completion=%s host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_presenthistory_cmd,
+           stats.dxg_scanout_bind_candidate_redirected_flip_fence_cmd,
+           stats.dxg_scanout_bind_candidate_blt_cmd,
+           stats.dxg_scanout_bind_candidate_propagate_presenthistory_cmd,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_present_dda_nouveau_import_path_present,
+           stats.dxg_present_dda_nouveau_scanout_bind_present,
+           stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           d3d12_negative_abi_manifest_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator provider_credit_gate_negative_matrix "
            "provider_submits=%lu "
            "host_abi_present=%u sender_present=%u completion_present=%u "
@@ -6059,6 +6147,10 @@ static int validate_backend(void)
     }
     if (!d3d12_display_bind_host_abi_discovery_ok) {
         note_fail("backend", "display_bind_host_abi_discovery_opened");
+        ok = 0;
+    }
+    if (!d3d12_negative_abi_manifest_ok) {
+        note_fail("backend", "d3d12_negative_abi_manifest_invalid");
         ok = 0;
     }
     if (!dda_nouveau_non_readback_display_proof_ok) {
