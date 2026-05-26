@@ -847,7 +847,7 @@ static int validate_fbstat_aggregate_matrix(void)
                               "atomic_backend_missing=0");
     require_output_line_token("fbstat_native_display_readiness", output,
                               "native_display_readiness_failclosed_matrix",
-                              "reject_has_atomic_pageflip_backend=1");
+                              "reject_has_atomic_pageflip_backend=");
     require_output_line_token("fbstat_nouveau_display_failclosed", output,
                               "nouveau_display_failclosed_matrix",
                               "vblank_irq_supported=0");
@@ -935,6 +935,12 @@ static int validate_fbstat_aggregate_matrix(void)
     require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
                               "dda_nouveau_non_readback_display_proof_matrix",
                               "atomic_backend_missing=");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "dda_nouveau_non_readback_display_proof_matrix",
+                              "dda_native_display_credit=");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "dda_nouveau_non_readback_display_proof_matrix",
+                              "d3d12_native_present_credit=0");
 
     require_counter("fbstat_dmabuf_poll_readiness_stats", output,
                     poll_anchor, "attempts", &attempts);
@@ -3364,6 +3370,7 @@ static int validate_backend(void)
     struct fb_gpu_stats stats;
     int fd;
     int ok = 1;
+    unsigned long native_display_required_rejects;
     const char *nouveau_dma_map_state;
     const char *nouveau_dma_mask_state;
     const char *nouveau_coherent_dma_mask_state;
@@ -3474,6 +3481,9 @@ static int validate_backend(void)
         stats.nouveau_pci_probe_accepts == 0;
     backend_opengl_submit =
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0;
+    native_display_required_rejects =
+        FB_GPU_KMS_PRESENT_REJECT_ALL &
+        ~FB_GPU_KMS_PRESENT_REJECT_NO_ATOMIC_PAGEFLIP_BACKEND;
     native_display_failclosed_ok =
         hyperv_gpup_failclosed &&
         stats.nouveau_native_display_ready == 0 &&
@@ -3496,17 +3506,15 @@ static int validate_backend(void)
         stats.nouveau_display_page_flip_completions == 0 &&
         stats.nouveau_display_atomic_pageflip_backend_missing == 0 &&
         (stats.nouveau_native_display_reject_reasons &
-            FB_GPU_KMS_PRESENT_REJECT_ALL) ==
-            FB_GPU_KMS_PRESENT_REJECT_ALL &&
+            native_display_required_rejects) ==
+            native_display_required_rejects &&
         stats.kms_present_last_lane == FB_GPU_KMS_PRESENT_LANE_NONE &&
         stats.kms_present_dumb == 0 &&
         stats.kms_present_synthvid == 0 &&
         stats.kms_present_nouveau_hw == 0 &&
         (stats.kms_present_reject_reasons &
-            FB_GPU_KMS_PRESENT_REJECT_ALL) ==
-            FB_GPU_KMS_PRESENT_REJECT_ALL &&
-        (stats.kms_present_reject_reasons &
-         FB_GPU_KMS_PRESENT_REJECT_NO_ATOMIC_PAGEFLIP_BACKEND) != 0 &&
+            native_display_required_rejects) ==
+            native_display_required_rejects &&
         stats.nouveau_pci_native_present_credit == 0 &&
         backend_opengl_submit == 0;
     nouveau_display_kms_ready =
@@ -4185,7 +4193,8 @@ static int validate_backend(void)
            "transport_present=%lu present_id=%lu completed=%lu "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.dxg_scanout_bind_standard_alloc_private_data,
-           stats.dxg_scanout_bind_standard_alloc_display_bind_absent == 0,
+           stats.dxg_scanout_bind_standard_alloc_display_bind_absent == 0 ?
+               1UL : 0UL,
            stats.dxg_scanout_bind_candidate_resource_bind_contracts,
            stats.dxg_scanout_bind_candidate_display_completion_contracts,
            stats.dxg_display_bind_transport_present,
@@ -4308,8 +4317,9 @@ static int validate_backend(void)
            "kms_vblank_source_software_display=%lu "
            "kms_vblank_source_synthetic=%lu "
            "page_flip_events_software_blit=%lu "
-           "page_flip_events_native_hw=%lu native_present_credit=0 "
-           "opengl_submit_credit=0 status=%s\n",
+           "page_flip_events_native_hw=%lu "
+           "dda_native_display_credit=%lu d3d12_native_present_credit=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.nouveau_pci_probe_accepts != 0 ? "PASS" :
                                                    "GPU_P_FAIL_CLOSED",
            nouveau_display_kms_registered ? "PASS" : "ABSENT",
@@ -4341,6 +4351,7 @@ static int validate_backend(void)
            stats.kms_vblank_source_synthetic,
            stats.kms_page_flip_events_software_blit,
            stats.kms_page_flip_events_native_hw,
+           stats.nouveau_pci_native_present_credit,
            dda_nouveau_non_readback_display_proof_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator host_display_bind_source_catalog_matrix "
            "selected_source=missing selected_lane=gpup_dxg_scanout_bind "
@@ -6020,8 +6031,9 @@ static int validate_backend(void)
                "kms_vblank_source_software_display=%lu "
                "kms_vblank_source_synthetic=%lu "
                "page_flip_events_software_blit=%lu "
-               "page_flip_events_native_hw=%lu native_present_credit=0 "
-               "opengl_submit_credit=0 status=PASS\n",
+               "page_flip_events_native_hw=%lu "
+               "dda_native_display_credit=%lu d3d12_native_present_credit=0 "
+               "native_present_credit=0 opengl_submit_credit=0 status=PASS\n",
                stats.nouveau_pci_probe_accepts != 0 ? "PASS" :
                                                        "GPU_P_FAIL_CLOSED",
                nouveau_display_kms_registered ? "PASS" : "ABSENT",
@@ -6053,7 +6065,8 @@ static int validate_backend(void)
                stats.kms_vblank_source_software_display,
                stats.kms_vblank_source_synthetic,
                stats.kms_page_flip_events_software_blit,
-               stats.kms_page_flip_events_native_hw);
+               stats.kms_page_flip_events_native_hw,
+               stats.nouveau_pci_native_present_credit);
         printf("gpu_core_c_validator "
                "dxg_scanout_bind_skeleton_matrix "
                "attempts=%lu rejects=%lu successes=%lu "

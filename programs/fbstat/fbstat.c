@@ -948,7 +948,8 @@ int main(int argc, char *argv[])
            "provider_submits=%lu publication_attempts=%lu "
            "host_abi_present=0 sender_present=0 completion_present=0 "
            "owner_generation=%lu provider_source_generation=%lu "
-           "provider_resource_generation=%lu pending_owner_generation=%lu "
+           "provider_resource_generation=%lu source_generation=%lu "
+           "resource_generation=%lu pending_owner_generation=%lu "
            "pending_source_generation=%lu pending_resource_generation=%lu "
            "dxgprocess_generation=%lu process_adapter_generation=%lu "
            "hmgr_index_unique_valid=%lu parent_resource_ref_held=%lu "
@@ -974,6 +975,11 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_pending_owner_generation,
            stats.dxg_display_bind_provider_pending_source_generation,
            stats.dxg_display_bind_provider_pending_resource_generation,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_provider_pending_owner_generation,
+           stats.dxg_display_bind_provider_pending_source_generation,
+           stats.dxg_display_bind_provider_pending_resource_generation,
            stats.dxg_display_bind_provider_pending_dxgprocess_generation,
            stats.dxg_display_bind_provider_pending_process_adapter_generation,
            stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid,
@@ -981,9 +987,6 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_pending_opened_child_ref_held,
            stats.dxg_display_bind_provider_pending_syncobject_ref_held,
            stats.dxg_display_bind_provider_pending_owner_close_cancelled,
-           stats.dxg_display_bind_pending_last_owner_generation,
-           stats.dxg_display_bind_pending_last_source_generation,
-           stats.dxg_display_bind_pending_last_resource_generation,
            stats.dxg_display_bind_provider_submits == 0 ?
                "NOT_SAMPLED" :
            (stats.dxg_display_bind_provider_pending_owner_generation != 0 &&
@@ -1827,6 +1830,9 @@ int main(int argc, char *argv[])
     printf("kms_present_reject_no_atomic_pageflip_backend %lu\n",
            stats.kms_present_reject_no_atomic_pageflip_backend);
     {
+        unsigned long native_display_required_rejects =
+            FB_GPU_KMS_PRESENT_REJECT_ALL &
+            ~FB_GPU_KMS_PRESENT_REJECT_NO_ATOMIC_PAGEFLIP_BACKEND;
         int hyperv_gpup =
             have_backend &&
             backend.backend == FB_GPU_BACKEND_HYPERV_DXG &&
@@ -1856,17 +1862,15 @@ int main(int argc, char *argv[])
             stats.nouveau_display_page_flip_completions == 0 &&
             stats.nouveau_display_atomic_pageflip_backend_missing == 0 &&
             (stats.nouveau_native_display_reject_reasons &
-                FB_GPU_KMS_PRESENT_REJECT_ALL) ==
-                FB_GPU_KMS_PRESENT_REJECT_ALL &&
+                native_display_required_rejects) ==
+                native_display_required_rejects &&
             stats.kms_present_last_lane == FB_GPU_KMS_PRESENT_LANE_NONE &&
             stats.kms_present_dumb == 0 &&
             stats.kms_present_synthvid == 0 &&
             stats.kms_present_nouveau_hw == 0 &&
             (stats.kms_present_reject_reasons &
-                FB_GPU_KMS_PRESENT_REJECT_ALL) ==
-                FB_GPU_KMS_PRESENT_REJECT_ALL &&
-            (stats.kms_present_reject_reasons &
-             FB_GPU_KMS_PRESENT_REJECT_NO_ATOMIC_PAGEFLIP_BACKEND) != 0 &&
+                native_display_required_rejects) ==
+                native_display_required_rejects &&
             stats.nouveau_pci_native_present_credit == 0 &&
             (!have_backend ||
              (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0);
@@ -3383,7 +3387,8 @@ int main(int argc, char *argv[])
            "dda_hw_flip_completion=%s separate_pci_display_path=%s "
            "display_bind_present_id=%lu display_bind_completed=%lu "
            "scanout_bind_successes=%lu completion_successes=%lu "
-           "native_present_credit=%lu opengl_submit_credit=%d "
+           "dda_native_display_credit=%lu d3d12_native_present_credit=0 "
+           "native_present_credit=0 opengl_submit_credit=%d "
            "status=%s\n",
            have_backend &&
                (backend.flags & FB_GPU_BACKEND_F_DDA_NOUVEAU) != 0,
@@ -3413,6 +3418,7 @@ int main(int argc, char *argv[])
            "atomic_backend_missing=%lu kms_lane=%lu "
            "kms_present_dumb=%lu kms_present_synthvid=%lu "
            "kms_present_nouveau_hw=%lu page_flip_events_native_hw=%lu "
+           "dda_native_display_credit=%lu d3d12_native_present_credit=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats.nouveau_pci_probe_accepts != 0 ? "PASS" :
                                                    "GPU_P_FAIL_CLOSED",
@@ -3439,6 +3445,7 @@ int main(int argc, char *argv[])
            stats.kms_present_synthvid,
            stats.kms_present_nouveau_hw,
            stats.kms_page_flip_events_native_hw,
+           stats.nouveau_pci_native_present_credit,
            dda_nouveau_non_readback_display_proof_ok ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "

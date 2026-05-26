@@ -12972,8 +12972,9 @@ out:
            "kms_vblank_source_software_display=%lu "
            "kms_vblank_source_synthetic=%lu "
            "page_flip_events_software_blit=%lu "
-           "page_flip_events_native_hw=%lu native_present_credit=0 "
-           "opengl_submit_credit=0 status=%s\n",
+           "page_flip_events_native_hw=%lu "
+           "dda_native_display_credit=%lu d3d12_native_present_credit=0 "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
            stats_after.nouveau_pci_probe_accepts != 0 ? "PASS" :
                                                         "GPU_P_FAIL_CLOSED",
            stats_after.nouveau_display_create_successes != 0 &&
@@ -13003,6 +13004,7 @@ out:
            stats_after.kms_vblank_source_synthetic,
            stats_after.kms_page_flip_events_software_blit,
            stats_after.kms_page_flip_events_native_hw,
+           stats_after.nouveau_pci_native_present_credit,
            dda_nouveau_non_readback_display_proof_pass ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
