@@ -111,6 +111,20 @@ static const char *display_target_kind_name(uint64 value)
     }
 }
 
+static const char *display_bind_transport_source_name(uint64 value)
+{
+    switch (value) {
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE:
+        return "none";
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_NON_WSL_DXGKRNL_EXTENSION:
+        return "non_wsl_linux_dxgkrnl_extension";
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_DDA_NOUVEAU_NATIVE_DISPLAY:
+        return "dda_nouveau_native_display";
+    default:
+        return "unknown_value";
+    }
+}
+
 static const char *nouveau_vblank_source_name(uint64 value)
 {
     switch (value) {
@@ -512,6 +526,10 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_transaction_id == 0 &&
          stats.dxg_display_bind_provider_channel == 0 &&
          stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+         stats.dxg_display_bind_transport_source ==
+             FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+         stats.dxg_display_bind_host_saw_packet == 0 &&
+         stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
          ((stats.dxg_display_bind_provider_resolved_or_cancelled != 0 &&
            stats.dxg_display_bind_provider_refs_released != 0 &&
            stats.dxg_display_bind_provider_no_host_abi_cancelled != 0 &&
@@ -686,6 +704,10 @@ int main(int argc, char *argv[])
         stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
         stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_transport_source ==
+            FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
         stats.dxg_present_helper_transport_present == 0 &&
         stats.dxg_display_bind_transport_present == 0 &&
         stats.dxg_display_bind_present_id == 0 &&
@@ -937,6 +959,9 @@ int main(int argc, char *argv[])
            "publish_before_send=%lu transport_pending_id=%lu "
            "command_id=%lu transaction_id=%lu channel=%s "
            "completion_demux_registered=%lu resolved_or_cancelled=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "wsl_presenthistory_completion_credit=%lu "
            "refs_released=%lu no_host_abi_cancelled=%lu "
            "no_host_abi_refs_released=%lu pending_cancelled=%lu "
            "publish_before_send_order=blocked "
@@ -978,6 +1003,10 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_channel == 0 ? "none" : "other",
            stats.dxg_display_bind_provider_completion_demux_registered,
            stats.dxg_display_bind_provider_resolved_or_cancelled,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
            stats.dxg_display_bind_provider_refs_released,
            stats.dxg_display_bind_provider_no_host_abi_cancelled,
            stats.dxg_display_bind_provider_no_host_abi_refs_released,
@@ -1112,6 +1141,9 @@ int main(int argc, char *argv[])
            "gpup_dxg_sender_contract=%lu "
            "gpup_dxg_completion_contract=%lu "
            "completion_demux_contract=%lu "
+           "wsl_presenthistory_completion_credit=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
            "dda_nouveau_d3d12_import=%lu "
            "dda_nouveau_scanout_bind=%lu "
            "dda_nouveau_hw_flip_completion=%s "
@@ -1123,6 +1155,10 @@ int main(int argc, char *argv[])
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
            stats.dxg_present_dda_nouveau_import_path_present,
            stats.dxg_present_dda_nouveau_scanout_bind_present,
            stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
@@ -3125,6 +3161,15 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_channel);
     printf("dxg_display_bind_provider_completion_demux_registered %lu\n",
            stats.dxg_display_bind_provider_completion_demux_registered);
+    printf("dxg_display_bind_transport_source %lu\n",
+           stats.dxg_display_bind_transport_source);
+    printf("dxg_display_bind_transport_source_name %s\n",
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source));
+    printf("dxg_display_bind_host_saw_packet %lu\n",
+           stats.dxg_display_bind_host_saw_packet);
+    printf("dxg_display_bind_wsl_presenthistory_completion_credit %lu\n",
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit);
     printf("dxg_display_bind_provider_resolved_or_cancelled %lu\n",
            stats.dxg_display_bind_provider_resolved_or_cancelled);
     printf("dxg_display_bind_provider_refs_released %lu\n",

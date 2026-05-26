@@ -6,6 +6,21 @@
 
 static int failures;
 
+static const char *
+display_bind_transport_source_name(uint64 value)
+{
+    switch (value) {
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE:
+        return "none";
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_NON_WSL_DXGKRNL_EXTENSION:
+        return "non_wsl_linux_dxgkrnl_extension";
+    case FB_GPU_DXG_DISPLAY_BIND_SOURCE_DDA_NOUVEAU_NATIVE_DISPLAY:
+        return "dda_nouveau_native_display";
+    default:
+        return "unknown_value";
+    }
+}
+
 static int contains(const char *haystack, const char *needle)
 {
     uint nlen = strlen(needle);
@@ -2735,6 +2750,12 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "completion_demux_registered=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "host_saw_display_bind_packet=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "display_bind_transport_source=none");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "wsl_presenthistory_completion_credit=0");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "resolved_or_cancelled=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "refs_released=1");
@@ -2834,6 +2855,18 @@ static int validate_present_source_matrix(void)
                          output, "query_pin_revalidated=1");
     require_output_token("d3d12_display_bind_query_fields_matrix",
                          output, "contract_pin_revalidated=1");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_transport_source=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_transport_source=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_host_saw_packet=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_host_saw_packet=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "query_wsl_presenthistory_completion_credit=0");
+    require_output_token("d3d12_display_bind_query_fields_matrix",
+                         output, "contract_wsl_presenthistory_completion_credit=0");
     require_output_line_token("d3d12_display_bind_query_fields_matrix",
                               output,
                               "d3d12_display_bind_query_fields_matrix",
@@ -3641,6 +3674,10 @@ static int validate_backend(void)
          stats.dxg_display_bind_provider_transaction_id == 0 &&
          stats.dxg_display_bind_provider_channel == 0 &&
          stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+         stats.dxg_display_bind_transport_source ==
+             FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+         stats.dxg_display_bind_host_saw_packet == 0 &&
+         stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
          ((stats.dxg_display_bind_provider_resolved_or_cancelled != 0 &&
            stats.dxg_display_bind_provider_refs_released != 0 &&
            stats.dxg_display_bind_provider_no_host_abi_cancelled != 0 &&
@@ -3785,6 +3822,10 @@ static int validate_backend(void)
         stats.dxg_display_bind_completed_id == 0 &&
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_transport_source ==
+            FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+        stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
         backend_opengl_submit == 0;
     wsl_stdalloc_and_alloc_flags_not_bind_ok =
         standard_alloc_not_display_bind_ok &&
@@ -3844,6 +3885,10 @@ static int validate_backend(void)
         stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
         stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_transport_source ==
+            FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
         stats.dxg_present_helper_transport_present == 0 &&
         stats.dxg_display_bind_transport_present == 0 &&
         stats.dxg_display_bind_present_id == 0 &&
@@ -4197,6 +4242,9 @@ static int validate_backend(void)
            "gpup_dxg_sender_contract=%lu "
            "gpup_dxg_completion_contract=%lu "
            "completion_demux_contract=%lu "
+           "wsl_presenthistory_completion_credit=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
            "dda_nouveau_d3d12_import=%lu "
            "dda_nouveau_scanout_bind=%lu "
            "dda_nouveau_hw_flip_completion=%s "
@@ -4208,6 +4256,10 @@ static int validate_backend(void)
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
            stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
            stats.dxg_present_dda_nouveau_import_path_present,
            stats.dxg_present_dda_nouveau_scanout_bind_present,
            stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
@@ -4295,6 +4347,9 @@ static int validate_backend(void)
            "provider_state=%s custom_host_tool=0 "
            "wsl_dxg_display_bind_ioctl=0 wslg_channel=absent "
            "gpup_dxg_sender=%lu gpup_dxg_completion=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "wsl_presenthistory_completion_credit=%lu "
            "synthvid_d3d12_bind=0 dda_d3d12_resource_import=%lu "
            "dda_scanout_bind=%lu dda_hw_flip_completion=%s "
            "transport_present=%lu present_id=%lu completed=%lu "
@@ -4305,6 +4360,10 @@ static int validate_backend(void)
                                                           "failclosed",
            stats.dxg_scanout_bind_candidate_sender_contracts,
            stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
            stats.dxg_present_dda_nouveau_import_path_present,
            stats.dxg_present_dda_nouveau_scanout_bind_present,
            stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
@@ -4488,6 +4547,9 @@ static int validate_backend(void)
            "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
            "channel=%s completion_demux_registered=%lu "
            "resolved_or_cancelled=%lu refs_released=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "wsl_presenthistory_completion_credit=%lu "
            "no_host_abi_cancelled=%lu no_host_abi_refs_released=%lu "
            "pending_cancelled=%lu publish_before_send_order=blocked "
            "cancellation_ref_release_credit=0 "
@@ -4536,6 +4598,10 @@ static int validate_backend(void)
            stats.dxg_display_bind_provider_completion_demux_registered,
            stats.dxg_display_bind_provider_resolved_or_cancelled,
            stats.dxg_display_bind_provider_refs_released,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_wsl_presenthistory_completion_credit,
            stats.dxg_display_bind_provider_no_host_abi_cancelled,
            stats.dxg_display_bind_provider_no_host_abi_refs_released,
            stats.dxg_display_bind_pending_cancelled,
