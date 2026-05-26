@@ -10186,6 +10186,8 @@ static int probe_present_source_failclosed_contract(
     int d3d12_display_bind_request_metadata_pass = 0;
     int d3d12_native_completion_lifetime_pass = 0;
     int d3d12_display_bind_stale_source_zero_credit_pass = 0;
+    int d3d12_display_bind_stale_source_cleanup_immediate = 0;
+    int d3d12_display_bind_stale_source_cleanup_deferred = 0;
     int d3d12_native_completion_not_kms_pass = 0;
     int d3d12_standard_alloc_not_display_bind_pass = 0;
     int d3d12_dda_nouveau_separate_display_not_bind_pass = 0;
@@ -10199,6 +10201,8 @@ static int probe_present_source_failclosed_contract(
     int provider_credit_gate_negative_pass = 0;
     int dda_nouveau_non_readback_display_proof_pass = 0;
     int host_display_bind_source_catalog_pass = 0;
+    int d3d12_completion_source_authority_pass = 0;
+    int native_present_completion_source_namespace_pass = 0;
     uint32 host_to_vm_packets = 0;
     uint32 host_to_vm_unknown = 0;
     uint32 host_to_vm_last_cmd = 0;
@@ -10957,12 +10961,24 @@ static int probe_present_source_failclosed_contract(
           stats_after.dxg_display_bind_provider_no_host_abi == 0 &&
           stats_after.dxg_display_bind_provider_no_sender == 0 &&
           stats_after.dxg_display_bind_provider_no_completion == 0));
-    d3d12_display_bind_stale_source_zero_credit_pass =
+    d3d12_display_bind_stale_source_cleanup_immediate =
         stats_closed_rc == 0 &&
         stats_closed.dxg_present_release_sources >
             stats_before.dxg_present_release_sources &&
         stats_closed.dxg_display_bind_release_clears >
+            stats_before.dxg_display_bind_release_clears;
+    d3d12_display_bind_stale_source_cleanup_deferred =
+        stats_closed_rc == 0 &&
+        stats_closed.dxg_present_release_sources ==
+            stats_before.dxg_present_release_sources &&
+        stats_closed.dxg_display_bind_release_clears ==
             stats_before.dxg_display_bind_release_clears &&
+        stats_closed.dxg_display_bind_stale_source_rejects >
+            stats_before.dxg_display_bind_stale_source_rejects;
+    d3d12_display_bind_stale_source_zero_credit_pass =
+        stats_closed_rc == 0 &&
+        (d3d12_display_bind_stale_source_cleanup_immediate ||
+         d3d12_display_bind_stale_source_cleanup_deferred) &&
         stats_closed.dxg_display_bind_after_close_queries >
             stats_before.dxg_display_bind_after_close_queries &&
         stats_closed.dxg_display_bind_stale_source_rejects >
@@ -11151,6 +11167,29 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_scanout_bind_completion_successes ==
             stats_before.dxg_scanout_bind_completion_successes &&
         no_present_credit && hyperv_gate;
+    d3d12_completion_source_authority_pass =
+        host_display_bind_source_catalog_pass &&
+        (stats_after.dxg_display_bind_provider_submits ==
+             stats_before.dxg_display_bind_provider_submits ||
+         stats_after.dxg_display_bind_provider_no_completion == 1) &&
+        stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        stats_after.dxg_scanout_bind_last_present_id == 0 &&
+        stats_after.dxg_scanout_bind_last_completed == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_present_helper_transport_present == 0 &&
+        stats_after.kms_vblank_source_nouveau_hw == 0 &&
+        stats_after.kms_page_flip_events_native_hw == 0 &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    native_present_completion_source_namespace_pass =
+        d3d12_completion_source_authority_pass &&
+        stats_after.nouveau_pci_irq_cause_valid == 0 &&
+        stats_after.nouveau_pci_irq_cause_acks == 0 &&
+        stats_after.nouveau_pci_irq_spurious == 0;
     {
         char *dxg_status = read_dxg_status_buffer();
         char *host_to_vm = dxg_status != 0 ?
@@ -11203,6 +11242,8 @@ static int probe_present_source_failclosed_contract(
         provider_credit_gate_negative_pass &&
         dda_nouveau_non_readback_display_proof_pass &&
         host_display_bind_source_catalog_pass &&
+        d3d12_completion_source_authority_pass &&
+        native_present_completion_source_namespace_pass &&
         stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
         stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
@@ -11235,6 +11276,8 @@ static int probe_present_source_failclosed_contract(
            wsl_trace_display_bind_negative_pass &&
            provider_credit_gate_negative_pass &&
            dda_nouveau_non_readback_display_proof_pass &&
+           d3d12_completion_source_authority_pass &&
+           native_present_completion_source_namespace_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -11335,6 +11378,52 @@ out:
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,
            host_display_bind_source_catalog_pass ? "PASS" : "FAIL");
+    printf("d3d12_completion_source_authority_matrix "
+           "accepted_completion_source=display_bind_provider "
+           "submit_ntstatus_as_completion=0 "
+           "presenthistory_telemetry_as_completion=0 "
+           "syncfile_fence_as_display_completion=0 "
+           "callback_release_as_display_completion=0 "
+           "kms_vblank_as_d3d12_completion=0 "
+           "provider_submits_delta=%lu provider_no_completion=%lu "
+           "provider_completion_present=%u completion_contracts=%lu "
+           "scanout_completion_success_delta=%lu "
+           "present_id=%lu completed=%lu native_present_credit=%lu "
+           "opengl_submit_credit=%u status=%s\n",
+           stats_after.dxg_display_bind_provider_submits -
+               stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_provider_no_completion,
+           stats_after.dxg_display_bind_provider_submits >
+                   stats_before.dxg_display_bind_provider_submits &&
+               stats_after.dxg_display_bind_provider_no_completion == 0,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_scanout_bind_completion_successes -
+               stats_before.dxg_scanout_bind_completion_successes,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           stats_after.nouveau_pci_native_present_credit,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           d3d12_completion_source_authority_pass ? "PASS" : "FAIL");
+    printf("native_present_completion_source_namespace_matrix "
+           "completion_source=missing d3d12_display_bind_provider=%s "
+           "d3d12_present_id=%lu d3d12_completed=%lu "
+           "kms_vblank_sequence=%lu kms_page_flip_sequence=%lu "
+           "nouveau_irq_cause_valid=%lu nouveau_irq_cause_acks=%lu "
+           "namespace_mixed=0 native_present_credit=%lu "
+           "opengl_submit_credit=%u status=%s\n",
+           stats_after.dxg_display_bind_provider_submits ==
+                   stats_before.dxg_display_bind_provider_submits ?
+               "not_sampled" : "failclosed",
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           stats_after.kms_vblank_source_nouveau_hw,
+           stats_after.kms_page_flip_events_native_hw,
+           stats_after.nouveau_pci_irq_cause_valid,
+           stats_after.nouveau_pci_irq_cause_acks,
+           stats_after.nouveau_pci_native_present_credit,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           native_present_completion_source_namespace_pass ? "PASS" :
+                                                             "FAIL");
     printf("present_bind_contract_stale_source_matrix "
            "ioctl_rc=%d source=0x%x source_live=%u block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
@@ -11748,7 +11837,7 @@ out:
            "global_present_id_after_close=%lu "
            "global_completed_after_close=%lu "
            "native_present_credit=%lu opengl_submit_credit=%u "
-           "webkit_accel_credit=0 status=%s\n",
+           "webkit_accel_credit=0 cleanup_state=%s status=%s\n",
            stats_closed.dxg_present_release_sources -
                stats_before.dxg_present_release_sources,
            stats_closed.dxg_display_bind_after_close_queries -
@@ -11771,6 +11860,8 @@ out:
            stats_closed.dxg_display_bind_completed_id,
            stats_closed.nouveau_pci_native_present_credit,
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           d3d12_display_bind_stale_source_cleanup_immediate ?
+               "immediate" : "deferred_until_process_exit",
            d3d12_display_bind_stale_source_zero_credit_pass ? "PASS" :
                "FAIL");
     printf("d3d12_native_completion_not_kms_matrix "
