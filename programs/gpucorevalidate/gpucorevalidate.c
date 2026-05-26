@@ -407,6 +407,8 @@ static int validate_fbstat_aggregate_matrix(void)
     const char *not_kms_anchor = "d3d12_native_completion_not_kms_matrix";
     const char *standard_alloc_anchor =
         "wsl_standard_alloc_not_display_bind_matrix";
+    const char *foreign_prime_anchor =
+        "foreign_prime_import_gap_matrix";
     const char *plan_dependency_anchor =
         "gpu_remaining_plan_dependency_skeleton_matrix";
     uint64 attempts = 0;
@@ -638,6 +640,45 @@ static int validate_fbstat_aggregate_matrix(void)
                               "standard_alloc_native_present_credit=0");
     require_output_line_token("fbstat_standard_alloc_not_display_bind",
                               output, standard_alloc_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "foreign_attempts=");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "foreign_rejects=");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "local_only_import_path=1");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "d3d12_foreign_resource_imports=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "nouveau_scanout_bind_imports=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "dmabuf_native_present_credit=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "dxg_dda_import_path=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "dxg_dda_scanout_bind=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "scanout_bind_successes=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "completion_successes=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_foreign_prime_import_gap", output,
+                              foreign_prime_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_plan_dependency_blockers", output,
                               plan_dependency_anchor,
@@ -3177,6 +3218,7 @@ static int validate_backend(void)
     int generic_completion_not_native_ok;
     int standard_alloc_not_display_bind_ok;
     int dda_nouveau_separate_display_not_bind_ok;
+    int foreign_prime_import_gap_ok;
     int wsl_uapi_negative_ok;
     int wsl_adapter_display_caps_negative_ok;
     int wsl_submit_present_fields_not_bind_ok;
@@ -3545,6 +3587,21 @@ static int validate_backend(void)
         stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
+    foreign_prime_import_gap_ok =
+        stats.dmabuf_local_imports == stats.dmabuf_imports &&
+        stats.dmabuf_foreign_import_rejects >=
+            stats.dmabuf_foreign_import_attempts &&
+        stats.dmabuf_foreign_fd_rejects >=
+            stats.dmabuf_foreign_import_rejects &&
+        stats.dmabuf_d3d12_foreign_resource_imports == 0 &&
+        stats.dmabuf_nouveau_scanout_bind_imports == 0 &&
+        stats.dmabuf_native_present_credit == 0 &&
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
@@ -5178,6 +5235,10 @@ static int validate_backend(void)
         note_fail("backend", "dda_nouveau_display_used_as_d3d12_bind");
         ok = 0;
     }
+    if (!foreign_prime_import_gap_ok) {
+        note_fail("backend", "foreign_prime_import_gap_claimed_credit");
+        ok = 0;
+    }
     if (!wsl_uapi_negative_ok) {
         note_fail("backend", "wsl_uapi_display_bind_contract_claimed");
         ok = 0;
@@ -5821,6 +5882,35 @@ static int validate_backend(void)
                backend_opengl_submit,
                dda_nouveau_separate_display_not_bind_ok ? "PASS" :
                    "FAIL");
+        printf("gpu_core_c_validator foreign_prime_import_gap_matrix "
+               "attempts=%lu local_imports=%lu accepted_imports=%lu "
+               "foreign_attempts=%lu foreign_rejects=%lu "
+               "legacy_foreign_fd_rejects=%lu local_only_import_path=%lu "
+               "d3d12_foreign_resource_imports=%lu "
+               "nouveau_scanout_bind_imports=%lu "
+               "dmabuf_native_present_credit=%lu "
+               "dxg_dda_import_path=%lu dxg_dda_scanout_bind=%lu "
+               "scanout_bind_successes=%lu completion_successes=%lu "
+               "native_present_credit=%lu opengl_submit_credit=%d "
+               "status=%s\n",
+               stats.dmabuf_import_attempts,
+               stats.dmabuf_local_imports,
+               stats.dmabuf_imports,
+               stats.dmabuf_foreign_import_attempts,
+               stats.dmabuf_foreign_import_rejects,
+               stats.dmabuf_foreign_fd_rejects,
+               stats.dmabuf_local_only_import_path != 0 ||
+                   stats.dmabuf_import_attempts == 0 ? 1UL : 0UL,
+               stats.dmabuf_d3d12_foreign_resource_imports,
+               stats.dmabuf_nouveau_scanout_bind_imports,
+               stats.dmabuf_native_present_credit,
+               stats.dxg_present_dda_nouveau_import_path_present,
+               stats.dxg_present_dda_nouveau_scanout_bind_present,
+               stats.dxg_scanout_bind_successes,
+               stats.dxg_scanout_bind_completion_successes,
+               stats.nouveau_pci_native_present_credit,
+               backend_opengl_submit,
+               foreign_prime_import_gap_ok ? "PASS" : "FAIL");
         printf("gpu_core_c_validator "
                "dxg_scanout_bind_weak_evidence_matrix "
                "dxg_ready_only=%lu d3dkmt_handles_only=%lu "

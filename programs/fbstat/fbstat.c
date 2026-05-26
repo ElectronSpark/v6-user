@@ -396,6 +396,7 @@ int main(int argc, char *argv[])
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
     int dda_nouveau_separate_display_not_bind_ok = 0;
+    int foreign_prime_import_gap_ok = 0;
     int nouveau_display_kms_ready = 0;
     int nouveau_native_display_claimed = 0;
     int nouveau_atomic_pageflip_backend_missing_ok = 0;
@@ -627,6 +628,21 @@ int main(int argc, char *argv[])
         stats.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        stats.nouveau_pci_native_present_credit == 0 &&
+        backend_opengl_submit == 0;
+    foreign_prime_import_gap_ok =
+        stats.dmabuf_local_imports == stats.dmabuf_imports &&
+        stats.dmabuf_foreign_import_rejects >=
+            stats.dmabuf_foreign_import_attempts &&
+        stats.dmabuf_foreign_fd_rejects >=
+            stats.dmabuf_foreign_import_rejects &&
+        stats.dmabuf_d3d12_foreign_resource_imports == 0 &&
+        stats.dmabuf_nouveau_scanout_bind_imports == 0 &&
+        stats.dmabuf_native_present_credit == 0 &&
+        stats.dxg_present_dda_nouveau_import_path_present == 0 &&
+        stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
         stats.dxg_scanout_bind_successes == 0 &&
         stats.dxg_scanout_bind_completion_successes == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
@@ -1101,9 +1117,51 @@ int main(int argc, char *argv[])
     printf("dmabuf_live %lu\n", stats.dmabuf_live);
     printf("dmabuf_peak %lu\n", stats.dmabuf_peak);
     printf("dmabuf_releases %lu\n", stats.dmabuf_releases);
+    printf("dmabuf_import_attempts %lu\n", stats.dmabuf_import_attempts);
+    printf("dmabuf_local_imports %lu\n", stats.dmabuf_local_imports);
+    printf("dmabuf_foreign_import_attempts %lu\n",
+           stats.dmabuf_foreign_import_attempts);
+    printf("dmabuf_foreign_import_rejects %lu\n",
+           stats.dmabuf_foreign_import_rejects);
+    printf("dmabuf_local_only_import_path %lu\n",
+           stats.dmabuf_local_only_import_path);
+    printf("dmabuf_d3d12_foreign_resource_imports %lu\n",
+           stats.dmabuf_d3d12_foreign_resource_imports);
+    printf("dmabuf_nouveau_scanout_bind_imports %lu\n",
+           stats.dmabuf_nouveau_scanout_bind_imports);
+    printf("dmabuf_native_present_credit %lu\n",
+           stats.dmabuf_native_present_credit);
     printf("dmabuf_bad_fd_rejects %lu\n", stats.dmabuf_bad_fd_rejects);
     printf("dmabuf_foreign_fd_rejects %lu\n",
            stats.dmabuf_foreign_fd_rejects);
+    printf("foreign_prime_import_gap_matrix attempts=%lu "
+           "local_imports=%lu accepted_imports=%lu "
+           "foreign_attempts=%lu foreign_rejects=%lu "
+           "legacy_foreign_fd_rejects=%lu local_only_import_path=%lu "
+           "d3d12_foreign_resource_imports=%lu "
+           "nouveau_scanout_bind_imports=%lu "
+           "dmabuf_native_present_credit=%lu "
+           "dxg_dda_import_path=%lu dxg_dda_scanout_bind=%lu "
+           "scanout_bind_successes=%lu completion_successes=%lu "
+           "native_present_credit=%lu opengl_submit_credit=%d status=%s\n",
+           stats.dmabuf_import_attempts,
+           stats.dmabuf_local_imports,
+           stats.dmabuf_imports,
+           stats.dmabuf_foreign_import_attempts,
+           stats.dmabuf_foreign_import_rejects,
+           stats.dmabuf_foreign_fd_rejects,
+           stats.dmabuf_local_only_import_path != 0 ||
+               stats.dmabuf_import_attempts == 0 ? 1UL : 0UL,
+           stats.dmabuf_d3d12_foreign_resource_imports,
+           stats.dmabuf_nouveau_scanout_bind_imports,
+           stats.dmabuf_native_present_credit,
+           stats.dxg_present_dda_nouveau_import_path_present,
+           stats.dxg_present_dda_nouveau_scanout_bind_present,
+           stats.dxg_scanout_bind_successes,
+           stats.dxg_scanout_bind_completion_successes,
+           stats.nouveau_pci_native_present_credit,
+           backend_opengl_submit,
+           foreign_prime_import_gap_ok ? "PASS" : "FAIL");
     printf("dmabuf_resv_snapshots %lu\n", stats.dmabuf_resv_snapshots);
     printf("dmabuf_last_exporter_tag %lu\n",
            stats.dmabuf_last_exporter_tag);
