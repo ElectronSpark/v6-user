@@ -10191,6 +10191,9 @@ static int probe_present_source_failclosed_contract(
     int d3d12_dda_nouveau_separate_display_not_bind_pass = 0;
     int d3d12_host_to_vm_presenthistory_absent_pass = 0;
     int gpu_remaining_plan_dependency_skeleton_pass = 0;
+    int wsl_uapi_namespace_negative_pass = 0;
+    int wsl_adapter_display_caps_negative_pass = 0;
+    int dda_nouveau_non_readback_display_proof_pass = 0;
     uint32 host_to_vm_packets = 0;
     uint32 host_to_vm_unknown = 0;
     uint32 host_to_vm_last_cmd = 0;
@@ -11005,6 +11008,56 @@ static int probe_present_source_failclosed_contract(
             stats_before.dxg_scanout_bind_completion_successes &&
         stats_after.nouveau_pci_native_present_credit == 0 &&
         (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    wsl_uapi_namespace_negative_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0;
+    wsl_adapter_display_caps_negative_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_present_dxg_adapter_display_supported == 0 &&
+        stats_after.dxg_present_dxg_adapter_sources == 0 &&
+        stats_after.dxg_present_helper_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0;
+    dda_nouveau_non_readback_display_proof_pass =
+        stats_after_rc == 0 &&
+        (((stats_after.nouveau_pci_probe_accepts == 0 &&
+           stats_after.nouveau_display_create_successes == 0 &&
+           stats_after.nouveau_display_heads == 0 &&
+           stats_after.nouveau_display_connectors == 0 &&
+           stats_after.nouveau_display_vblank_supported == 0 &&
+           stats_after.nouveau_display_vblank_irqs == 0 &&
+           stats_after.nouveau_display_page_flip_completions == 0 &&
+           stats_after.kms_present_last_lane ==
+               FB_GPU_KMS_PRESENT_LANE_NONE &&
+           stats_after.kms_present_dumb == 0 &&
+           stats_after.kms_present_synthvid == 0 &&
+           stats_after.kms_present_nouveau_hw == 0 &&
+           stats_after.kms_vblank_source_nouveau_hw == 0 &&
+           stats_after.kms_page_flip_events_native_hw == 0 &&
+           stats_after.nouveau_pci_native_present_credit == 0 &&
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0)) ||
+         (stats_after.nouveau_pci_probe_accepts != 0 &&
+          stats_after.nouveau_display_create_successes != 0 &&
+          stats_after.nouveau_display_heads != 0 &&
+          stats_after.nouveau_display_connectors != 0 &&
+          stats_after.nouveau_display_vblank_supported != 0 &&
+          stats_after.nouveau_display_vblank_irqs != 0 &&
+          stats_after.nouveau_display_page_flip_completions != 0 &&
+          stats_after.kms_present_last_lane ==
+              FB_GPU_KMS_PRESENT_LANE_NOUVEAU_HW &&
+          stats_after.kms_present_dumb == 0 &&
+          stats_after.kms_present_synthvid == 0 &&
+          stats_after.kms_present_nouveau_hw != 0 &&
+          stats_after.kms_vblank_source_nouveau_hw != 0 &&
+          stats_after.kms_vblank_source_software_display == 0 &&
+          stats_after.kms_vblank_source_synthetic == 0 &&
+          stats_after.kms_page_flip_events_native_hw != 0 &&
+          stats_after.kms_page_flip_events_software_blit == 0));
     {
         char *dxg_status = read_dxg_status_buffer();
         char *host_to_vm = dxg_status != 0 ?
@@ -11049,6 +11102,9 @@ static int probe_present_source_failclosed_contract(
         d3d12_native_completion_not_kms_pass &&
         d3d12_standard_alloc_not_display_bind_pass &&
         d3d12_dda_nouveau_separate_display_not_bind_pass &&
+        wsl_uapi_namespace_negative_pass &&
+        wsl_adapter_display_caps_negative_pass &&
+        dda_nouveau_non_readback_display_proof_pass &&
         stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
         stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
@@ -11074,6 +11130,9 @@ static int probe_present_source_failclosed_contract(
            d3d12_dda_nouveau_separate_display_not_bind_pass &&
            d3d12_host_to_vm_presenthistory_absent_pass &&
            gpu_remaining_plan_dependency_skeleton_pass &&
+           wsl_uapi_namespace_negative_pass &&
+           wsl_adapter_display_caps_negative_pass &&
+           dda_nouveau_non_readback_display_proof_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
 out:
@@ -11969,6 +12028,79 @@ out:
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
            d3d12_dda_nouveau_separate_display_not_bind_pass ? "PASS" :
                "FAIL");
+    printf("wsl_dxg_uapi_namespace_negative_matrix "
+           "uapi_namespace_checked=1 last_known_ioctl_nr=0x49 "
+           "display_bind_ioctl_present=0 present_source_ioctl_present=0 "
+           "present_completion_ioctl_present=0 linux_ioctl_contracts=%lu "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_uapi_namespace_negative_pass ? "PASS" : "FAIL");
+    printf("wsl_dxg_adapter_display_caps_negative_matrix "
+           "display_supported=%lu post_device=0 "
+           "indirect_display_device=0 display_sources=%lu "
+           "display_sources_known=%lu display_caps_cleared_by_wsl=1 "
+           "display_bind_transport_present=%lu present_id=%lu "
+           "completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_present_dxg_adapter_display_supported,
+           stats_after.dxg_present_dxg_adapter_sources,
+           stats_after.dxg_present_dxg_adapter_sources_known,
+           stats_after.dxg_present_helper_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_adapter_display_caps_negative_pass ? "PASS" : "FAIL");
+    printf("dda_nouveau_non_readback_display_proof_matrix "
+           "dda_pci_transport_present=%s "
+           "dda_nouveau_display_present=%s "
+           "dda_nouveau_non_readback_present=%s "
+           "display_create_successes=%lu heads=%lu connectors=%lu "
+           "nonvirtual_connector=%u vblank_supported=%lu "
+           "vblank_irqs=%lu page_flip_completions=%lu "
+           "kms_lane=%lu kms_present_dumb=%lu kms_present_synthvid=%lu "
+           "kms_present_nouveau_hw=%lu "
+           "kms_vblank_source_nouveau_hw=%lu "
+           "kms_vblank_source_software_display=%lu "
+           "kms_vblank_source_synthetic=%lu "
+           "page_flip_events_software_blit=%lu "
+           "page_flip_events_native_hw=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats_after.nouveau_pci_probe_accepts != 0 ? "PASS" :
+                                                        "GPU_P_FAIL_CLOSED",
+           stats_after.nouveau_display_create_successes != 0 &&
+                   stats_after.nouveau_display_heads != 0 &&
+                   stats_after.nouveau_display_connectors != 0 &&
+                   stats_after.nouveau_native_display_ready != 0 ?
+               "PASS" : "ABSENT",
+           stats_after.kms_present_last_lane ==
+                       FB_GPU_KMS_PRESENT_LANE_NOUVEAU_HW &&
+                   stats_after.kms_page_flip_events_native_hw != 0 ?
+               "PASS" : "ABSENT",
+           stats_after.nouveau_display_create_successes,
+           stats_after.nouveau_display_heads,
+           stats_after.nouveau_display_connectors,
+           stats_after.nouveau_display_create_successes != 0 &&
+                   stats_after.nouveau_display_heads != 0 &&
+                   stats_after.nouveau_display_connectors != 0,
+           stats_after.nouveau_display_vblank_supported,
+           stats_after.nouveau_display_vblank_irqs,
+           stats_after.nouveau_display_page_flip_completions,
+           stats_after.kms_present_last_lane,
+           stats_after.kms_present_dumb,
+           stats_after.kms_present_synthvid,
+           stats_after.kms_present_nouveau_hw,
+           stats_after.kms_vblank_source_nouveau_hw,
+           stats_after.kms_vblank_source_software_display,
+           stats_after.kms_vblank_source_synthetic,
+           stats_after.kms_page_flip_events_software_blit,
+           stats_after.kms_page_flip_events_native_hw,
+           dda_nouveau_non_readback_display_proof_pass ? "PASS" : "FAIL");
     printf("dxg_scanout_bind_weak_evidence_matrix "
            "dxg_ready_only=%lu d3dkmt_handles_only=%lu "
            "same_adapter_resource_only=%lu syncfile_only=%lu "
