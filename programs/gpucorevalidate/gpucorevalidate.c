@@ -891,6 +891,21 @@ static int validate_fbstat_aggregate_matrix(void)
                               "nouveau_primary_plane_modifier_failclosed_matrix",
                               "status=PASS");
     require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "nouveau_linux_display_readiness_matrix",
+                              "display_engine_object=0");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "nouveau_linux_display_readiness_matrix",
+                              "linear_required=1");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "nouveau_linux_display_readiness_matrix",
+                              "vblank_event_registered=0");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "nouveau_linux_display_readiness_matrix",
+                              "page_flip_event_source=none");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
+                              "nouveau_linux_display_readiness_matrix",
+                              "status=PASS_FAILCLOSED");
+    require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
                               "kms_scanout_cpu_convert_separation_matrix",
                               "cpu_convert_native_present=0");
     require_output_line_token("fbstat_linux_kms_nouveau_audit", output,
@@ -3389,6 +3404,7 @@ static int validate_backend(void)
     int nouveau_display_kms_ready;
     int nouveau_native_display_claimed;
     int nouveau_atomic_pageflip_backend_missing_ok;
+    int nouveau_linux_display_readiness_ok;
     int nouveau_display_kms_registered;
     int nouveau_display_kms_registration_ok;
     int nouveau_kms_vblank_irq_source_ok;
@@ -3505,8 +3521,25 @@ static int validate_backend(void)
         stats.nouveau_display_connector_probe_attempts == 0 &&
         stats.nouveau_display_connectors == 0 &&
         stats.nouveau_display_nonvirtual_connectors == 0 &&
+        stats.nouveau_display_engine_object_created == 0 &&
+        stats.nouveau_display_mode_config_ready == 0 &&
+        stats.nouveau_display_crtc_count == 0 &&
+        stats.nouveau_display_encoder_count == 0 &&
+        stats.nouveau_display_primary_plane_count == 0 &&
+        stats.nouveau_display_primary_plane_linear_required != 0 &&
+        stats.nouveau_display_primary_plane_nonlinear_modifiers == 0 &&
+        stats.nouveau_display_outp_mask_seen == 0 &&
+        stats.nouveau_display_conn_mask_seen == 0 &&
+        stats.nouveau_display_head_mask_seen == 0 &&
+        stats.nouveau_display_nvif_head_ctor_successes == 0 &&
+        stats.nouveau_display_hpd_event_registered == 0 &&
+        stats.nouveau_display_dp_irq_event_registered == 0 &&
         stats.nouveau_display_vblank_supported == 0 &&
         stats.nouveau_display_vblank_irq_supported == 0 &&
+        stats.nouveau_display_vblank_event_registered == 0 &&
+        stats.nouveau_display_atomic_commit_tail_ready == 0 &&
+        stats.nouveau_display_page_flip_event_source ==
+            FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE &&
         stats.nouveau_display_vblank_source ==
             FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE &&
         stats.nouveau_display_vblank_irqs == 0 &&
@@ -3527,11 +3560,28 @@ static int validate_backend(void)
         backend_opengl_submit == 0;
     nouveau_display_kms_ready =
         stats.nouveau_display_create_successes != 0 &&
+        stats.nouveau_display_engine_object_created != 0 &&
+        stats.nouveau_display_mode_config_ready != 0 &&
+        stats.nouveau_display_crtc_count != 0 &&
+        stats.nouveau_display_encoder_count != 0 &&
+        stats.nouveau_display_primary_plane_count != 0 &&
+        stats.nouveau_display_primary_plane_linear_required != 0 &&
+        stats.nouveau_display_primary_plane_nonlinear_modifiers == 0 &&
+        stats.nouveau_display_outp_mask_seen != 0 &&
+        stats.nouveau_display_conn_mask_seen != 0 &&
+        stats.nouveau_display_head_mask_seen != 0 &&
+        stats.nouveau_display_nvif_head_ctor_successes != 0 &&
         stats.nouveau_display_heads != 0 &&
         stats.nouveau_display_connectors != 0 &&
         stats.nouveau_display_nonvirtual_connectors != 0 &&
+        stats.nouveau_display_hpd_event_registered != 0 &&
+        stats.nouveau_display_dp_irq_event_registered != 0 &&
         stats.nouveau_display_vblank_supported != 0 &&
         stats.nouveau_display_vblank_irq_supported != 0 &&
+        stats.nouveau_display_vblank_event_registered != 0 &&
+        stats.nouveau_display_atomic_commit_tail_ready != 0 &&
+        stats.nouveau_display_page_flip_event_source ==
+            FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ &&
         stats.nouveau_display_vblank_source ==
             FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ &&
         stats.nouveau_display_page_flip_completion_ready != 0 &&
@@ -3571,9 +3621,35 @@ static int validate_backend(void)
     nouveau_primary_plane_modifier_failclosed_ok =
         !hyperv_gpup_failclosed ||
         (stats.kms_present_nouveau_hw == 0 &&
+         stats.nouveau_display_primary_plane_count == 0 &&
+         stats.nouveau_display_primary_plane_linear_required != 0 &&
+         stats.nouveau_display_primary_plane_nonlinear_modifiers == 0 &&
          stats.nouveau_native_display_ready == 0 &&
          stats.nouveau_pci_native_present_credit == 0 &&
          backend_opengl_submit == 0);
+    nouveau_linux_display_readiness_ok =
+        stats.nouveau_pci_probe_accepts == 0 ?
+            (stats.nouveau_display_engine_object_created == 0 &&
+             stats.nouveau_display_mode_config_ready == 0 &&
+             stats.nouveau_display_crtc_count == 0 &&
+             stats.nouveau_display_encoder_count == 0 &&
+             stats.nouveau_display_primary_plane_count == 0 &&
+             stats.nouveau_display_primary_plane_linear_required != 0 &&
+             stats.nouveau_display_primary_plane_nonlinear_modifiers == 0 &&
+             stats.nouveau_display_outp_mask_seen == 0 &&
+             stats.nouveau_display_conn_mask_seen == 0 &&
+             stats.nouveau_display_head_mask_seen == 0 &&
+             stats.nouveau_display_nvif_head_ctor_successes == 0 &&
+             stats.nouveau_display_vblank_event_registered == 0 &&
+             stats.nouveau_display_hpd_event_registered == 0 &&
+             stats.nouveau_display_dp_irq_event_registered == 0 &&
+             stats.nouveau_display_atomic_commit_tail_ready == 0 &&
+             stats.nouveau_display_page_flip_event_source ==
+                 FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE &&
+             stats.nouveau_native_display_ready == 0 &&
+             stats.nouveau_pci_native_present_credit == 0 &&
+             backend_opengl_submit == 0) :
+            nouveau_display_kms_ready;
     kms_scanout_cpu_convert_separation_ok =
         stats.kms_present_nouveau_hw == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
@@ -3938,8 +4014,25 @@ static int validate_backend(void)
          stats.nouveau_display_connector_probe_attempts == 0 &&
          stats.nouveau_display_connectors == 0 &&
          stats.nouveau_display_nonvirtual_connectors == 0 &&
+         stats.nouveau_display_engine_object_created == 0 &&
+         stats.nouveau_display_mode_config_ready == 0 &&
+         stats.nouveau_display_crtc_count == 0 &&
+         stats.nouveau_display_encoder_count == 0 &&
+         stats.nouveau_display_primary_plane_count == 0 &&
+         stats.nouveau_display_primary_plane_linear_required != 0 &&
+         stats.nouveau_display_primary_plane_nonlinear_modifiers == 0 &&
+         stats.nouveau_display_outp_mask_seen == 0 &&
+         stats.nouveau_display_conn_mask_seen == 0 &&
+         stats.nouveau_display_head_mask_seen == 0 &&
+         stats.nouveau_display_nvif_head_ctor_successes == 0 &&
+         stats.nouveau_display_hpd_event_registered == 0 &&
+         stats.nouveau_display_dp_irq_event_registered == 0 &&
          stats.nouveau_display_vblank_supported == 0 &&
          stats.nouveau_display_vblank_irq_supported == 0 &&
+         stats.nouveau_display_vblank_event_registered == 0 &&
+         stats.nouveau_display_atomic_commit_tail_ready == 0 &&
+         stats.nouveau_display_page_flip_event_source ==
+             FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE &&
          stats.nouveau_display_vblank_source ==
              FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE &&
          stats.nouveau_display_vblank_irqs == 0 &&
@@ -4327,11 +4420,16 @@ static int validate_backend(void)
            "dda_nouveau_display_present=%s "
            "dda_nouveau_non_readback_present=%s "
            "display_probe_attempts=%lu display_create_successes=%lu "
+           "display_engine_object=%lu mode_config_ready=%lu "
            "head_probe_attempts=%lu heads=%lu "
            "connector_probe_attempts=%lu connectors=%lu "
-           "nonvirtual_connectors=%lu vblank_supported=%lu "
+           "crtcs=%lu encoders=%lu primary_planes=%lu "
+           "nonvirtual_connectors=%lu outp_mask_seen=%lu "
+           "conn_mask_seen=%lu head_mask_seen=%lu "
+           "vblank_supported=%lu vblank_event=%lu "
            "vblank_irq_supported=%lu vblank_source=%s "
            "page_flip_ready=%lu page_flip_completions=%lu "
+           "page_flip_event_source=%s atomic_commit_tail=%lu "
            "atomic_backend_missing=%lu "
            "kms_lane=%lu kms_present_dumb=%lu kms_present_synthvid=%lu "
            "kms_present_nouveau_hw=%lu "
@@ -4351,18 +4449,31 @@ static int validate_backend(void)
                "PASS" : "ABSENT",
            stats.nouveau_display_probe_attempts,
            stats.nouveau_display_create_successes,
+           stats.nouveau_display_engine_object_created,
+           stats.nouveau_display_mode_config_ready,
            stats.nouveau_display_head_probe_attempts,
            stats.nouveau_display_heads,
            stats.nouveau_display_connector_probe_attempts,
            stats.nouveau_display_connectors,
+           stats.nouveau_display_crtc_count,
+           stats.nouveau_display_encoder_count,
+           stats.nouveau_display_primary_plane_count,
            stats.nouveau_display_nonvirtual_connectors,
+           stats.nouveau_display_outp_mask_seen,
+           stats.nouveau_display_conn_mask_seen,
+           stats.nouveau_display_head_mask_seen,
            stats.nouveau_display_vblank_supported,
+           stats.nouveau_display_vblank_event_registered,
            stats.nouveau_display_vblank_irq_supported,
            stats.nouveau_display_vblank_source ==
                    FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
                "none",
            stats.nouveau_display_page_flip_completion_ready,
            stats.nouveau_display_page_flip_completions,
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
+           stats.nouveau_display_atomic_commit_tail_ready,
            stats.nouveau_display_atomic_pageflip_backend_missing,
            stats.kms_present_last_lane,
            stats.kms_present_dumb,
@@ -4987,9 +5098,15 @@ static int validate_backend(void)
            "backend=%u hyperv_gpup=%s native_display_ready=%d "
            "dda_native_display_present=%d display_target_kind=%lu "
            "display_probe_attempts=%lu head_probe_attempts=%lu "
-           "connector_probe_attempts=%lu nonvirtual_connectors=%lu "
-           "vblank_irq_supported=%lu vblank_source=%s "
-           "page_flip_ready=%lu atomic_backend_missing=%lu "
+           "connector_probe_attempts=%lu engine_object=%lu "
+           "mode_config_ready=%lu crtcs=%lu encoders=%lu "
+           "primary_planes=%lu outp_mask_seen=%lu "
+           "conn_mask_seen=%lu head_mask_seen=%lu nvif_heads=%lu "
+           "nonvirtual_connectors=%lu hpd_event=%lu dp_irq_event=%lu "
+           "vblank_event=%lu vblank_irq_supported=%lu "
+           "vblank_source=%s page_flip_ready=%lu "
+           "atomic_commit_tail=%lu page_flip_event_source=%s "
+           "atomic_backend_missing=%lu "
            "dxg_scanout_bind_successes=%lu present_id=%lu completed=%lu "
            "reject_reasons=0x%lx reject_has_atomic_pageflip_backend=%u "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -5001,12 +5118,28 @@ static int validate_backend(void)
            stats.nouveau_display_probe_attempts,
            stats.nouveau_display_head_probe_attempts,
            stats.nouveau_display_connector_probe_attempts,
+           stats.nouveau_display_engine_object_created,
+           stats.nouveau_display_mode_config_ready,
+           stats.nouveau_display_crtc_count,
+           stats.nouveau_display_encoder_count,
+           stats.nouveau_display_primary_plane_count,
+           stats.nouveau_display_outp_mask_seen,
+           stats.nouveau_display_conn_mask_seen,
+           stats.nouveau_display_head_mask_seen,
+           stats.nouveau_display_nvif_head_ctor_successes,
            stats.nouveau_display_nonvirtual_connectors,
+           stats.nouveau_display_hpd_event_registered,
+           stats.nouveau_display_dp_irq_event_registered,
+           stats.nouveau_display_vblank_event_registered,
            stats.nouveau_display_vblank_irq_supported,
            stats.nouveau_display_vblank_source ==
                    FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
                "none",
            stats.nouveau_display_page_flip_completion_ready,
+           stats.nouveau_display_atomic_commit_tail_ready,
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
            stats.nouveau_display_atomic_pageflip_backend_missing,
            stats.dxg_scanout_bind_successes,
            stats.dxg_scanout_bind_last_present_id,
@@ -5020,9 +5153,16 @@ static int validate_backend(void)
            "create_successes=%lu create_fail_closed=%lu "
            "create_fail_reason=0x%lx head_probe_attempts=%lu heads=%lu "
            "connector_probe_attempts=%lu connectors=%lu "
-           "nonvirtual_connectors=%lu vblank_supported=%lu "
+           "engine_object=%lu mode_config_ready=%lu "
+           "crtcs=%lu encoders=%lu primary_planes=%lu "
+           "linear_required=%lu nonlinear_modifiers=%lu "
+           "outp_mask_seen=%lu conn_mask_seen=%lu "
+           "head_mask_seen=%lu nvif_heads=%lu "
+           "nonvirtual_connectors=%lu hpd_event=%lu dp_irq_event=%lu "
+           "vblank_supported=%lu vblank_event=%lu "
            "vblank_irq_supported=%lu vblank_source=%s "
            "vblank_irqs=%lu page_flip_ready=%lu flip_completions=%lu "
+           "atomic_commit_tail=%lu page_flip_event_source=%s "
            "atomic_backend_missing=%lu atomic_missing_policy=%s "
            "dda_native_display_present=%lu native_display_ready=%lu "
            "reject_reasons=0x%lx native_present_credit=0 "
@@ -5037,8 +5177,22 @@ static int validate_backend(void)
            stats.nouveau_display_heads,
            stats.nouveau_display_connector_probe_attempts,
            stats.nouveau_display_connectors,
+           stats.nouveau_display_engine_object_created,
+           stats.nouveau_display_mode_config_ready,
+           stats.nouveau_display_crtc_count,
+           stats.nouveau_display_encoder_count,
+           stats.nouveau_display_primary_plane_count,
+           stats.nouveau_display_primary_plane_linear_required,
+           stats.nouveau_display_primary_plane_nonlinear_modifiers,
+           stats.nouveau_display_outp_mask_seen,
+           stats.nouveau_display_conn_mask_seen,
+           stats.nouveau_display_head_mask_seen,
+           stats.nouveau_display_nvif_head_ctor_successes,
            stats.nouveau_display_nonvirtual_connectors,
+           stats.nouveau_display_hpd_event_registered,
+           stats.nouveau_display_dp_irq_event_registered,
            stats.nouveau_display_vblank_supported,
+           stats.nouveau_display_vblank_event_registered,
            stats.nouveau_display_vblank_irq_supported,
            stats.nouveau_display_vblank_source ==
                    FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
@@ -5046,6 +5200,10 @@ static int validate_backend(void)
            stats.nouveau_display_vblank_irqs,
            stats.nouveau_display_page_flip_completion_ready,
            stats.nouveau_display_page_flip_completions,
+           stats.nouveau_display_atomic_commit_tail_ready,
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
            stats.nouveau_display_atomic_pageflip_backend_missing,
            nouveau_atomic_pageflip_backend_missing_ok ? "PASS" : "FAIL",
            stats.nouveau_dda_native_display_present,
@@ -5083,8 +5241,15 @@ static int validate_backend(void)
            "display_create_attempts=%lu display_create_successes=%lu "
            "head_probe_attempts=%lu heads=%lu "
            "connector_probe_attempts=%lu connectors=%lu "
-           "nonvirtual_connectors=%lu vblank_irq_supported=%lu "
-           "vblank_source=%s page_flip_ready=%lu atomic_backend_missing=%lu "
+           "engine_object=%lu mode_config_ready=%lu "
+           "crtcs=%lu encoders=%lu primary_planes=%lu "
+           "outp_mask_seen=%lu conn_mask_seen=%lu "
+           "head_mask_seen=%lu nvif_heads=%lu "
+           "nonvirtual_connectors=%lu hpd_event=%lu dp_irq_event=%lu "
+           "vblank_event=%lu vblank_irq_supported=%lu "
+           "vblank_source=%s page_flip_ready=%lu "
+           "atomic_commit_tail=%lu page_flip_event_source=%s "
+           "atomic_backend_missing=%lu "
            "kms_registered=%u native_display_ready=%lu "
            "dda_native_display_present=%lu registration_source=%s "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -5096,12 +5261,28 @@ static int validate_backend(void)
            stats.nouveau_display_heads,
            stats.nouveau_display_connector_probe_attempts,
            stats.nouveau_display_connectors,
+           stats.nouveau_display_engine_object_created,
+           stats.nouveau_display_mode_config_ready,
+           stats.nouveau_display_crtc_count,
+           stats.nouveau_display_encoder_count,
+           stats.nouveau_display_primary_plane_count,
+           stats.nouveau_display_outp_mask_seen,
+           stats.nouveau_display_conn_mask_seen,
+           stats.nouveau_display_head_mask_seen,
+           stats.nouveau_display_nvif_head_ctor_successes,
            stats.nouveau_display_nonvirtual_connectors,
+           stats.nouveau_display_hpd_event_registered,
+           stats.nouveau_display_dp_irq_event_registered,
+           stats.nouveau_display_vblank_event_registered,
            stats.nouveau_display_vblank_irq_supported,
            stats.nouveau_display_vblank_source ==
                    FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
                "none",
            stats.nouveau_display_page_flip_completion_ready,
+           stats.nouveau_display_atomic_commit_tail_ready,
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
            stats.nouveau_display_atomic_pageflip_backend_missing,
            nouveau_display_kms_registered,
            stats.nouveau_native_display_ready,
@@ -5116,6 +5297,8 @@ static int validate_backend(void)
            "kms_source_software_display=%lu kms_source_native_hw=%lu "
            "nouveau_vblank_supported=%lu "
            "nouveau_vblank_irq_supported=%lu nouveau_vblank_source=%s "
+           "nouveau_vblank_event=%lu page_flip_event_source=%s "
+           "atomic_commit_tail=%lu "
            "nouveau_vblank_irqs=%lu nouveau_irq_claimed=%lu "
            "page_flip_ready=%lu flip_completions=%lu irq_source=%s "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
@@ -5130,6 +5313,11 @@ static int validate_backend(void)
            stats.nouveau_display_vblank_source ==
                    FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
                "none",
+           stats.nouveau_display_vblank_event_registered,
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
+           stats.nouveau_display_atomic_commit_tail_ready,
            stats.nouveau_display_vblank_irqs,
            stats.nouveau_pci_irq_delivery_claimed,
            stats.nouveau_display_page_flip_completion_ready,
@@ -5142,13 +5330,57 @@ static int validate_backend(void)
     printf("gpu_core_c_validator "
            "nouveau_primary_plane_modifier_failclosed_matrix "
            "primary_plane=diagnostic required_modifier=LINEAR "
-           "nonlinear_modifiers=0 nouveau_hw_scanout=%lu "
+           "primary_planes=%lu linear_required=%lu "
+           "nonlinear_modifiers=%lu nouveau_hw_scanout=%lu "
            "native_display_ready=%lu modifier_credit=0 "
            "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.nouveau_display_primary_plane_count,
+           stats.nouveau_display_primary_plane_linear_required,
+           stats.nouveau_display_primary_plane_nonlinear_modifiers,
            stats.kms_present_nouveau_hw,
            stats.nouveau_native_display_ready,
            nouveau_primary_plane_modifier_failclosed_ok ?
                (hyperv_gpup_failclosed ? "PASS" : "DIAGNOSTIC") : "FAIL");
+    printf("gpu_core_c_validator nouveau_linux_display_readiness_matrix "
+           "display_engine_object=%lu mode_config_ready=%lu "
+           "outp_mask_seen=%lu conn_mask_seen=%lu head_mask_seen=%lu "
+           "crtcs=%lu encoders=%lu primary_planes=%lu "
+           "linear_required=%lu nonlinear_modifiers=%lu "
+           "nvif_heads=%lu heads=%lu connectors=%lu "
+           "nonvirtual_connectors=%lu hpd_event=%lu dp_irq_event=%lu "
+           "vblank_event_registered=%lu vblank_source=%s "
+           "page_flip_event_source=%s atomic_commit_tail=%lu "
+           "native_display_ready=%lu dda_native_display_present=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.nouveau_display_engine_object_created,
+           stats.nouveau_display_mode_config_ready,
+           stats.nouveau_display_outp_mask_seen,
+           stats.nouveau_display_conn_mask_seen,
+           stats.nouveau_display_head_mask_seen,
+           stats.nouveau_display_crtc_count,
+           stats.nouveau_display_encoder_count,
+           stats.nouveau_display_primary_plane_count,
+           stats.nouveau_display_primary_plane_linear_required,
+           stats.nouveau_display_primary_plane_nonlinear_modifiers,
+           stats.nouveau_display_nvif_head_ctor_successes,
+           stats.nouveau_display_heads,
+           stats.nouveau_display_connectors,
+           stats.nouveau_display_nonvirtual_connectors,
+           stats.nouveau_display_hpd_event_registered,
+           stats.nouveau_display_dp_irq_event_registered,
+           stats.nouveau_display_vblank_event_registered,
+           stats.nouveau_display_vblank_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
+           stats.nouveau_display_page_flip_event_source ==
+                   FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+               "none",
+           stats.nouveau_display_atomic_commit_tail_ready,
+           stats.nouveau_native_display_ready,
+           stats.nouveau_dda_native_display_present,
+           nouveau_linux_display_readiness_ok ?
+               (hyperv_gpup_failclosed ? "PASS_FAILCLOSED" : "PASS") :
+               "FAIL");
     printf("gpu_core_c_validator kms_scanout_cpu_convert_separation_matrix "
            "kms_present_dumb=%lu kms_present_synthvid=%lu "
            "kms_present_nouveau_hw=%lu blit_bytes=%lu "
@@ -5553,6 +5785,10 @@ static int validate_backend(void)
         note_fail("backend", "nouveau_primary_plane_modifier_not_failclosed");
         ok = 0;
     }
+    if (!nouveau_linux_display_readiness_ok) {
+        note_fail("backend", "nouveau_linux_display_readiness_not_proven");
+        ok = 0;
+    }
     if (!kms_scanout_cpu_convert_separation_ok) {
         note_fail("backend", "kms_scanout_cpu_convert_claimed_native_present");
         ok = 0;
@@ -5885,8 +6121,25 @@ static int validate_backend(void)
             stats.nouveau_display_connector_probe_attempts != 0 ||
             stats.nouveau_display_connectors != 0 ||
             stats.nouveau_display_nonvirtual_connectors != 0 ||
+            stats.nouveau_display_engine_object_created != 0 ||
+            stats.nouveau_display_mode_config_ready != 0 ||
+            stats.nouveau_display_crtc_count != 0 ||
+            stats.nouveau_display_encoder_count != 0 ||
+            stats.nouveau_display_primary_plane_count != 0 ||
+            stats.nouveau_display_primary_plane_linear_required == 0 ||
+            stats.nouveau_display_primary_plane_nonlinear_modifiers != 0 ||
+            stats.nouveau_display_outp_mask_seen != 0 ||
+            stats.nouveau_display_conn_mask_seen != 0 ||
+            stats.nouveau_display_head_mask_seen != 0 ||
+            stats.nouveau_display_nvif_head_ctor_successes != 0 ||
+            stats.nouveau_display_hpd_event_registered != 0 ||
+            stats.nouveau_display_dp_irq_event_registered != 0 ||
             stats.nouveau_display_vblank_supported != 0 ||
             stats.nouveau_display_vblank_irq_supported != 0 ||
+            stats.nouveau_display_vblank_event_registered != 0 ||
+            stats.nouveau_display_atomic_commit_tail_ready != 0 ||
+            stats.nouveau_display_page_flip_event_source !=
+                FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE ||
             stats.nouveau_display_vblank_source !=
                 FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_NONE ||
             stats.nouveau_display_vblank_irqs != 0 ||
@@ -6066,11 +6319,16 @@ static int validate_backend(void)
                "dda_nouveau_display_present=%s "
                "dda_nouveau_non_readback_present=%s "
                "display_probe_attempts=%lu display_create_successes=%lu "
+               "display_engine_object=%lu mode_config_ready=%lu "
                "head_probe_attempts=%lu heads=%lu "
                "connector_probe_attempts=%lu connectors=%lu "
-               "nonvirtual_connectors=%lu vblank_supported=%lu "
+               "crtcs=%lu encoders=%lu primary_planes=%lu "
+               "nonvirtual_connectors=%lu outp_mask_seen=%lu "
+               "conn_mask_seen=%lu head_mask_seen=%lu "
+               "vblank_supported=%lu vblank_event=%lu "
                "vblank_irq_supported=%lu vblank_source=%s "
                "page_flip_ready=%lu page_flip_completions=%lu "
+               "page_flip_event_source=%s atomic_commit_tail=%lu "
                "atomic_backend_missing=%lu "
                "kms_lane=%lu kms_present_dumb=%lu "
                "kms_present_synthvid=%lu kms_present_nouveau_hw=%lu "
@@ -6091,18 +6349,31 @@ static int validate_backend(void)
                    "PASS" : "ABSENT",
                stats.nouveau_display_probe_attempts,
                stats.nouveau_display_create_successes,
+               stats.nouveau_display_engine_object_created,
+               stats.nouveau_display_mode_config_ready,
                stats.nouveau_display_head_probe_attempts,
                stats.nouveau_display_heads,
                stats.nouveau_display_connector_probe_attempts,
                stats.nouveau_display_connectors,
+               stats.nouveau_display_crtc_count,
+               stats.nouveau_display_encoder_count,
+               stats.nouveau_display_primary_plane_count,
                stats.nouveau_display_nonvirtual_connectors,
+               stats.nouveau_display_outp_mask_seen,
+               stats.nouveau_display_conn_mask_seen,
+               stats.nouveau_display_head_mask_seen,
                stats.nouveau_display_vblank_supported,
+               stats.nouveau_display_vblank_event_registered,
                stats.nouveau_display_vblank_irq_supported,
                stats.nouveau_display_vblank_source ==
                        FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
                    "none",
                stats.nouveau_display_page_flip_completion_ready,
                stats.nouveau_display_page_flip_completions,
+               stats.nouveau_display_page_flip_event_source ==
+                       FB_GPU_NOUVEAU_DISPLAY_VBLANK_SOURCE_IRQ ? "irq" :
+                   "none",
+               stats.nouveau_display_atomic_commit_tail_ready,
                stats.nouveau_display_atomic_pageflip_backend_missing,
                stats.kms_present_last_lane,
                stats.kms_present_dumb,
