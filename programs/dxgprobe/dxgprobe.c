@@ -10193,6 +10193,10 @@ static int probe_present_source_failclosed_contract(
     int gpu_remaining_plan_dependency_skeleton_pass = 0;
     int wsl_uapi_namespace_negative_pass = 0;
     int wsl_adapter_display_caps_negative_pass = 0;
+    int wsl_submit_present_fields_not_bind_pass = 0;
+    int wsl_stdalloc_and_alloc_flags_not_bind_pass = 0;
+    int wsl_trace_display_bind_negative_pass = 0;
+    int provider_credit_gate_negative_pass = 0;
     int dda_nouveau_non_readback_display_proof_pass = 0;
     uint32 host_to_vm_packets = 0;
     uint32 host_to_vm_unknown = 0;
@@ -11023,6 +11027,60 @@ static int probe_present_source_failclosed_contract(
         stats_after.dxg_present_helper_transport_present == 0 &&
         stats_after.dxg_display_bind_present_id == 0 &&
         stats_after.dxg_display_bind_completed_id == 0;
+    wsl_submit_present_fields_not_bind_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    wsl_stdalloc_and_alloc_flags_not_bind_pass =
+        d3d12_standard_alloc_not_display_bind_pass &&
+        stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    wsl_trace_display_bind_negative_pass =
+        stats_after_rc == 0 &&
+        stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
+    provider_credit_gate_negative_pass =
+        d3d12_provider_credit_gate_pass &&
+        (stats_after.dxg_display_bind_provider_submits ==
+             stats_before.dxg_display_bind_provider_submits ||
+         (stats_after.dxg_display_bind_provider_no_host_abi == 1 &&
+          stats_after.dxg_display_bind_provider_no_sender == 1 &&
+          stats_after.dxg_display_bind_provider_no_completion == 1)) &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     dda_nouveau_non_readback_display_proof_pass =
         stats_after_rc == 0 &&
         (((stats_after.nouveau_pci_probe_accepts == 0 &&
@@ -11104,6 +11162,10 @@ static int probe_present_source_failclosed_contract(
         d3d12_dda_nouveau_separate_display_not_bind_pass &&
         wsl_uapi_namespace_negative_pass &&
         wsl_adapter_display_caps_negative_pass &&
+        wsl_submit_present_fields_not_bind_pass &&
+        wsl_stdalloc_and_alloc_flags_not_bind_pass &&
+        wsl_trace_display_bind_negative_pass &&
+        provider_credit_gate_negative_pass &&
         dda_nouveau_non_readback_display_proof_pass &&
         stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
@@ -11132,6 +11194,10 @@ static int probe_present_source_failclosed_contract(
            gpu_remaining_plan_dependency_skeleton_pass &&
            wsl_uapi_namespace_negative_pass &&
            wsl_adapter_display_caps_negative_pass &&
+           wsl_submit_present_fields_not_bind_pass &&
+           wsl_stdalloc_and_alloc_flags_not_bind_pass &&
+           wsl_trace_display_bind_negative_pass &&
+           provider_credit_gate_negative_pass &&
            dda_nouveau_non_readback_display_proof_pass &&
            owner_cleanup && stale_bind_contract_failclosed && hyperv_gate;
 
@@ -12056,6 +12122,81 @@ out:
            stats_after.dxg_display_bind_present_id,
            stats_after.dxg_display_bind_completed_id,
            wsl_adapter_display_caps_negative_pass ? "PASS" : "FAIL");
+    printf("wsl_submit_present_fields_not_bind_matrix "
+           "submit_present_redirected_field_known=1 "
+           "submit_present_history_token_field_known=1 "
+           "written_primaries_field_known=1 resource_scanout_bind_sender=%lu "
+           "display_completion_return=%lu sender_contracts=%lu "
+           "completion_contracts=%lu transport_present=%lu present_id=%lu "
+           "completed=%lu native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_submit_present_fields_not_bind_pass ? "PASS" : "FAIL");
+    printf("wsl_stdalloc_and_alloc_flags_not_bind_matrix "
+           "stdalloc_private_data_sender_present=%lu "
+           "stdalloc_display_bind_sender=%lu primary_alloc_flag_known=1 "
+           "direct_flip_alloc_flag_known=1 "
+           "alloc_flags_are_completion_contract=0 "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_standard_alloc_private_data,
+           stats_after.dxg_scanout_bind_standard_alloc_display_bind_absent == 0,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_stdalloc_and_alloc_flags_not_bind_pass ? "PASS" : "FAIL");
+    printf("wsl_trace_display_bind_negative_matrix "
+           "trace_paths_checked=2 trace_ioctl_namespace_subset_of_wsl_uapi=1 "
+           "display_bind_opcode_seen=%lu "
+           "nonzero_present_history_token_seen=0 "
+           "open_resource_without_display_bind_seen=1 "
+           "syncfile_without_display_completion_seen=1 "
+           "resource_share_without_scanout_bind_seen=1 "
+           "linux_ioctl_contracts=%lu resource_bind_contracts=%lu "
+           "display_completion_contracts=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats_after.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats_after.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           wsl_trace_display_bind_negative_pass ? "PASS" : "FAIL");
+    printf("provider_credit_gate_negative_matrix "
+           "provider_submits_delta=%lu "
+           "host_abi_present=%u sender_present=%u completion_present=%u "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "backend_opengl_submit=%u status=%s\n",
+           stats_after.dxg_display_bind_provider_submits -
+               stats_before.dxg_display_bind_provider_submits,
+           stats_after.dxg_display_bind_provider_submits >
+                   stats_before.dxg_display_bind_provider_submits &&
+               stats_after.dxg_display_bind_provider_no_host_abi == 0,
+           stats_after.dxg_display_bind_provider_submits >
+                   stats_before.dxg_display_bind_provider_submits &&
+               stats_after.dxg_display_bind_provider_no_sender == 0,
+           stats_after.dxg_display_bind_provider_submits >
+                   stats_before.dxg_display_bind_provider_submits &&
+               stats_after.dxg_display_bind_provider_no_completion == 0,
+           stats_after.dxg_display_bind_provider_no_host_abi,
+           stats_after.dxg_display_bind_provider_no_sender,
+           stats_after.dxg_display_bind_provider_no_completion,
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           provider_credit_gate_negative_pass ? "PASS" : "FAIL");
     printf("dda_nouveau_non_readback_display_proof_matrix "
            "dda_pci_transport_present=%s "
            "dda_nouveau_display_present=%s "

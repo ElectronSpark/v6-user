@@ -2845,6 +2845,10 @@ static int validate_backend(void)
     int dda_nouveau_separate_display_not_bind_ok;
     int wsl_uapi_negative_ok;
     int wsl_adapter_display_caps_negative_ok;
+    int wsl_submit_present_fields_not_bind_ok;
+    int wsl_stdalloc_and_alloc_flags_not_bind_ok;
+    int wsl_trace_display_bind_negative_ok;
+    int provider_credit_gate_negative_ok;
     int dda_nouveau_non_readback_display_proof_ok;
 
     fd = open("/dev/gpu0", O_RDONLY);
@@ -3111,6 +3115,49 @@ static int validate_backend(void)
         stats.dxg_present_helper_transport_present == 0 &&
         stats.dxg_display_bind_present_id == 0 &&
         stats.dxg_display_bind_completed_id == 0;
+    wsl_submit_present_fields_not_bind_ok =
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        backend_opengl_submit == 0;
+    wsl_stdalloc_and_alloc_flags_not_bind_ok =
+        standard_alloc_not_display_bind_ok &&
+        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        backend_opengl_submit == 0;
+    wsl_trace_display_bind_negative_ok =
+        stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_display_completion_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        backend_opengl_submit == 0;
+    provider_credit_gate_negative_ok =
+        provider_credit_gate_ok &&
+        (stats.dxg_display_bind_provider_submits == 0 ||
+         (stats.dxg_display_bind_provider_no_host_abi != 0 &&
+          stats.dxg_display_bind_provider_no_sender != 0 &&
+          stats.dxg_display_bind_provider_no_completion != 0)) &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        stats.dxg_scanout_bind_successes == 0 &&
+        stats.dxg_scanout_bind_completion_successes == 0 &&
+        backend_opengl_submit == 0;
     dda_nouveau_non_readback_display_proof_ok =
         (stats.nouveau_pci_probe_accepts == 0 &&
          stats.nouveau_display_create_successes == 0 &&
@@ -3297,6 +3344,78 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            wsl_adapter_display_caps_negative_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator wsl_submit_present_fields_not_bind_matrix "
+           "submit_present_redirected_field_known=1 "
+           "submit_present_history_token_field_known=1 "
+           "written_primaries_field_known=1 resource_scanout_bind_sender=%lu "
+           "display_completion_return=%lu sender_contracts=%lu "
+           "completion_contracts=%lu transport_present=%lu present_id=%lu "
+           "completed=%lu native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           wsl_submit_present_fields_not_bind_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator "
+           "wsl_stdalloc_and_alloc_flags_not_bind_matrix "
+           "stdalloc_private_data_sender_present=%lu "
+           "stdalloc_display_bind_sender=%lu primary_alloc_flag_known=1 "
+           "direct_flip_alloc_flag_known=1 "
+           "alloc_flags_are_completion_contract=0 "
+           "resource_bind_contracts=%lu display_completion_contracts=%lu "
+           "transport_present=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_standard_alloc_private_data,
+           stats.dxg_scanout_bind_standard_alloc_display_bind_absent == 0,
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           wsl_stdalloc_and_alloc_flags_not_bind_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator wsl_trace_display_bind_negative_matrix "
+           "trace_paths_checked=2 trace_ioctl_namespace_subset_of_wsl_uapi=1 "
+           "display_bind_opcode_seen=%lu "
+           "nonzero_present_history_token_seen=0 "
+           "open_resource_without_display_bind_seen=1 "
+           "syncfile_without_display_completion_seen=1 "
+           "resource_share_without_scanout_bind_seen=1 "
+           "linux_ioctl_contracts=%lu resource_bind_contracts=%lu "
+           "display_completion_contracts=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_linux_ioctl_contracts,
+           stats.dxg_scanout_bind_candidate_resource_bind_contracts,
+           stats.dxg_scanout_bind_candidate_display_completion_contracts,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           wsl_trace_display_bind_negative_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator provider_credit_gate_negative_matrix "
+           "provider_submits=%lu "
+           "host_abi_present=%u sender_present=%u completion_present=%u "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "backend_opengl_submit=%u status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_provider_submits != 0 &&
+               stats.dxg_display_bind_provider_no_host_abi == 0,
+           stats.dxg_display_bind_provider_submits != 0 &&
+               stats.dxg_display_bind_provider_no_sender == 0,
+           stats.dxg_display_bind_provider_submits != 0 &&
+               stats.dxg_display_bind_provider_no_completion == 0,
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           backend_opengl_submit,
+           provider_credit_gate_negative_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator "
            "dda_nouveau_non_readback_display_proof_matrix "
            "dda_pci_transport_present=%s "
@@ -3540,6 +3659,10 @@ static int validate_backend(void)
                    dda_nouveau_separate_display_not_bind_ok &&
                    wsl_uapi_negative_ok &&
                    wsl_adapter_display_caps_negative_ok &&
+                   wsl_submit_present_fields_not_bind_ok &&
+                   wsl_stdalloc_and_alloc_flags_not_bind_ok &&
+                   wsl_trace_display_bind_negative_ok &&
+                   provider_credit_gate_negative_ok &&
                    dda_nouveau_non_readback_display_proof_ok &&
                    stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
                    stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
@@ -4230,6 +4353,22 @@ static int validate_backend(void)
     }
     if (!wsl_adapter_display_caps_negative_ok) {
         note_fail("backend", "wsl_adapter_display_caps_claimed");
+        ok = 0;
+    }
+    if (!wsl_submit_present_fields_not_bind_ok) {
+        note_fail("backend", "wsl_submit_present_fields_used_as_bind");
+        ok = 0;
+    }
+    if (!wsl_stdalloc_and_alloc_flags_not_bind_ok) {
+        note_fail("backend", "wsl_stdalloc_flags_used_as_bind");
+        ok = 0;
+    }
+    if (!wsl_trace_display_bind_negative_ok) {
+        note_fail("backend", "wsl_trace_display_bind_claimed");
+        ok = 0;
+    }
+    if (!provider_credit_gate_negative_ok) {
+        note_fail("backend", "provider_credit_gate_not_failclosed");
         ok = 0;
     }
     if (!dda_nouveau_non_readback_display_proof_ok) {
