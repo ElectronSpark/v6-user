@@ -406,6 +406,7 @@ int main(int argc, char *argv[])
     int display_bind_request_metadata_ok = 0;
     int display_bind_pending_lifetime_ok = 0;
     int display_bind_provider_pending_publication_ok = 0;
+    int display_bind_provider_no_send_preflight_ok = 0;
     int stale_source_zero_credit_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
@@ -547,6 +548,31 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_provider_no_sender != 0 &&
          stats.dxg_display_bind_provider_no_completion != 0 &&
          stats.dxg_display_bind_transport_present == 0 &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         stats.nouveau_pci_native_present_credit == 0 &&
+         backend_opengl_submit == 0);
+    display_bind_provider_no_send_preflight_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_request_metadata_complete == 1 &&
+         stats.dxg_display_bind_provider_pin_revalidated == 1 &&
+         stats.dxg_display_bind_provider_preflight_ready == 1 &&
+         stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_source_generation ==
+             stats.dxg_display_bind_source_generation &&
+         stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+         stats.dxg_display_bind_provider_pending_resource_generation ==
+             stats.dxg_display_bind_resource_generation &&
+         stats.dxg_display_bind_provider_send_attempts == 0 &&
+         stats.dxg_display_bind_provider_send_blocked_no_host_abi != 0 &&
+         stats.dxg_display_bind_provider_completion_demux_attempts == 0 &&
+         stats.dxg_display_bind_provider_completion_demux_blocked_no_contract != 0 &&
+         stats.dxg_display_bind_host_saw_packet == 0 &&
+         stats.dxg_display_bind_transport_source ==
+             FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
+         stats.dxg_display_bind_provider_no_host_abi == 1 &&
+         stats.dxg_display_bind_provider_no_sender == 1 &&
+         stats.dxg_display_bind_provider_no_completion == 1 &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0 &&
          stats.nouveau_pci_native_present_credit == 0 &&
@@ -1097,6 +1123,44 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            display_bind_provider_pending_publication_ok ?
+               "PASS_FAILCLOSED" : "FAIL");
+    printf("d3d12_display_bind_provider_no_send_preflight_matrix "
+           "provider_submits=%lu request_metadata_complete=%lu "
+           "provider_pin_revalidated=%lu source_generation_match=%s "
+           "resource_generation_match=%s preflight_ready=%lu "
+           "send_attempts=%lu send_blocked_no_host_abi=%lu "
+           "completion_demux_attempts=%lu "
+           "completion_demux_blocked_no_contract=%lu "
+           "host_saw_display_bind_packet=%lu "
+           "display_bind_transport_source=%s "
+           "provider_no_host_abi=%lu provider_no_sender=%lu "
+           "provider_no_completion=%lu present_id=%lu completed=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_request_metadata_complete,
+           stats.dxg_display_bind_provider_pin_revalidated,
+           stats.dxg_display_bind_provider_pending_source_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_source_generation ==
+                       stats.dxg_display_bind_source_generation ?
+               "PASS" : "FAIL",
+           stats.dxg_display_bind_provider_pending_resource_generation != 0 &&
+                   stats.dxg_display_bind_provider_pending_resource_generation ==
+                       stats.dxg_display_bind_resource_generation ?
+               "PASS" : "FAIL",
+           stats.dxg_display_bind_provider_preflight_ready,
+           stats.dxg_display_bind_provider_send_attempts,
+           stats.dxg_display_bind_provider_send_blocked_no_host_abi,
+           stats.dxg_display_bind_provider_completion_demux_attempts,
+           stats.dxg_display_bind_provider_completion_demux_blocked_no_contract,
+           stats.dxg_display_bind_host_saw_packet,
+           display_bind_transport_source_name(
+               stats.dxg_display_bind_transport_source),
+           stats.dxg_display_bind_provider_no_host_abi,
+           stats.dxg_display_bind_provider_no_sender,
+           stats.dxg_display_bind_provider_no_completion,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           display_bind_provider_no_send_preflight_ok ?
                "PASS_FAILCLOSED" : "FAIL");
     printf("d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
@@ -3410,6 +3474,16 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_no_sender);
     printf("dxg_display_bind_provider_no_completion %lu\n",
            stats.dxg_display_bind_provider_no_completion);
+    printf("dxg_display_bind_provider_preflight_ready %lu\n",
+           stats.dxg_display_bind_provider_preflight_ready);
+    printf("dxg_display_bind_provider_send_attempts %lu\n",
+           stats.dxg_display_bind_provider_send_attempts);
+    printf("dxg_display_bind_provider_send_blocked_no_host_abi %lu\n",
+           stats.dxg_display_bind_provider_send_blocked_no_host_abi);
+    printf("dxg_display_bind_provider_completion_demux_attempts %lu\n",
+           stats.dxg_display_bind_provider_completion_demux_attempts);
+    printf("dxg_display_bind_provider_completion_demux_blocked_no_contract %lu\n",
+           stats.dxg_display_bind_provider_completion_demux_blocked_no_contract);
     printf("dxg_display_bind_provider_publication_attempts %lu\n",
            stats.dxg_display_bind_provider_publication_attempts);
     printf("dxg_display_bind_provider_publish_before_send %lu\n",
