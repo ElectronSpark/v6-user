@@ -10203,6 +10203,7 @@ static int probe_present_source_failclosed_contract(
     int host_display_bind_source_catalog_pass = 0;
     int d3d12_completion_source_authority_pass = 0;
     int native_present_completion_source_namespace_pass = 0;
+    int gpu_remaining_holistic_skeleton_pass = 0;
     uint32 host_to_vm_packets = 0;
     uint32 host_to_vm_unknown = 0;
     uint32 host_to_vm_last_cmd = 0;
@@ -11190,6 +11191,19 @@ static int probe_present_source_failclosed_contract(
         stats_after.nouveau_pci_irq_cause_valid == 0 &&
         stats_after.nouveau_pci_irq_cause_acks == 0 &&
         stats_after.nouveau_pci_irq_spurious == 0;
+    gpu_remaining_holistic_skeleton_pass =
+        host_display_bind_source_catalog_pass &&
+        d3d12_completion_source_authority_pass &&
+        native_present_completion_source_namespace_pass &&
+        stats_after.dxg_display_bind_transport_present == 0 &&
+        stats_after.dxg_display_bind_present_id == 0 &&
+        stats_after.dxg_display_bind_completed_id == 0 &&
+        stats_after.dxg_scanout_bind_successes ==
+            stats_before.dxg_scanout_bind_successes &&
+        stats_after.dxg_scanout_bind_completion_successes ==
+            stats_before.dxg_scanout_bind_completion_successes &&
+        stats_after.nouveau_pci_native_present_credit == 0 &&
+        (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) == 0;
     {
         char *dxg_status = read_dxg_status_buffer();
         char *host_to_vm = dxg_status != 0 ?
@@ -11244,6 +11258,7 @@ static int probe_present_source_failclosed_contract(
         host_display_bind_source_catalog_pass &&
         d3d12_completion_source_authority_pass &&
         native_present_completion_source_namespace_pass &&
+        gpu_remaining_holistic_skeleton_pass &&
         stats_after.dxg_scanout_bind_candidate_sender_contracts == 0 &&
         stats_after.dxg_scanout_bind_candidate_completion_contracts == 0 &&
         stats_after.dxg_present_dda_nouveau_import_path_present == 0 &&
@@ -12483,6 +12498,40 @@ out:
            stats_after.dxg_display_bind_completed_id,
            (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
            gpu_remaining_plan_dependency_skeleton_pass ? "PASS" : "FAIL");
+    printf("gpu_remaining_holistic_skeleton_matrix "
+           "skeleton_version=2 active_open_items=10 "
+           "plan_source=GPU_REMAINING_GAPS.md "
+           "ordered_chunks=display_bind,native_completion,fps,backend,webkit "
+           "display_bind_source_gate=closed "
+           "bind_contract_gate=failclosed "
+           "native_completion_gate=armed_without_lane "
+           "finite_480p_gate=closed demo_interaction_gate=closed "
+           "backend_opengl_submit_gate=closed "
+           "kvm_virgl_recheck_gate=deferred "
+           "webkit_route_gate=closed webkit_content_gate=closed "
+           "webkit_enabled_artifact_gate=closed "
+           "selected_lane=gpup_dxg_scanout_bind "
+           "completion_authority=display_bind_provider "
+           "wsl_display_bind_ioctl=0 "
+           "gpup_sender_contract=%lu gpup_completion_contract=%lu "
+           "dda_d3d12_resource_import=%lu dda_scanout_bind=%lu "
+           "dda_hw_flip_completion=%s "
+           "display_bind_transport_present=%lu "
+           "display_bind_present_id=%lu display_bind_completed_id=%lu "
+           "native_present_credit=%lu backend_opengl_submit=%u "
+           "opengl_submit_credit=0 webkit_accel_credit=0 status=%s\n",
+           stats_after.dxg_scanout_bind_candidate_sender_contracts,
+           stats_after.dxg_scanout_bind_candidate_completion_contracts,
+           stats_after.dxg_present_dda_nouveau_import_path_present,
+           stats_after.dxg_present_dda_nouveau_scanout_bind_present,
+           stats_after.dxg_scanout_bind_dda_hw_flip_completion_absent != 0 ?
+               "ABSENT" : "PRESENT",
+           stats_after.dxg_display_bind_transport_present,
+           stats_after.dxg_display_bind_present_id,
+           stats_after.dxg_display_bind_completed_id,
+           stats_after.nouveau_pci_native_present_credit,
+           (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0,
+           gpu_remaining_holistic_skeleton_pass ? "PASS" : "FAIL");
 
     if (fb_fd >= 0)
         close(fb_fd);
