@@ -364,6 +364,8 @@ static int validate_fbstat_aggregate_matrix(void)
     const char *provider_gate_anchor = "d3d12_provider_credit_gate_matrix";
     const char *request_metadata_anchor =
         "d3d12_display_bind_request_metadata_matrix";
+    const char *pending_lifetime_anchor =
+        "d3d12_display_bind_pending_lifetime_matrix";
     const char *completion_lifetime_anchor =
         "d3d12_native_completion_lifetime_matrix";
     const char *stale_source_anchor =
@@ -483,6 +485,18 @@ static int validate_fbstat_aggregate_matrix(void)
                               "native_present_credit=0");
     require_output_line_token("fbstat_display_bind_request_metadata", output,
                               request_metadata_anchor,
+                              "status=PASS");
+    require_output_line_token("fbstat_display_bind_pending_lifetime", output,
+                              pending_lifetime_anchor,
+                              "active=0");
+    require_output_line_token("fbstat_display_bind_pending_lifetime", output,
+                              pending_lifetime_anchor,
+                              "native_present_credit=0");
+    require_output_line_token("fbstat_display_bind_pending_lifetime", output,
+                              pending_lifetime_anchor,
+                              "opengl_submit_credit=0");
+    require_output_line_token("fbstat_display_bind_pending_lifetime", output,
+                              pending_lifetime_anchor,
                               "status=PASS");
     require_output_line_token("fbstat_native_completion_lifetime", output,
                               completion_lifetime_anchor,
@@ -2280,6 +2294,60 @@ static int validate_present_source_matrix(void)
                               output,
                               "d3d12_display_bind_request_metadata_matrix",
                               "status=PASS");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output,
+                         "d3d12_display_bind_pending_lifetime_matrix");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "created_delta=");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "active=0");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "completed_delta=0");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "failclosed_delta=");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "last_status=95");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_pending_lifetime_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_display_bind_pending_lifetime_matrix",
+                              output,
+                              "d3d12_display_bind_pending_lifetime_matrix",
+                              "status=PASS");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output,
+                         "d3d12_display_bind_generation_revalidation_matrix");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "provider_submits_delta=");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "lock_dropped_submits_delta=");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "revalidate_attempts_delta=");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "revalidate_successes_delta=");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "revalidate_failures_delta=0");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "provider_pin_revalidated=1");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "source_generation_match=PASS");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "resource_generation_match=PASS");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "pinned_generation_match=PASS");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "present_id=0");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "completed=0");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "native_present_credit=0");
+    require_output_token("d3d12_display_bind_generation_revalidation_matrix",
+                         output, "opengl_submit_credit=0");
+    require_output_line_token("d3d12_display_bind_generation_revalidation_matrix",
+                              output,
+                              "d3d12_display_bind_generation_revalidation_matrix",
+                              "status=PASS");
     require_output_token("d3d12_display_bind_pin_lifetime_matrix",
                          output,
                          "d3d12_display_bind_pin_lifetime_matrix");
@@ -2838,6 +2906,8 @@ static int validate_backend(void)
     int display_bind_success_shape_ok;
     int provider_credit_gate_ok;
     int display_bind_request_metadata_ok;
+    int display_bind_pending_lifetime_ok;
+    int display_bind_generation_revalidation_ok;
     int native_completion_lifetime_ok;
     int stale_source_zero_credit_ok;
     int generic_completion_not_native_ok;
@@ -3019,6 +3089,35 @@ static int validate_backend(void)
          stats.dxg_display_bind_resource_generation != 0 &&
          stats.dxg_display_bind_present_id == 0 &&
          stats.dxg_display_bind_completed_id == 0);
+    display_bind_pending_lifetime_ok =
+        stats.dxg_display_bind_pending_active == 0 &&
+        stats.dxg_display_bind_pending_created >=
+            stats.dxg_display_bind_pending_completed +
+            stats.dxg_display_bind_pending_failclosed &&
+        (stats.dxg_display_bind_pending_created == 0 ||
+         (stats.dxg_display_bind_pending_sequence != 0 &&
+          stats.dxg_display_bind_pending_peak != 0 &&
+          stats.dxg_display_bind_pending_last_source_generation != 0 &&
+          stats.dxg_display_bind_pending_last_resource_generation != 0)) &&
+        (stats.dxg_display_bind_transport_present != 0 ||
+         stats.dxg_display_bind_pending_completed == 0) &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        backend_opengl_submit == 0;
+    display_bind_generation_revalidation_ok =
+        stats.dxg_display_bind_provider_submits == 0 ||
+        (stats.dxg_display_bind_lock_dropped_submits != 0 &&
+         stats.dxg_display_bind_revalidate_attempts != 0 &&
+         stats.dxg_display_bind_revalidate_successes != 0 &&
+         stats.dxg_display_bind_revalidate_failures == 0 &&
+         stats.dxg_display_bind_provider_pin_revalidated != 0 &&
+         stats.dxg_display_bind_source_generation != 0 &&
+         stats.dxg_display_bind_resource_generation != 0 &&
+         stats.dxg_display_bind_pinned_resource_generation ==
+             stats.dxg_display_bind_resource_generation &&
+         stats.dxg_display_bind_present_id == 0 &&
+         stats.dxg_display_bind_completed_id == 0 &&
+         backend_opengl_submit == 0);
     display_bind_success_shape_ok =
         (backend_opengl_submit == 0 &&
          stats.nouveau_pci_native_present_credit == 0 &&
@@ -3653,6 +3752,55 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            display_bind_request_metadata_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator d3d12_display_bind_pending_lifetime_matrix "
+           "pending_sequence=%lu created=%lu active=%lu peak=%lu "
+           "completed=%lu failclosed=%lu cancelled=%lu "
+           "last_status=%lu last_block_reason=0x%lx "
+           "source_generation=%lu resource_generation=%lu "
+           "native_present_credit=0 opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_pending_sequence,
+           stats.dxg_display_bind_pending_created,
+           stats.dxg_display_bind_pending_active,
+           stats.dxg_display_bind_pending_peak,
+           stats.dxg_display_bind_pending_completed,
+           stats.dxg_display_bind_pending_failclosed,
+           stats.dxg_display_bind_pending_cancelled,
+           stats.dxg_display_bind_pending_last_status,
+           stats.dxg_display_bind_pending_last_block_reason,
+           stats.dxg_display_bind_pending_last_source_generation,
+           stats.dxg_display_bind_pending_last_resource_generation,
+           display_bind_pending_lifetime_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator "
+           "d3d12_display_bind_generation_revalidation_matrix "
+           "provider_submits=%lu lock_dropped_submits=%lu "
+           "revalidate_attempts=%lu revalidate_successes=%lu "
+           "revalidate_failures=%lu provider_pin_revalidated=%lu "
+           "display_bind_source_generation=%lu "
+           "display_bind_resource_generation=%lu "
+           "pinned_resource_generation=%lu source_generation_present=%s "
+           "resource_generation_present=%s pinned_generation_match=%s "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_display_bind_provider_submits,
+           stats.dxg_display_bind_lock_dropped_submits,
+           stats.dxg_display_bind_revalidate_attempts,
+           stats.dxg_display_bind_revalidate_successes,
+           stats.dxg_display_bind_revalidate_failures,
+           stats.dxg_display_bind_provider_pin_revalidated,
+           stats.dxg_display_bind_source_generation,
+           stats.dxg_display_bind_resource_generation,
+           stats.dxg_display_bind_pinned_resource_generation,
+           stats.dxg_display_bind_source_generation != 0 ? "PASS" :
+                                                           "NOT_SAMPLED",
+           stats.dxg_display_bind_resource_generation != 0 ? "PASS" :
+                                                             "NOT_SAMPLED",
+           stats.dxg_display_bind_pinned_resource_generation ==
+                       stats.dxg_display_bind_resource_generation &&
+                   stats.dxg_display_bind_resource_generation != 0 ?
+               "PASS" : "NOT_SAMPLED",
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           display_bind_generation_revalidation_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator d3d12_display_bind_success_shape_matrix "
            "transport_present=%lu status_code=%lu block_reason=0x%lx "
            "completion_source=%lu present_id=%lu completed=%lu "
@@ -3787,6 +3935,8 @@ static int validate_backend(void)
            stats.dxg_display_bind_completed_id,
            backend_opengl_submit,
            display_bind_success_shape_ok &&
+                   display_bind_pending_lifetime_ok &&
+                   display_bind_generation_revalidation_ok &&
                    native_completion_lifetime_ok &&
                    provider_credit_gate_ok &&
                    generic_completion_not_native_ok &&
@@ -4491,6 +4641,15 @@ static int validate_backend(void)
     }
     if (!display_bind_request_metadata_ok) {
         note_fail("backend", "d3d12_display_bind_request_metadata_invalid");
+        ok = 0;
+    }
+    if (!display_bind_pending_lifetime_ok) {
+        note_fail("backend", "d3d12_display_bind_pending_lifetime_invalid");
+        ok = 0;
+    }
+    if (!display_bind_generation_revalidation_ok) {
+        note_fail("backend",
+                  "d3d12_display_bind_generation_revalidation_invalid");
         ok = 0;
     }
     if (!display_bind_success_shape_ok) {

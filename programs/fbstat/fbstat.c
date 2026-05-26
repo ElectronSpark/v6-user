@@ -364,6 +364,7 @@ int main(int argc, char *argv[])
     int provider_credit_gate_ok = 0;
     int native_completion_lifetime_ok = 0;
     int display_bind_request_metadata_ok = 0;
+    int display_bind_pending_lifetime_ok = 0;
     int stale_source_zero_credit_ok = 0;
     int generic_completion_not_native_ok = 0;
     int standard_alloc_not_display_bind_ok = 0;
@@ -434,6 +435,21 @@ int main(int argc, char *argv[])
          stats.dxg_display_bind_request_missing_metadata == 0 &&
          stats.dxg_display_bind_source_generation != 0 &&
          stats.dxg_display_bind_resource_generation != 0);
+    display_bind_pending_lifetime_ok =
+        stats.dxg_display_bind_pending_active == 0 &&
+        stats.dxg_display_bind_pending_created >=
+            stats.dxg_display_bind_pending_completed +
+            stats.dxg_display_bind_pending_failclosed &&
+        (stats.dxg_display_bind_pending_created == 0 ||
+         (stats.dxg_display_bind_pending_sequence != 0 &&
+          stats.dxg_display_bind_pending_peak != 0 &&
+          stats.dxg_display_bind_pending_last_source_generation != 0 &&
+          stats.dxg_display_bind_pending_last_resource_generation != 0)) &&
+        (stats.dxg_display_bind_transport_present != 0 ||
+         stats.dxg_display_bind_pending_completed == 0) &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        backend_opengl_submit == 0;
     display_bind_id_shape_ok =
         ((stats.dxg_display_bind_present_id == 0 &&
           stats.dxg_display_bind_completed_id == 0) ||
@@ -643,6 +659,25 @@ int main(int argc, char *argv[])
            "opengl_submit_credit=0 backend_opengl_submit=%u status=PASS\n",
            stats.display_last_complete,
            backend_opengl_submit);
+    printf("d3d12_display_bind_pending_lifetime_matrix "
+           "pending_sequence=%lu created=%lu active=%lu peak=%lu "
+           "completed=%lu failclosed=%lu cancelled=%lu "
+           "last_status=%lu last_block_reason=0x%lx "
+           "source_generation=%lu resource_generation=%lu "
+           "native_present_credit=0 opengl_submit_credit=%u status=%s\n",
+           stats.dxg_display_bind_pending_sequence,
+           stats.dxg_display_bind_pending_created,
+           stats.dxg_display_bind_pending_active,
+           stats.dxg_display_bind_pending_peak,
+           stats.dxg_display_bind_pending_completed,
+           stats.dxg_display_bind_pending_failclosed,
+           stats.dxg_display_bind_pending_cancelled,
+           stats.dxg_display_bind_pending_last_status,
+           stats.dxg_display_bind_pending_last_block_reason,
+           stats.dxg_display_bind_pending_last_source_generation,
+           stats.dxg_display_bind_pending_last_resource_generation,
+           backend_opengl_submit,
+           display_bind_pending_lifetime_ok ? "PASS" : "DIAGNOSTIC");
     printf("d3d12_display_bind_id_shape_matrix "
            "bind_present_id=%lu bind_completed_id=%lu "
            "bind_source_generation=%lu bind_resource_generation=%lu "
