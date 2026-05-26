@@ -11109,6 +11109,18 @@ static int probe_present_source_failclosed_contract(
           stats_after.dxg_display_bind_provider_submits >
               stats_before.dxg_display_bind_provider_submits &&
           stats_after.dxg_display_bind_provider_pin_revalidated == 1 &&
+          stats_after.dxg_display_bind_provider_publication_attempts >
+              stats_before.dxg_display_bind_provider_publication_attempts &&
+          stats_after.dxg_display_bind_provider_publish_before_send == 1 &&
+          stats_after.dxg_display_bind_provider_transport_pending_id != 0 &&
+          stats_after.dxg_display_bind_provider_command_id != 0 &&
+          stats_after.dxg_display_bind_provider_transaction_id != 0 &&
+          stats_after.dxg_display_bind_provider_channel != 0 &&
+          stats_after.dxg_display_bind_provider_completion_demux_registered == 1 &&
+          stats_after.dxg_display_bind_transport_source ==
+              FB_GPU_DXG_DISPLAY_BIND_SOURCE_NON_WSL_DXGKRNL_EXTENSION &&
+          stats_after.dxg_display_bind_host_saw_packet == 1 &&
+          stats_after.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
           stats_after.dxg_display_bind_provider_no_host_abi == 0 &&
           stats_after.dxg_display_bind_provider_no_sender == 0 &&
           stats_after.dxg_display_bind_provider_no_completion == 0));
@@ -12242,10 +12254,16 @@ out:
            "source_generation=%lu resource_generation=%lu "
            "scanout_success_delta=%lu completion_success_delta=%lu "
            "provider_submits_delta=%lu provider_pin_revalidated=%lu "
+           "publication_attempts_delta=%lu publish_before_send=%lu "
+           "transport_pending_id=%lu command_id=%lu transaction_id=%lu "
+           "channel=%lu completion_demux_registered=%lu "
+           "transport_source=%s host_saw_display_bind_packet=%lu "
+           "wsl_presenthistory_completion_credit=%lu "
            "provider_no_host_abi=%lu provider_no_sender=%lu "
            "provider_no_completion=%lu failclosed_allowed=1 "
            "success_requires_provider_clear=1 "
            "success_requires_display_completion=1 "
+           "success_requires_source_authority=1 "
            "native_present_credit=%lu backend_opengl_submit=%u "
            "status=%s\n",
            stats_after.dxg_display_bind_transport_present,
@@ -12263,6 +12281,18 @@ out:
            stats_after.dxg_display_bind_provider_submits -
                stats_before.dxg_display_bind_provider_submits,
            stats_after.dxg_display_bind_provider_pin_revalidated,
+           stats_after.dxg_display_bind_provider_publication_attempts -
+               stats_before.dxg_display_bind_provider_publication_attempts,
+           stats_after.dxg_display_bind_provider_publish_before_send,
+           stats_after.dxg_display_bind_provider_transport_pending_id,
+           stats_after.dxg_display_bind_provider_command_id,
+           stats_after.dxg_display_bind_provider_transaction_id,
+           stats_after.dxg_display_bind_provider_channel,
+           stats_after.dxg_display_bind_provider_completion_demux_registered,
+           display_bind_transport_source_name(
+               stats_after.dxg_display_bind_transport_source),
+           stats_after.dxg_display_bind_host_saw_packet,
+           stats_after.dxg_display_bind_wsl_presenthistory_completion_credit,
            stats_after.dxg_display_bind_provider_no_host_abi,
            stats_after.dxg_display_bind_provider_no_sender,
            stats_after.dxg_display_bind_provider_no_completion,
