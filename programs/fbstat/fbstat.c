@@ -1306,6 +1306,7 @@ int main(int argc, char *argv[])
            "wsl_display_bind_ioctl_absent=1 "
            "wslg_frame_path=absent freerdp_frame_path=absent "
            "rdp_frame_path=copy_or_dirty_frame "
+           "hvsock_display_bind_service=absent "
            "gpup_dxg_sender_contract=%lu "
            "gpup_dxg_completion_contract=%lu "
            "completion_demux_contract=%lu "
@@ -1343,6 +1344,7 @@ int main(int argc, char *argv[])
            "blt_cmd=%lu submit_hwqueue_cmd=52 "
            "propagate_presenthistory_cmd=%lu "
            "presenthistory_is_telemetry=1 vm_pkt_comp_reply_only=1 "
+           "hvsock_display_bind_service=absent "
            "resource_scanout_bind_sender=0 display_completion_demux=%lu "
            "synthvid_path=gpa_dirty_rect_only "
            "dda_nouveau_path=separate_pci_display "
@@ -2397,6 +2399,107 @@ int main(int argc, char *argv[])
                stats.nouveau_native_display_ready,
                stats.nouveau_dda_native_display_present,
                nouveau_linux_display_readiness_ok ?
+                   (stats.nouveau_pci_probe_accepts == 0 ?
+                        "PASS_FAILCLOSED" : "PASS") : "FAIL");
+        printf("nouveau_kms_acceptance_shape_matrix "
+               "linux_model=nouveau_display_create "
+               "kernel_gate=full_linux_shape accepts=%lu "
+               "display_create=%lu engine_object=%lu mode_config_ready=%lu "
+               "crtcs=%lu encoders=%lu primary_planes=%lu "
+               "outp_mask_seen=%lu conn_mask_seen=%lu head_mask_seen=%lu "
+               "nvif_heads=%lu heads=%lu connectors=%lu "
+               "nonvirtual_connectors=%lu hpd_event=%lu dp_irq_event=%lu "
+               "vblank_supported=%lu vblank_irq_supported=%lu "
+               "vblank_event=%lu vblank_source=%s "
+               "page_flip_ready=%lu flip_completions=%lu "
+               "page_flip_event_source=%s atomic_commit_tail=%lu "
+               "atomic_backend_missing=%lu linear_required=%lu "
+               "nonlinear_modifiers=%lu native_display_ready=%lu "
+               "dda_native_display_present=%lu native_present_credit=0 "
+               "opengl_submit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts,
+               stats.nouveau_display_create_successes,
+               stats.nouveau_display_engine_object_created,
+               stats.nouveau_display_mode_config_ready,
+               stats.nouveau_display_crtc_count,
+               stats.nouveau_display_encoder_count,
+               stats.nouveau_display_primary_plane_count,
+               stats.nouveau_display_outp_mask_seen,
+               stats.nouveau_display_conn_mask_seen,
+               stats.nouveau_display_head_mask_seen,
+               stats.nouveau_display_nvif_head_ctor_successes,
+               stats.nouveau_display_heads,
+               stats.nouveau_display_connectors,
+               stats.nouveau_display_nonvirtual_connectors,
+               stats.nouveau_display_hpd_event_registered,
+               stats.nouveau_display_dp_irq_event_registered,
+               stats.nouveau_display_vblank_supported,
+               stats.nouveau_display_vblank_irq_supported,
+               stats.nouveau_display_vblank_event_registered,
+               nouveau_vblank_source_name(stats.nouveau_display_vblank_source),
+               stats.nouveau_display_page_flip_completion_ready,
+               stats.nouveau_display_page_flip_completions,
+               nouveau_vblank_source_name(
+                   stats.nouveau_display_page_flip_event_source),
+               stats.nouveau_display_atomic_commit_tail_ready,
+               stats.nouveau_display_atomic_pageflip_backend_missing,
+               stats.nouveau_display_primary_plane_linear_required,
+               stats.nouveau_display_primary_plane_nonlinear_modifiers,
+               stats.nouveau_native_display_ready,
+               stats.nouveau_dda_native_display_present,
+               nouveau_linux_display_readiness_ok ?
+                   (stats.nouveau_pci_probe_accepts == 0 ?
+                        "PASS_FAILCLOSED" : "PASS") : "FAIL");
+        printf("nouveau_dda_display_positive_shape_matrix "
+               "linux_model=nouveau_display_create "
+               "dda_positive=%u display_create=%lu engine_object=%lu "
+               "mode_config_ready=%lu crtcs=%lu encoders=%lu "
+               "primary_planes=%lu outp_mask_seen=%lu conn_mask_seen=%lu "
+               "head_mask_seen=%lu nvif_heads=%lu heads=%lu "
+               "connectors=%lu nonvirtual_connectors=%lu hpd_event=%lu "
+               "dp_irq_event=%lu vblank_event=%lu vblank_source=%s "
+               "page_flip_ready=%lu flip_completions=%lu "
+               "page_flip_event_source=%s atomic_commit_tail=%lu "
+               "linear_required=%lu nonlinear_modifiers=%lu "
+               "kms_lane=%lu kms_present_nouveau_hw=%lu "
+               "page_flip_events_native_hw=%lu dda_native_display_credit=%lu "
+               "d3d12_native_present_credit=0 opengl_submit_credit=0 "
+               "webkit_credit=0 status=%s\n",
+               stats.nouveau_pci_probe_accepts != 0 &&
+                   nouveau_display_kms_ready &&
+                   stats.nouveau_dda_native_display_present != 0,
+               stats.nouveau_display_create_successes,
+               stats.nouveau_display_engine_object_created,
+               stats.nouveau_display_mode_config_ready,
+               stats.nouveau_display_crtc_count,
+               stats.nouveau_display_encoder_count,
+               stats.nouveau_display_primary_plane_count,
+               stats.nouveau_display_outp_mask_seen,
+               stats.nouveau_display_conn_mask_seen,
+               stats.nouveau_display_head_mask_seen,
+               stats.nouveau_display_nvif_head_ctor_successes,
+               stats.nouveau_display_heads,
+               stats.nouveau_display_connectors,
+               stats.nouveau_display_nonvirtual_connectors,
+               stats.nouveau_display_hpd_event_registered,
+               stats.nouveau_display_dp_irq_event_registered,
+               stats.nouveau_display_vblank_event_registered,
+               nouveau_vblank_source_name(stats.nouveau_display_vblank_source),
+               stats.nouveau_display_page_flip_completion_ready,
+               stats.nouveau_display_page_flip_completions,
+               nouveau_vblank_source_name(
+                   stats.nouveau_display_page_flip_event_source),
+               stats.nouveau_display_atomic_commit_tail_ready,
+               stats.nouveau_display_primary_plane_linear_required,
+               stats.nouveau_display_primary_plane_nonlinear_modifiers,
+               stats.kms_present_last_lane,
+               stats.kms_present_nouveau_hw,
+               stats.kms_page_flip_events_native_hw,
+               stats.nouveau_pci_native_present_credit,
+               nouveau_linux_display_readiness_ok &&
+                       backend_opengl_submit == 0 &&
+                       stats.dxg_display_bind_present_id == 0 &&
+                       stats.dxg_display_bind_completed_id == 0 ?
                    (stats.nouveau_pci_probe_accepts == 0 ?
                         "PASS_FAILCLOSED" : "PASS") : "FAIL");
         printf("kms_scanout_cpu_convert_separation_matrix "
