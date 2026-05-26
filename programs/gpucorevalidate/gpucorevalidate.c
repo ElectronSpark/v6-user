@@ -2740,11 +2740,17 @@ static int validate_present_source_matrix(void)
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "hmgr_index_unique_valid=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
-                         output, "parent_resource_ref_held=1");
+                         output, "device_object_ref_active=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
-                         output, "opened_child_ref_held=1");
+                         output, "resource_object_ref_active=1");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
-                         output, "syncobject_ref_held=");
+                         output, "allocation_object_ref_active=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "shared_parent_snapshot_valid=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "opened_child_snapshot_valid=1");
+    require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
+                         output, "syncobject_object_ref_active=");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
                          output, "owner_close_cancelled=0");
     require_output_token("d3d12_display_bind_provider_pending_publication_matrix",
@@ -3665,8 +3671,11 @@ static int validate_backend(void)
              stats.dxg_display_bind_provider_pending_owner_generation &&
          stats.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
          stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid != 0 &&
-         stats.dxg_display_bind_provider_pending_parent_resource_ref_held != 0 &&
-         stats.dxg_display_bind_provider_pending_opened_child_ref_held != 0 &&
+         stats.dxg_display_bind_provider_pending_device_object_ref_active != 0 &&
+         stats.dxg_display_bind_provider_pending_resource_object_ref_active != 0 &&
+         stats.dxg_display_bind_provider_pending_allocation_object_ref_active != 0 &&
+         stats.dxg_display_bind_provider_pending_shared_parent_snapshot_valid != 0 &&
+         stats.dxg_display_bind_provider_pending_opened_child_snapshot_valid != 0 &&
          stats.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
          stats.dxg_display_bind_provider_pending_source_generation ==
              stats.dxg_display_bind_source_generation &&
@@ -4562,8 +4571,10 @@ static int validate_backend(void)
            "pending_owner_generation=%lu pending_source_generation=%lu "
            "pending_resource_generation=%lu "
            "dxgprocess_generation=%lu process_adapter_generation=%lu "
-           "hmgr_index_unique_valid=%lu parent_resource_ref_held=%lu "
-           "opened_child_ref_held=%lu syncobject_ref_held=%lu "
+           "hmgr_index_unique_valid=%lu device_object_ref_active=%lu "
+           "resource_object_ref_active=%lu allocation_object_ref_active=%lu "
+           "shared_parent_snapshot_valid=%lu "
+           "opened_child_snapshot_valid=%lu syncobject_object_ref_active=%lu "
            "owner_close_cancelled=%lu "
            "owner_generation_required=1 source_generation_required=1 "
            "resource_generation_required=1 pending_generation_match=%s "
@@ -4591,9 +4602,12 @@ static int validate_backend(void)
            stats.dxg_display_bind_provider_pending_dxgprocess_generation,
            stats.dxg_display_bind_provider_pending_process_adapter_generation,
            stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid,
-           stats.dxg_display_bind_provider_pending_parent_resource_ref_held,
-           stats.dxg_display_bind_provider_pending_opened_child_ref_held,
-           stats.dxg_display_bind_provider_pending_syncobject_ref_held,
+           stats.dxg_display_bind_provider_pending_device_object_ref_active,
+           stats.dxg_display_bind_provider_pending_resource_object_ref_active,
+           stats.dxg_display_bind_provider_pending_allocation_object_ref_active,
+           stats.dxg_display_bind_provider_pending_shared_parent_snapshot_valid,
+           stats.dxg_display_bind_provider_pending_opened_child_snapshot_valid,
+           stats.dxg_display_bind_provider_pending_syncobject_object_ref_active,
            stats.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats.dxg_display_bind_provider_submits == 0 ?
                "NOT_SAMPLED" :
@@ -4604,8 +4618,11 @@ static int validate_backend(void)
                        stats.dxg_display_bind_provider_pending_owner_generation &&
                    stats.dxg_display_bind_provider_pending_process_adapter_generation != 0 &&
                    stats.dxg_display_bind_provider_pending_hmgr_index_unique_valid != 0 &&
-                   stats.dxg_display_bind_provider_pending_parent_resource_ref_held != 0 &&
-                   stats.dxg_display_bind_provider_pending_opened_child_ref_held != 0 &&
+                   stats.dxg_display_bind_provider_pending_device_object_ref_active != 0 &&
+                   stats.dxg_display_bind_provider_pending_resource_object_ref_active != 0 &&
+                   stats.dxg_display_bind_provider_pending_allocation_object_ref_active != 0 &&
+                   stats.dxg_display_bind_provider_pending_shared_parent_snapshot_valid != 0 &&
+                   stats.dxg_display_bind_provider_pending_opened_child_snapshot_valid != 0 &&
                    stats.dxg_display_bind_provider_pending_owner_close_cancelled == 0 &&
                    stats.dxg_display_bind_pending_last_owner_generation ==
                        stats.dxg_display_bind_provider_pending_owner_generation &&
