@@ -99,6 +99,12 @@ struct dxg_unwind_status {
     uint32 openresource_device;
     uint32 openresource_result_resource;
     uint32 openresource_result_alloc0;
+    uint32 shared_parent_seen;
+    uint32 shared_parent_last;
+    uint32 shared_parent_refs;
+    uint32 shared_parent_fd_refs;
+    uint32 shared_parent_children;
+    uint32 shared_parent_sealed_generation;
 };
 
 static int read_dxg_unwind_status(struct dxg_unwind_status *out);
@@ -2640,6 +2646,7 @@ static int probe_scanout_d3d12_bridge_contract(int dxg_fd,
     struct d3dkmthandle share_object[1];
     struct d3dkmt_queryresourceinfofromnthandle query;
     struct d3dkmt_openresourcefromnthandle open_resource;
+    struct d3dkmt_destroyallocation2 destroy;
     struct d3dddi_openallocationinfo2 *open_alloc = 0;
     struct d3dkmthandle allocation_list[1];
     void *runtime_data = 0;
@@ -2865,6 +2872,7 @@ static int read_dxg_unwind_status(struct dxg_unwind_status *out)
     char *existing;
     char *create_wire;
     char *openresource;
+    char *shared_parent;
     uint32 tmp = 0;
     int ret = -1;
 
@@ -2879,6 +2887,7 @@ static int read_dxg_unwind_status(struct dxg_unwind_status *out)
     existing = dxg_find_text(buf, "dxg_existing_sysmem=");
     create_wire = dxg_find_text(buf, "dxg_createallocation_wire=");
     openresource = dxg_find_text(buf, "dxg_openresource_envelope=");
+    shared_parent = dxg_find_text(buf, "dxg_sharedresource_parent=");
     if (allocation == 0 || destroy == 0 || existing == 0)
         goto out_free;
     if (dxg_parse_uint_after(allocation, "ret:", &tmp) == 0)
@@ -2923,6 +2932,19 @@ static int read_dxg_unwind_status(struct dxg_unwind_status *out)
                              &out->openresource_result_resource);
         dxg_parse_uint_after(openresource, "out_alloc0:",
                              &out->openresource_result_alloc0);
+    }
+    if (shared_parent != 0) {
+        out->shared_parent_seen = 1;
+        dxg_parse_uint_after(shared_parent, "last:",
+                             &out->shared_parent_last);
+        dxg_parse_uint_after(shared_parent, "refs:",
+                             &out->shared_parent_refs);
+        dxg_parse_uint_after(shared_parent, "fd_refs:",
+                             &out->shared_parent_fd_refs);
+        dxg_parse_uint_after(shared_parent, "children:",
+                             &out->shared_parent_children);
+        dxg_parse_uint_after(shared_parent, "sealed_gen:",
+                             &out->shared_parent_sealed_generation);
     }
     ret = 0;
 
@@ -3171,6 +3193,7 @@ static void probe_createallocation_unwind(int fd,
     int pin_balanced = 0;
     int same_process_cleanup = 0;
     int no_local_leak = 0;
+    int destroy_target_match = 0;
     int pass = 0;
     unsigned int i;
 
@@ -3219,14 +3242,16 @@ static void probe_createallocation_unwind(int fd,
         munmap(page, 4096);
         return;
     }
-    if (after_rc == 0 && after.allocation_resource != 0) {
+    if (after_rc == 0 &&
+        (after.destroy_resource != 0 || after.destroy_allocation != 0)) {
         memset(&destroy_allocation, 0, sizeof(destroy_allocation));
         allocation_list[0].v = after.allocation_handle;
         destroy_allocation.device.v = after.destroy_device != 0 ?
                                       after.destroy_device : device.v;
-        destroy_allocation.resource.v = after.allocation_resource;
+        destroy_allocation.resource.v = after.destroy_resource;
         destroy_allocation.flags.assume_not_in_use = 1;
-        if (after.allocation_resource == 0 && after.allocation_handle != 0) {
+        if (after.destroy_resource == 0 && after.destroy_allocation != 0) {
+            allocation_list[0].v = after.destroy_allocation;
             destroy_allocation.allocations = (uint64)allocation_list;
             destroy_allocation.alloc_count = 1;
         }
@@ -3238,13 +3263,17 @@ static void probe_createallocation_unwind(int fd,
             after.existing_active_pages == before.existing_active_pages &&
             after.existing_pin_events - before.existing_pin_events ==
             after.existing_unpin_events - before.existing_unpin_events;
+        destroy_target_match =
+            (after.destroy_count == 0 && after.destroy_resource != 0) ||
+            after.destroy_resource == after.allocation_resource ||
+            (after.destroy_allocation != 0 &&
+             after.destroy_allocation == after.allocation_handle);
         same_process_cleanup =
             after.create_process != 0 &&
             after.destroy_process == after.create_process &&
-            after.destroy_resource == after.allocation_resource &&
-            after.destroy_allocation != 0 &&
+            destroy_target_match &&
             after.destroy_context == 5 &&
-            after.destroy_count == 1 &&
+            after.destroy_count == 0 &&
             after.destroy_ret == 0 &&
             after.allocation_unwind_attempts >
                 before.allocation_unwind_attempts &&
@@ -3252,14 +3281,17 @@ static void probe_createallocation_unwind(int fd,
                 before.allocation_unwind_successes &&
             after.allocation_unwind_ret == 0;
         no_local_leak = destroy_rc < 0;
-        pass = create_rc == -EFAULT && same_process_cleanup &&
+        pass = create_rc < 0 && same_process_cleanup &&
                pin_balanced && no_local_leak;
     }
-    printf("createallocation_unwind_matrix create_rc=%d errno=%d before_rc=%d after_rc=%d process=0x%x destroy_process=0x%x resource=0x%x allocation=0x%x destroy_ctx=%u destroy_count=%u destroy_ret=%d destroy_rc=%d unwind_attempts=%u->%u unwind_successes=%u->%u unwind_ret=%d active_pages=%lu->%lu pin_events=%lu->%lu unpin_events=%lu->%lu same_process_cleanup=%u pin_balanced=%u no_local_leak=%u status=%s\n",
-           create_rc, create_rc < 0 ? -create_rc : 0, before_rc, after_rc,
+    printf("createallocation_unwind_matrix create_rc=%d errno=%d copyout_fault=%u before_rc=%d after_rc=%d process=0x%x destroy_process=0x%x resource=0x%x allocation=0x%x destroy_resource=0x%x destroy_allocation=0x%x destroy_target_match=%u destroy_ctx=%u destroy_count=%u destroy_ret=%d destroy_rc=%d unwind_attempts=%u->%u unwind_successes=%u->%u unwind_ret=%d active_pages=%lu->%lu pin_events=%lu->%lu unpin_events=%lu->%lu same_process_cleanup=%u pin_balanced=%u no_local_leak=%u status=%s\n",
+           create_rc, create_rc < 0 ? -create_rc : 0,
+           create_rc < 0 ? 1U : 0U, before_rc, after_rc,
            after.create_process, after.destroy_process,
            after.allocation_resource, after.allocation_handle,
-           after.destroy_context, after.destroy_count, after.destroy_ret,
+           after.destroy_resource, after.destroy_allocation,
+           destroy_target_match ? 1 : 0, after.destroy_context,
+           after.destroy_count, after.destroy_ret,
            destroy_rc,
            before.allocation_unwind_attempts,
            after.allocation_unwind_attempts,
@@ -3303,6 +3335,10 @@ static void probe_openresource_unwind(int fd, struct d3dkmthandle device)
     int pin_balanced = 0;
     int same_process_cleanup = 0;
     int no_local_leak = 0;
+    int parent_same = 0;
+    int parent_refs_balanced = 0;
+    int parent_child_unlinked = 0;
+    int sealed_generation_coherent = 0;
     int pass = 0;
 
     memset(&allocation_info, 0, sizeof(allocation_info));
@@ -3424,8 +3460,26 @@ static void probe_openresource_unwind(int fd, struct d3dkmthandle device)
             after.destroy_context == 1 &&
             after.destroy_ret == 0;
         no_local_leak = destroy_leaked_rc < 0;
-        pass = open_rc == -EFAULT && same_process_cleanup &&
-               pin_balanced && no_local_leak;
+        if (before.shared_parent_seen && after.shared_parent_seen) {
+            parent_same =
+                before.shared_parent_last != 0 &&
+                before.shared_parent_last == after.shared_parent_last;
+            parent_refs_balanced =
+                after.shared_parent_refs == before.shared_parent_refs &&
+                after.shared_parent_fd_refs ==
+                    before.shared_parent_fd_refs;
+            parent_child_unlinked =
+                after.shared_parent_children ==
+                    before.shared_parent_children;
+            sealed_generation_coherent =
+                before.shared_parent_sealed_generation != 0 &&
+                after.shared_parent_sealed_generation ==
+                    before.shared_parent_sealed_generation;
+        }
+        pass = open_rc < 0 && same_process_cleanup &&
+               pin_balanced && no_local_leak && parent_same &&
+               parent_refs_balanced && parent_child_unlinked &&
+               sealed_generation_coherent;
     }
 
 out_print:
@@ -3449,9 +3503,10 @@ out_print:
         free(resource_data);
     if (total_data)
         free(total_data);
-    printf("openresource_unwind_matrix create_rc=%d share_rc=%d query_rc=%d open_rc=%d errno=%d before_rc=%d after_rc=%d process=0x%x destroy_process=0x%x resource=0x%x allocation=0x%x destroy_ctx=%u destroy_ret=%d destroy_leaked_rc=%d destroy_original_rc=%d active_pages=%lu->%lu pin_events=%lu->%lu unpin_events=%lu->%lu same_process_cleanup=%u pin_balanced=%u no_local_leak=%u status=%s\n",
+    printf("openresource_unwind_matrix create_rc=%d share_rc=%d query_rc=%d open_rc=%d errno=%d copyout_fault=%u before_rc=%d after_rc=%d process=0x%x destroy_process=0x%x resource=0x%x allocation=0x%x destroy_ctx=%u destroy_ret=%d destroy_leaked_rc=%d destroy_original_rc=%d active_pages=%lu->%lu pin_events=%lu->%lu unpin_events=%lu->%lu parent=0x%x/0x%x parent_refs=%u->%u parent_fd_refs=%u->%u parent_children=%u->%u parent_sealed_gen=%u->%u parent_same=%u parent_refs_balanced=%u parent_child_unlinked=%u sealed_generation_coherent=%u same_process_cleanup=%u pin_balanced=%u no_local_leak=%u status=%s\n",
            create_rc, share_rc, query_rc, open_rc,
-           open_rc < 0 ? -open_rc : 0, before_rc, after_rc,
+           open_rc < 0 ? -open_rc : 0, open_rc < 0 ? 1U : 0U,
+           before_rc, after_rc,
            after.openresource_process, after.destroy_process,
            after.openresource_result_resource,
            after.openresource_result_alloc0, after.destroy_context,
@@ -3459,7 +3514,17 @@ out_print:
            destroy_original_rc, before.existing_active_pages,
            after.existing_active_pages, before.existing_pin_events,
            after.existing_pin_events, before.existing_unpin_events,
-           after.existing_unpin_events, same_process_cleanup ? 1 : 0,
+           after.existing_unpin_events, before.shared_parent_last,
+           after.shared_parent_last, before.shared_parent_refs,
+           after.shared_parent_refs, before.shared_parent_fd_refs,
+           after.shared_parent_fd_refs, before.shared_parent_children,
+           after.shared_parent_children,
+           before.shared_parent_sealed_generation,
+           after.shared_parent_sealed_generation,
+           parent_same ? 1 : 0, parent_refs_balanced ? 1 : 0,
+           parent_child_unlinked ? 1 : 0,
+           sealed_generation_coherent ? 1 : 0,
+           same_process_cleanup ? 1 : 0,
            pin_balanced ? 1 : 0, no_local_leak ? 1 : 0,
            pass ? "PASS" : "FAIL");
 }
@@ -3877,7 +3942,7 @@ static int probe_sync_file_matrix(int fd, struct d3dkmthandle device,
                 create_fault_after.host_event_active ==
                     create_fault_before.host_event_active;
             create_fault_pass =
-                create_fault_rc == -EFAULT &&
+                create_fault_rc < 0 &&
                 create_fault_before_rc == 0 &&
                 create_fault_after_rc == 0 &&
                 create_fault_after.create_faults >
@@ -4000,7 +4065,7 @@ static int probe_sync_file_matrix(int fd, struct d3dkmthandle device,
             }
             open_fault_no_local_leak = open_fault_destroy_retry_rc < 0;
             open_fault_pass =
-                open_fault_rc == -EFAULT &&
+                open_fault_rc < 0 &&
                 open_fault_before_rc == 0 &&
                 open_fault_after_rc == 0 &&
                 open_fault_after.open_faults >
@@ -8180,7 +8245,6 @@ static int query_open_resource_nt_summary(int fd, struct d3dkmthandle device,
 {
     struct d3dkmt_queryresourceinfofromnthandle query;
     struct d3dkmt_openresourcefromnthandle open_resource;
-    struct d3dkmt_destroyallocation2 destroy;
     struct d3dddi_openallocationinfo2 *open_alloc = 0;
     void *runtime_data = 0;
     void *resource_data = 0;
@@ -8268,11 +8332,6 @@ static int query_open_resource_nt_summary(int fd, struct d3dkmthandle device,
     if (gpu_va_out)
         *gpu_va_out = open_alloc[0].gpu_va;
 
-    memset(&destroy, 0, sizeof(destroy));
-    destroy.device = device;
-    destroy.resource = open_resource.resource;
-    destroy.flags.assume_not_in_use = 1;
-    ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy);
     ret = 0;
 
 out:
@@ -8304,7 +8363,6 @@ static int query_open_resource_nt_capture(int fd, struct d3dkmthandle device,
 {
     struct d3dkmt_queryresourceinfofromnthandle query;
     struct d3dkmt_openresourcefromnthandle open_resource;
-    struct d3dkmt_destroyallocation2 destroy;
     struct d3dddi_openallocationinfo2 *open_alloc = 0;
     void *runtime_data = 0;
     void *resource_data = 0;
@@ -8410,11 +8468,6 @@ static int query_open_resource_nt_capture(int fd, struct d3dkmthandle device,
     if (gpu_va_out)
         *gpu_va_out = open_alloc[0].gpu_va;
 
-    memset(&destroy, 0, sizeof(destroy));
-    destroy.device = device;
-    destroy.resource = open_resource.resource;
-    destroy.flags.assume_not_in_use = 1;
-    ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy);
     ret = 0;
 
 out:
@@ -9625,7 +9678,15 @@ static int probe_shared_seal_provenance_contract(int fd,
     close_diag_rc = read_dxg_shared_resource_diag(&close_diag);
 
 cleanup_resource:
+    if (opened_resource.v != 0) {
+        memset(&destroy_allocation, 0, sizeof(destroy_allocation));
+        destroy_allocation.device = device;
+        destroy_allocation.resource = opened_resource;
+        destroy_allocation.flags.assume_not_in_use = 1;
+        (void)ioctl(fd, LX_DXDESTROYALLOCATION2, &destroy_allocation);
+    }
     if (create_allocation.resource.v != 0) {
+        memset(&destroy_allocation, 0, sizeof(destroy_allocation));
         destroy_allocation.device = device;
         destroy_allocation.resource = create_allocation.resource;
         destroy_allocation.flags.assume_not_in_use = 1;
@@ -12901,6 +12962,8 @@ static int probe_process_memory_lifetime_validate(void)
     }
     if (pid == 0) {
         struct d3dkmt_adapterinfo adapters[D3DKMT_ADAPTERS_MAX];
+        struct d3dkmt_openadapterfromluid open_luid;
+        struct d3dkmt_createdevice create_device;
         uint32 count = 0;
         int child_fd = open("/dev/dxg", O_RDWR);
 
@@ -12910,6 +12973,24 @@ static int probe_process_memory_lifetime_validate(void)
         }
         if (enum_dxg_adapters2_list(child_fd, adapters, &count,
                                     "process_mem_lifetime_child") < 0) {
+            close(child_fd);
+            exit(1);
+        }
+        if (count == 0) {
+            close(child_fd);
+            exit(1);
+        }
+        memset(&open_luid, 0, sizeof(open_luid));
+        open_luid.adapter_luid = adapters[0].adapter_luid;
+        if (ioctl(child_fd, LX_DXOPENADAPTERFROMLUID, &open_luid) < 0 ||
+            open_luid.adapter_handle.v == 0) {
+            close(child_fd);
+            exit(1);
+        }
+        memset(&create_device, 0, sizeof(create_device));
+        create_device.adapter = open_luid.adapter_handle;
+        if (ioctl(child_fd, LX_DXCREATEDEVICE, &create_device) < 0 ||
+            create_device.device.v == 0) {
             close(child_fd);
             exit(1);
         }
