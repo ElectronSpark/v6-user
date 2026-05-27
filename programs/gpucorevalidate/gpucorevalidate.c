@@ -3941,6 +3941,7 @@ static int validate_backend(void)
     int wsl_uapi_negative_ok;
     int wsl_adapter_display_caps_negative_ok;
     int wsl_submit_present_fields_not_bind_ok;
+    int wsl_submit_ntstatus_not_completion_ok;
     int wsl_stdalloc_and_alloc_flags_not_bind_ok;
     int wsl_trace_display_bind_negative_ok;
     int public_present_api_not_guest_bind_ok;
@@ -4592,6 +4593,13 @@ static int validate_backend(void)
             FB_GPU_DXG_DISPLAY_BIND_SOURCE_NONE &&
         stats.dxg_display_bind_wsl_presenthistory_completion_credit == 0 &&
         backend_opengl_submit == 0;
+    wsl_submit_ntstatus_not_completion_ok =
+        wsl_submit_present_fields_not_bind_ok &&
+        stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        backend_opengl_submit == 0;
     wsl_stdalloc_and_alloc_flags_not_bind_ok =
         standard_alloc_not_display_bind_ok &&
         stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
@@ -4765,6 +4773,7 @@ static int validate_backend(void)
         wsl_uapi_negative_ok &&
         wsl_adapter_display_caps_negative_ok &&
         wsl_submit_present_fields_not_bind_ok &&
+        wsl_submit_ntstatus_not_completion_ok &&
         wsl_stdalloc_and_alloc_flags_not_bind_ok &&
         wsl_trace_display_bind_negative_ok &&
         public_present_api_not_guest_bind_ok &&
@@ -4999,6 +5008,22 @@ static int validate_backend(void)
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            wsl_submit_present_fields_not_bind_ok ? "PASS" : "FAIL");
+    printf("gpu_core_c_validator wsl_submit_ntstatus_not_completion_matrix "
+           "submit_hwqueue_cmd=52 vm_pkt_comp_is_d3dkmt_return=1 "
+           "submit_ntstatus_is_display_completion=0 "
+           "submit_success_is_display_bind=0 sender_contracts=%lu "
+           "completion_contracts=%lu host_saw_display_bind_packet=%lu "
+           "completion_demux_registered=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_host_saw_packet,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           wsl_submit_ntstatus_not_completion_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator "
            "wsl_stdalloc_and_alloc_flags_not_bind_matrix "
            "stdalloc_private_data_sender_present=%lu "
@@ -7041,6 +7066,10 @@ static int validate_backend(void)
     }
     if (!wsl_submit_present_fields_not_bind_ok) {
         note_fail("backend", "wsl_submit_present_fields_used_as_bind");
+        ok = 0;
+    }
+    if (!wsl_submit_ntstatus_not_completion_ok) {
+        note_fail("backend", "wsl_submit_ntstatus_used_as_completion");
         ok = 0;
     }
     if (!wsl_stdalloc_and_alloc_flags_not_bind_ok) {

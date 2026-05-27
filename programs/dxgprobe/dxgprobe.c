@@ -15650,7 +15650,10 @@ static void wsl_trace_replay_packet_matrix(const char *stage, uint32 cmd,
 static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
                                              uint32 *seen, uint32 *passed)
 {
+    struct fb_gpu_stats stats;
     char *status;
+    int fb_fd;
+    uint32 fb_stats_ok = 0;
     uint32 make_len = 0;
     uint32 make_ret = 0;
     uint32 make_host_ret = 0;
@@ -15674,12 +15677,22 @@ static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
     uint32 submit_cmd_len = 0;
     uint32 submit_priv = 0;
     uint32 submit_len = 0;
+    uint32 submit_ret = 0xffffffffU;
+    uint32 submit_status = 0xffffffffU;
     uint32 submit_head_len = 0;
     unsigned char submit_head[8];
     uint32 head_len = 0;
     uint32 ok;
+    uint32 ntstatus_not_completion_ok;
 
+    memset(&stats, 0, sizeof(stats));
     memset(submit_head, 0, sizeof(submit_head));
+    fb_fd = open("/dev/fb0", O_RDONLY);
+    if (fb_fd >= 0) {
+        if (ioctl(fb_fd, FB_GPU_GET_STATS, &stats) == 0)
+            fb_stats_ok = 1;
+        close(fb_fd);
+    }
     status = read_dxg_status_buffer();
     if (status != 0) {
         char *residency = dxg_find_text(status, "dxg_residency_last=");
@@ -15716,6 +15729,8 @@ static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
                                  &hwqueue_create_ret);
             dxg_parse_uint_after(hwqueue, "priv:", &hwqueue_priv);
             dxg_parse_uint_after(hwqueue, "queue:", &hwqueue_handle);
+            dxg_parse_uint_after(hwqueue, "submit_ret:", &submit_ret);
+            dxg_parse_uint_after(hwqueue, "submit_status:", &submit_status);
         }
         if (hwqueue_priv_line != 0) {
             dxg_parse_uint_after(hwqueue_priv_line, "submit_queue:",
@@ -15763,14 +15778,49 @@ static void wsl_trace_replay_host_saw_matrix(uint32 expected_submit_priv,
         (*seen)++;
     if (passed != 0 && ok)
         (*passed)++;
-    printf("wsl_trace_replay_host_saw_matrix make_len:%u make_ret:%d make_host_ret:%d make_user_ret:%d make_device:0x%x make_count:%u make_flags:0x%x make_sorted:%u make_in:%x,%x make_wire:%x,%x context_len:%u context_ret:%d context:0x%x hwqueue_len:%u hwqueue_ret:%d hwqueue_priv:%u hwqueue:0x%x submit_queue:0x%x submit_cmd_len:%u submit_priv:%u submit_len:%u submit_head_len:%u host_saw=cat_/dev/dxg_after_replay status=%s\n",
+    ntstatus_not_completion_ok =
+        ok &&
+        submit_ret == 0 &&
+        submit_status == 0 &&
+        fb_stats_ok != 0 &&
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0;
+    printf("wsl_trace_replay_host_saw_matrix make_len:%u make_ret:%d make_host_ret:%d make_user_ret:%d make_device:0x%x make_count:%u make_flags:0x%x make_sorted:%u make_in:%x,%x make_wire:%x,%x context_len:%u context_ret:%d context:0x%x hwqueue_len:%u hwqueue_ret:%d hwqueue_priv:%u hwqueue:0x%x submit_queue:0x%x submit_cmd_len:%u submit_priv:%u submit_len:%u submit_ret:%d submit_status:0x%x submit_head_len:%u host_saw=cat_/dev/dxg_after_replay status=%s\n",
            make_len, (int)make_ret, (int)make_host_ret,
            (int)make_user_ret, make_device, make_count, make_flags,
            make_sorted, make_in0, make_in1, make_wire0, make_wire1,
            context_len, (int)context_ret, context_handle,
            hwqueue_create_len, (int)hwqueue_create_ret, hwqueue_priv,
            hwqueue_handle, submit_queue, submit_cmd_len, submit_priv,
-           submit_len, submit_head_len, ok ? "PASS" : "FAIL");
+           submit_len, (int)submit_ret, submit_status, submit_head_len,
+           ok ? "PASS" : "FAIL");
+    printf("wsl_submit_ntstatus_not_completion_matrix "
+           "submit_hwqueue_cmd=52 submit_rc=%d submit_ntstatus=0x%x "
+           "submit_success=%u submit_len=%u submit_queue=0x%x "
+           "submit_fence=1 submit_cmd_len=%u submit_priv=%u "
+           "written_primaries=1 vm_pkt_comp_is_d3dkmt_return=%u "
+           "submit_ntstatus_is_display_completion=0 "
+           "submit_success_is_display_bind=0 sender_contracts=%lu "
+           "completion_contracts=%lu host_saw_display_bind_packet=%lu "
+           "completion_demux_registered=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           (int)submit_ret, submit_status, submit_ret == 0 ? 1U : 0U,
+           submit_len, submit_queue, submit_cmd_len, submit_priv,
+           submit_len >= sizeof(uint32) ? 1U : 0U,
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_host_saw_packet,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           ntstatus_not_completion_ok ? "PASS" : "FAIL");
     if (status != 0)
         free(status);
 }

@@ -418,6 +418,7 @@ int main(int argc, char *argv[])
     int dda_nouveau_separate_display_not_bind_ok = 0;
     int foreign_prime_import_gap_ok = 0;
     int public_present_api_not_guest_bind_ok = 0;
+    int wsl_submit_ntstatus_not_completion_ok = 0;
     int d3d12_display_bind_host_abi_discovery_ok = 0;
     int d3d12_negative_abi_manifest_ok = 0;
     int d3d12_display_bind_authority_chain_ok = 0;
@@ -864,8 +865,19 @@ int main(int argc, char *argv[])
         stats.dxg_present_dda_nouveau_scanout_bind_present == 0 &&
         stats.nouveau_pci_native_present_credit == 0 &&
         backend_opengl_submit == 0;
+    wsl_submit_ntstatus_not_completion_ok =
+        stats.dxg_scanout_bind_candidate_sender_contracts == 0 &&
+        stats.dxg_scanout_bind_candidate_completion_contracts == 0 &&
+        stats.dxg_display_bind_host_saw_packet == 0 &&
+        stats.dxg_display_bind_provider_completion_demux_registered == 0 &&
+        stats.dxg_display_bind_provider_transport_pending_id == 0 &&
+        stats.dxg_display_bind_transport_present == 0 &&
+        stats.dxg_display_bind_present_id == 0 &&
+        stats.dxg_display_bind_completed_id == 0 &&
+        backend_opengl_submit == 0;
     d3d12_display_bind_host_abi_discovery_ok =
         public_present_api_not_guest_bind_ok &&
+        wsl_submit_ntstatus_not_completion_ok &&
         dda_nouveau_separate_display_not_bind_ok &&
         stats.dxg_scanout_bind_candidate_linux_ioctl_contracts == 0 &&
         stats.dxg_scanout_bind_candidate_resource_bind_contracts == 0 &&
@@ -1697,6 +1709,22 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_present_id,
            stats.dxg_display_bind_completed_id,
            d3d12_display_bind_host_abi_discovery_ok ? "PASS" : "FAIL");
+    printf("wsl_submit_ntstatus_not_completion_matrix "
+           "submit_hwqueue_cmd=52 vm_pkt_comp_is_d3dkmt_return=1 "
+           "submit_ntstatus_is_display_completion=0 "
+           "submit_success_is_display_bind=0 sender_contracts=%lu "
+           "completion_contracts=%lu host_saw_display_bind_packet=%lu "
+           "completion_demux_registered=%lu transport_present=%lu "
+           "present_id=%lu completed=%lu native_present_credit=0 "
+           "opengl_submit_credit=0 status=%s\n",
+           stats.dxg_scanout_bind_candidate_sender_contracts,
+           stats.dxg_scanout_bind_candidate_completion_contracts,
+           stats.dxg_display_bind_host_saw_packet,
+           stats.dxg_display_bind_provider_completion_demux_registered,
+           stats.dxg_display_bind_transport_present,
+           stats.dxg_display_bind_present_id,
+           stats.dxg_display_bind_completed_id,
+           wsl_submit_ntstatus_not_completion_ok ? "PASS" : "FAIL");
     printf("d3d12_negative_abi_manifest_matrix "
            "wsl_uapi_header=d3dkmthk.h wsl_uapi_namespace_checked=1 "
            "wsl_last_ioctl_nr=0x49 wsl_display_bind_ioctl=0 "
