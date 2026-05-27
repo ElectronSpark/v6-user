@@ -1402,7 +1402,7 @@ int main(int argc, char *argv[])
     printf("d3d12_display_bind_provider_packet_lifetime_matrix "
            "provider_submits=%lu publication_attempts=%lu "
            "packet_listed=0 request_id=0 transport_pending_id=%lu "
-           "command_id=%lu transaction_id=%lu channel=%s "
+           "command_id=%lu transaction_id=%lu channel=%lu "
            "packet_completed=0 wait_cancelled=0 "
            "packet_removed_on_cancel=0 completion_demux_registered=%lu "
            "resolved_or_cancelled=%lu refs_released=%lu "
@@ -1416,7 +1416,7 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_provider_transport_pending_id,
            stats.dxg_display_bind_provider_command_id,
            stats.dxg_display_bind_provider_transaction_id,
-           stats.dxg_display_bind_provider_channel == 0 ? "none" : "other",
+           stats.dxg_display_bind_provider_channel,
            stats.dxg_display_bind_provider_completion_demux_registered,
            stats.dxg_display_bind_provider_resolved_or_cancelled,
            stats.dxg_display_bind_provider_refs_released,
@@ -1571,8 +1571,8 @@ int main(int argc, char *argv[])
            "transport_pending_id=%lu pending_active=%lu "
            "owner_close_cancel_required_after_send=1 "
            "owner_close_cancelled=%lu owner_close_cancel_deferred=1 "
-           "late_completion_reject_required=1 "
-           "late_completion_after_release=%lu late_completion_rejected=%u "
+           "late_completion_reject_required=1 late_completion_reject_gate=armed "
+           "late_completion_after_release=%lu late_completion_rejected=not_sampled "
            "stale_source_rejects=%lu stale_generation_rejects=%lu "
            "stale_after_release_rejects=%lu stale_completion_rejects=%lu "
            "after_close_nonzero_id_rejects=%lu host_saw_display_bind_packet=%lu "
@@ -1584,7 +1584,6 @@ int main(int argc, char *argv[])
            stats.dxg_display_bind_pending_active,
            stats.dxg_display_bind_provider_pending_owner_close_cancelled,
            stats.dxg_display_bind_late_completion_after_release,
-           stale_async_completion_contract_ok ? 1 : 0,
            stats.dxg_display_bind_stale_source_rejects,
            stats.dxg_display_bind_stale_generation_rejects,
            stats.dxg_display_bind_stale_after_release_rejects,
