@@ -776,6 +776,15 @@ static int validate_fbstat_aggregate_matrix(void)
                               "real_sender=0");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
+                              "sender_state=absent");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "async_completion_path=absent");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "stale_async_scope=no_sender_failclosed");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
                               "completion_demux_registered=0");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
@@ -785,16 +794,37 @@ static int validate_fbstat_aggregate_matrix(void)
                               "owner_close_cancel_required_after_send=1");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
+                              "owner_close_cancel_required_after_real_send=1");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "owner_close_cancel_after_send_tested=0");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
                               "owner_close_cancel_deferred=1");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "owner_close_cancel_deferred_until_sender=1");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
                               "late_completion_reject_required=1");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
+                              "late_completion_reject_required_after_real_send=1");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
                               "late_completion_reject_gate=armed");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
+                              "late_completion_reject_tested=0");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "late_completion_reject_deferred_until_sender=1");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
                               "late_completion_rejected=not_sampled");
+    require_output_line_token("fbstat_display_bind_stale_async", output,
+                              stale_async_anchor,
+                              "late_completion_reject_observed=0");
     require_output_line_token("fbstat_display_bind_stale_async", output,
                               stale_async_anchor,
                               "host_saw_display_bind_packet=0");
@@ -5858,12 +5888,21 @@ static int validate_backend(void)
            stale_source_zero_credit_ok ? "PASS" : "FAIL");
     printf("gpu_core_c_validator "
            "d3d12_display_bind_stale_async_completion_contract_matrix "
-           "real_sender=0 completion_demux_registered=%lu "
+           "real_sender=0 sender_state=absent async_completion_path=absent "
+           "stale_async_scope=no_sender_failclosed "
+           "completion_demux_registered=%lu "
            "transport_pending_id=%lu pending_active=%lu "
            "owner_close_cancel_required_after_send=1 "
-           "owner_close_cancelled=%lu owner_close_cancel_deferred=1 "
-           "late_completion_reject_required=1 late_completion_reject_gate=armed "
-           "late_completion_after_release=%lu late_completion_rejected=not_sampled "
+           "owner_close_cancel_required_after_real_send=1 "
+           "owner_close_cancelled=%lu owner_close_cancel_after_send_tested=0 "
+           "owner_close_cancel_deferred=1 "
+           "owner_close_cancel_deferred_until_sender=1 "
+           "late_completion_reject_required=1 "
+           "late_completion_reject_required_after_real_send=1 "
+           "late_completion_reject_gate=armed late_completion_reject_tested=0 "
+           "late_completion_reject_deferred_until_sender=1 "
+           "late_completion_after_release=%lu "
+           "late_completion_rejected=not_sampled late_completion_reject_observed=0 "
            "stale_source_rejects=%lu stale_generation_rejects=%lu "
            "stale_after_release_rejects=%lu stale_completion_rejects=%lu "
            "after_close_nonzero_id_rejects=%lu host_saw_display_bind_packet=%lu "
