@@ -1020,17 +1020,20 @@ static uint32 probe_backend_opengl_submit_flag(void)
     struct fb_gpu_backend_info backend;
     int fb_fd;
     uint32 enabled = 0;
+    uint32 gpu_compute = 0;
 
     fb_fd = open("/dev/gpu0", O_RDONLY);
     if (fb_fd < 0)
         fb_fd = open("/dev/fb0", O_RDONLY);
     memset(&backend, 0, sizeof(backend));
-    if (fb_fd >= 0 && ioctl(fb_fd, FB_GPU_BACKEND_QUERY, &backend) == 0)
+    if (fb_fd >= 0 && ioctl(fb_fd, FB_GPU_BACKEND_QUERY, &backend) == 0) {
         enabled = (backend.flags & FB_GPU_BACKEND_F_OPENGL_SUBMIT) != 0;
+        gpu_compute = (backend.flags & FB_GPU_BACKEND_F_GPU_COMPUTE) != 0;
+    }
     if (fb_fd >= 0)
         close(fb_fd);
-    printf("qai_admission_backend backend=%u flags=0x%x backend_opengl_submit=%u name=%s\n",
-           backend.backend, backend.flags, enabled, backend.name);
+    printf("qai_admission_backend backend=%u flags=0x%x backend_opengl_submit=%u backend_gpu_compute=%u name=%s\n",
+           backend.backend, backend.flags, enabled, gpu_compute, backend.name);
     return enabled;
 }
 

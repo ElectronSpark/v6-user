@@ -404,9 +404,72 @@ static int env_unset(const char *name) {
     return -1;
 }
 
-static void env_enable_gui_session(void) {
-    int render_fd;
+/*
+ * Detect the available GPU transport and export the Mesa driver-selection
+ * environment so that *every* program launched from this shell renders on the
+ * real GPU without any per-launch configuration.  This is deliberately limited
+ * to the rendering-driver + loader-path variables (no Wayland/EGL platform
+ * vars), so it is safe to apply to plain terminal/serial shells as well as the
+ * GUI session.  env_set() mirrors into the standard environ, so exec'd children
+ * inherit these automatically.
+ *
+ *   - Hyper-V/WSL /dev/dxg present -> GALLIUM_DRIVER=d3d12 pinned to the
+ *       discrete NVIDIA adapter (libdxcore + libd3d12 over /dev/dxg, the same
+ *       path d3d12probe proved).  The WSL GPU-PV user-mode runtime lives in
+ *       /usr/lib/wsl/lib, so it is added to the loader search path.  This is
+ *       checked FIRST: on a GPU-P guest the /dev/dri/renderD128 node also
+ *       exists but is only a software dumb-buffer node (no virgl), so it must
+ *       NOT shadow the real d3d12 GPU path.
+ *   - virtio render node present  -> GALLIUM_DRIVER=virgl (host GL via virgl)
+ *   - neither                     -> software rendering.
+ *
+ * Presentation is still a CPU framebuffer blit; only *rendering* is GPU-backed.
+ */
+static void env_enable_gpu_defaults(void) {
+    int dxg_fd = open("/dev/dxg", O_RDONLY);
 
+    if (dxg_fd >= 0) {
+        close(dxg_fd);
+        env_set("LIBGL_ALWAYS_SOFTWARE", "0");
+        env_set("GALLIUM_DRIVER", "d3d12");
+        env_set("MESA_D3D12_DEFAULT_ADAPTER_NAME", "NVIDIA");
+        env_set("LIBGL_DRIVERS_PATH", "/lib/dri");
+
+        /*
+         * The host D3D12 runtime (libd3d12*.so) and the NVIDIA UMD live in
+         * /usr/lib/wsl/lib; make sure the dynamic loader finds them without
+         * the caller exporting LD_LIBRARY_PATH by hand.
+         */
+        const char *cur = env_get("LD_LIBRARY_PATH");
+        if (cur && cur[0]) {
+            if (strstr(cur, "/usr/lib/wsl/lib") == 0) {
+                char joined[MAX_ENV_VALUE];
+                snprintf(joined, sizeof(joined), "/usr/lib/wsl/lib:%s", cur);
+                env_set("LD_LIBRARY_PATH", joined);
+            }
+        } else {
+            env_set("LD_LIBRARY_PATH",
+                    "/usr/lib/wsl/lib:/lib:/usr/lib:"
+                    "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu");
+        }
+        return;
+    }
+
+    int render_fd = open("/dev/dri/renderD128", O_RDONLY);
+    if (render_fd >= 0) {
+        close(render_fd);
+        env_set("LIBGL_ALWAYS_SOFTWARE", "0");
+        env_set("GALLIUM_DRIVER", "virgl");
+        env_set("LIBGL_DRIVERS_PATH", "/lib/dri");
+        return;
+    }
+
+    env_set("LIBGL_ALWAYS_SOFTWARE", "1");
+    env_unset("GALLIUM_DRIVER");
+    env_unset("MESA_D3D12_DEFAULT_ADAPTER_NAME");
+}
+
+static void env_enable_gui_session(void) {
     env_set("HOME", "/root");
     env_set("PATH", "/bin:/usr/bin");
     env_set("TERM", "dumb");
@@ -416,15 +479,13 @@ static void env_enable_gui_session(void) {
     env_set("WAYLAND_DISPLAY", "wayland-0");
     env_set("GDK_BACKEND", "wayland");
     env_set("GDK_GL", "gles");
-    render_fd = open("/dev/dri/renderD128", O_RDONLY);
-    if (render_fd >= 0) {
-        close(render_fd);
-        env_set("LIBGL_ALWAYS_SOFTWARE", "0");
-        env_set("GALLIUM_DRIVER", "virgl");
-    } else {
-        env_set("LIBGL_ALWAYS_SOFTWARE", "1");
-        env_unset("GALLIUM_DRIVER");
-    }
+    /*
+     * Hyper-V GPU-P / WSL guest: no virtio render node, but /dev/dxg exposes
+     * the D3DKMT transport to the host GPU.  Mesa's d3d12 Gallium driver
+     * translates OpenGL ES to Direct3D 12 and runs it on the real adapter.
+     * Shared with plain terminal shells via env_enable_gpu_defaults().
+     */
+    env_enable_gpu_defaults();
     env_set("EGL_PLATFORM", "wayland");
     env_set("XCURSOR_PATH", "/share/icons");
     env_set("XCURSOR_THEME", "Adwaita");
@@ -2284,6 +2345,16 @@ int main(int argc, char *argv[]) {
     }
 
     env_init();
+
+    /*
+     * Make the host-GPU rendering environment a default for *every* shell
+     * (serial, terminal, GUI) whenever the transport device exists, so
+     * manually launched GL/D3D12 programs use the real GPU without the user
+     * exporting GALLIUM_DRIVER / MESA_D3D12_DEFAULT_ADAPTER_NAME /
+     * LD_LIBRARY_PATH by hand each time.  The GUI session layers its own
+     * Wayland/EGL vars on top via env_enable_gui_session().
+     */
+    env_enable_gpu_defaults();
 
     int argi = 1;
     if (argc >= 2 && strcmp(argv[1], "--gui-session") == 0) {

@@ -6822,6 +6822,25 @@ static int validate_backend(void)
            stats.nouveau_pci_probe_accepts == 0 ? "ABSENT" :
                "DIAGNOSTIC",
            stats.nouveau_pci_native_present_credit);
+    /*
+     * DDA device-presence matrix (GPU plan section 1.2).  Reports the real
+     * identity of the assigned NVIDIA function on the DDA/Hyper-V vPCI lane.
+     * When no physical 0x10DE BAR-backed function reached the guest the matrix
+     * is fail-closed (status=PASS_FAILCLOSED with zero ids); a populated row
+     * can only come from a real probe, never from synthetic values.  This is
+     * the DDA lane, so gpup_dxg_path is fixed at 0.
+     */
+    printf("gpu_core_c_validator nouveau_dda_device_presence_matrix "
+           "dda_nvidia_present=%lu vendor_id=0x%lx device_id=0x%lx "
+           "class_code=0x%lx bar_count=%lu transport=hyperv_vpci "
+           "gpup_dxg_path=0 native_present_credit=0 opengl_submit_credit=0 "
+           "status=%s\n",
+           stats.nouveau_dda_present,
+           stats.nouveau_dda_vendor_id,
+           stats.nouveau_dda_device_id,
+           stats.nouveau_dda_class_code,
+           stats.nouveau_dda_bar_count,
+           stats.nouveau_dda_present != 0 ? "PASS" : "PASS_FAILCLOSED");
     printf("gpu_core_c_validator nouveau_pci_irq_provenance_matrix "
            "accepts=%lu msi_attempts=%lu msi_unsupported=%lu "
            "msix_attempts=%lu msix_unsupported=%lu "

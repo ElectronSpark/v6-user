@@ -1,0 +1,3 @@
+
+# d3d12probe host build artifact (rebuilt from source on demand).
+programs/d3d12probe/d3d12probe-host
