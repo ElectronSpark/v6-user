@@ -26,6 +26,22 @@ static int parse_mode(const char *s, uint32 *w, uint32 *h)
 
 static int print_probe(void);
 
+static int parse_u32_arg(const char *s, uint32 *out)
+{
+    uint32 v = 0;
+
+    if (!s || !*s)
+        return -1;
+    while (*s) {
+        if (*s < '0' || *s > '9')
+            return -1;
+        v = v * 10 + (uint32)(*s - '0');
+        s++;
+    }
+    *out = v;
+    return 0;
+}
+
 static const char *backend_name(uint32 backend)
 {
     switch (backend) {
@@ -190,6 +206,270 @@ static int print_probe(void)
     }
     close(fd);
     return 0;
+}
+
+static int sample_rect(const char *x_arg, const char *y_arg,
+                       const char *w_arg, const char *h_arg)
+{
+    struct fb_var_screeninfo info;
+    uint32 x, y, w, h;
+    uint64 total = 0;
+    uint64 nonzero = 0;
+    uint64 nonblack = 0;
+    uint64 sum_r = 0;
+    uint64 sum_g = 0;
+    uint64 sum_b = 0;
+    uint64 hash = 1469598103934665603UL;
+    uint32 center = 0;
+    uint32 tl = 0;
+    uint32 tr = 0;
+    uint32 bl = 0;
+    uint32 br = 0;
+    uint8 *fb;
+    int fb_from_malloc = 0;
+    uint64 map_len;
+    int fd;
+
+    if (parse_u32_arg(x_arg, &x) != 0 || parse_u32_arg(y_arg, &y) != 0 ||
+        parse_u32_arg(w_arg, &w) != 0 || parse_u32_arg(h_arg, &h) != 0 ||
+        w == 0 || h == 0) {
+        fprintf(2, "usage: fbstat sample <x> <y> <w> <h>\n");
+        return 1;
+    }
+
+    fd = open("/dev/fb0", O_RDWR);
+    if (fd < 0) {
+        fprintf(2, "fbstat: open /dev/fb0 failed\n");
+        return 1;
+    }
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) < 0) {
+        fprintf(2, "fbstat: FBIOGET_VSCREENINFO failed\n");
+        close(fd);
+        return 1;
+    }
+    if (info.bits_per_pixel != 32 || info.pitch < info.xres * 4) {
+        fprintf(2, "fbstat: unsupported fb layout %ux%u pitch %u bpp %u\n",
+                info.xres, info.yres, info.pitch, info.bits_per_pixel);
+        close(fd);
+        return 1;
+    }
+    if (x >= info.xres || y >= info.yres) {
+        fprintf(2, "fbstat: sample origin outside %ux%u\n",
+                info.xres, info.yres);
+        close(fd);
+        return 1;
+    }
+    if (x + w > info.xres)
+        w = info.xres - x;
+    if (y + h > info.yres)
+        h = info.yres - y;
+
+    map_len = (uint64)info.pitch * info.yres;
+    fb = mmap(0, (int)map_len, PROT_READ, MAP_SHARED, fd, 0);
+    if (fb == MAP_FAILED) {
+        ssize_t nread;
+
+        fb = malloc((uint)map_len);
+        if (!fb) {
+            fprintf(2, "fbstat: mmap/read buffer allocation failed\n");
+            close(fd);
+            return 1;
+        }
+        fb_from_malloc = 1;
+        nread = read(fd, fb, (int)map_len);
+        if (nread < (ssize_t)map_len) {
+            fprintf(2, "fbstat: read /dev/fb0 failed n=%ld need=%lu\n",
+                    (long)nread, map_len);
+            free(fb);
+            close(fd);
+            return 1;
+        }
+    }
+
+    for (uint32 row = 0; row < h; row++) {
+        uint32 *p = (uint32 *)(fb + (uint64)(y + row) * info.pitch) + x;
+
+        for (uint32 col = 0; col < w; col++) {
+            uint32 px = p[col];
+            uint32 rgb = px & 0x00ffffffU;
+            uint32 r = rgb & 0xffU;
+            uint32 g = (rgb >> 8) & 0xffU;
+            uint32 b = (rgb >> 16) & 0xffU;
+
+            total++;
+            if (px != 0)
+                nonzero++;
+            if (rgb != 0)
+                nonblack++;
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
+            hash ^= px;
+            hash *= 1099511628211UL;
+        }
+    }
+
+    tl = *(uint32 *)(fb + (uint64)y * info.pitch + x * 4);
+    tr = *(uint32 *)(fb + (uint64)y * info.pitch + (x + w - 1) * 4);
+    bl = *(uint32 *)(fb + (uint64)(y + h - 1) * info.pitch + x * 4);
+    br = *(uint32 *)(fb + (uint64)(y + h - 1) * info.pitch +
+                    (x + w - 1) * 4);
+    center = *(uint32 *)(fb + (uint64)(y + h / 2) * info.pitch +
+                        (x + w / 2) * 4);
+
+    printf("fb_sample screen=%ux%u pitch=%u rect=%u,%u %ux%u "
+           "total=%lu nonzero=%lu nonblack=%lu "
+           "avg_rgb=%lu,%lu,%lu hash=0x%lx "
+           "center=0x%x corners=0x%x,0x%x,0x%x,0x%x\n",
+           info.xres, info.yres, info.pitch, x, y, w, h,
+           total, nonzero, nonblack,
+           total ? sum_r / total : 0,
+           total ? sum_g / total : 0,
+           total ? sum_b / total : 0,
+           hash, center, tl, tr, bl, br);
+
+    if (fb_from_malloc)
+        free(fb);
+    else
+        munmap(fb, (int)map_len);
+    close(fd);
+    return 0;
+}
+
+static int write_full(int fd, const void *buf, uint64 len)
+{
+    const uint8 *p = buf;
+
+    while (len > 0) {
+        int chunk = len > 0x7fffffffUL ? 0x7fffffff : (int)len;
+        int n = write(fd, p, chunk);
+
+        if (n <= 0)
+            return -1;
+        p += n;
+        len -= (uint64)n;
+    }
+    return 0;
+}
+
+static int dump_ppm(const char *path, uint32 x, uint32 y, uint32 w, uint32 h,
+                    int use_rect)
+{
+    struct fb_var_screeninfo info;
+    uint8 *fb;
+    int fb_from_malloc = 0;
+    uint64 map_len;
+    int fbfd;
+    int outfd;
+    char header[64];
+    char row[4096];
+
+    fbfd = open("/dev/fb0", O_RDWR);
+    if (fbfd < 0) {
+        fprintf(2, "fbstat: open /dev/fb0 failed\n");
+        return 1;
+    }
+    if (ioctl(fbfd, FBIOGET_VSCREENINFO, &info) < 0) {
+        fprintf(2, "fbstat: FBIOGET_VSCREENINFO failed\n");
+        close(fbfd);
+        return 1;
+    }
+    if (info.bits_per_pixel != 32 || info.pitch < info.xres * 4) {
+        fprintf(2, "fbstat: unsupported fb layout %ux%u pitch %u bpp %u\n",
+                info.xres, info.yres, info.pitch, info.bits_per_pixel);
+        close(fbfd);
+        return 1;
+    }
+    if (!use_rect) {
+        x = 0;
+        y = 0;
+        w = info.xres;
+        h = info.yres;
+    }
+    if (x >= info.xres || y >= info.yres || w == 0 || h == 0) {
+        fprintf(2, "fbstat: ppm rect outside %ux%u\n", info.xres, info.yres);
+        close(fbfd);
+        return 1;
+    }
+    if (x + w > info.xres)
+        w = info.xres - x;
+    if (y + h > info.yres)
+        h = info.yres - y;
+    if (w * 3 > sizeof(row)) {
+        fprintf(2, "fbstat: ppm width too large: %u\n", w);
+        close(fbfd);
+        return 1;
+    }
+
+    map_len = (uint64)info.pitch * info.yres;
+    fb = mmap(0, (int)map_len, PROT_READ, MAP_SHARED, fbfd, 0);
+    if (fb == MAP_FAILED) {
+        ssize_t nread;
+
+        fb = malloc((uint)map_len);
+        if (!fb) {
+            fprintf(2, "fbstat: mmap/read buffer allocation failed\n");
+            close(fbfd);
+            return 1;
+        }
+        fb_from_malloc = 1;
+        nread = read(fbfd, fb, (int)map_len);
+        if (nread < (ssize_t)map_len) {
+            fprintf(2, "fbstat: read /dev/fb0 failed n=%ld need=%lu\n",
+                    (long)nread, map_len);
+            free(fb);
+            close(fbfd);
+            return 1;
+        }
+    }
+
+    outfd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (outfd < 0) {
+        fprintf(2, "fbstat: open output failed: %s\n", path);
+        if (fb_from_malloc)
+            free(fb);
+        else
+            munmap(fb, (int)map_len);
+        close(fbfd);
+        return 1;
+    }
+
+    snprintf(header, sizeof(header), "P6\n%u %u\n255\n", w, h);
+    if (write_full(outfd, header, strlen(header)) != 0)
+        goto write_failed;
+    for (uint32 yy = 0; yy < h; yy++) {
+        uint32 *src = (uint32 *)(fb + (uint64)(y + yy) * info.pitch) + x;
+
+        for (uint32 xx = 0; xx < w; xx++) {
+            uint32 px = src[xx];
+
+            row[xx * 3 + 0] = (char)((px >> 16) & 0xff);
+            row[xx * 3 + 1] = (char)((px >> 8) & 0xff);
+            row[xx * 3 + 2] = (char)(px & 0xff);
+        }
+        if (write_full(outfd, row, (uint64)w * 3) != 0)
+            goto write_failed;
+    }
+
+    close(outfd);
+    if (fb_from_malloc)
+        free(fb);
+    else
+        munmap(fb, (int)map_len);
+    close(fbfd);
+    printf("fb_ppm path=%s screen=%ux%u rect=%u,%u %ux%u\n",
+           path, info.xres, info.yres, x, y, w, h);
+    return 0;
+
+write_failed:
+    fprintf(2, "fbstat: write output failed: %s\n", path);
+    close(outfd);
+    if (fb_from_malloc)
+        free(fb);
+    else
+        munmap(fb, (int)map_len);
+    close(fbfd);
+    return 1;
 }
 
 static int set_mode(const char *mode)
@@ -429,6 +709,23 @@ int main(int argc, char *argv[])
     int nouveau_linux_display_readiness_ok = 0;
     int dda_nouveau_non_readback_display_proof_ok = 0;
     int fd;
+
+    if (argc == 6 && strcmp(argv[1], "sample") == 0)
+        return sample_rect(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 3 && strcmp(argv[1], "ppm") == 0)
+        return dump_ppm(argv[2], 0, 0, 0, 0, 0);
+    if (argc == 7 && strcmp(argv[1], "ppm") == 0) {
+        uint32 x, y, w, h;
+
+        if (parse_u32_arg(argv[3], &x) != 0 ||
+            parse_u32_arg(argv[4], &y) != 0 ||
+            parse_u32_arg(argv[5], &w) != 0 ||
+            parse_u32_arg(argv[6], &h) != 0) {
+            fprintf(2, "usage: fbstat ppm <path> [x y w h]\n");
+            return 1;
+        }
+        return dump_ppm(argv[2], x, y, w, h, 1);
+    }
 
     if (argc == 2) {
         if (strcmp(argv[1], "mode") == 0)
@@ -3777,6 +4074,20 @@ int main(int argc, char *argv[])
     printf("virtio_last_fence %lu\n", stats.virtio_last_fence);
     printf("virtio_irq_completions %lu\n", stats.virtio_irq_completions);
     printf("virtio_poll_fallbacks %lu\n", stats.virtio_poll_fallbacks);
+    printf("virgl_bo_presents %lu\n", stats.virgl_bo_presents);
+    printf("virgl_bo_present_pixels %lu\n",
+           stats.virgl_bo_present_pixels);
+    printf("virgl_bo_present_last_resource %lu\n",
+           stats.virgl_bo_present_last_resource);
+    printf("bo_present_copy_ticks %lu\n", stats.bo_present_copy_ticks);
+    printf("bo_present_virtio_ticks %lu\n", stats.bo_present_virtio_ticks);
+    printf("bo_present_total_ticks %lu\n", stats.bo_present_total_ticks);
+    printf("bo_present_last_copy_us %lu\n",
+           stats.bo_present_last_copy_us);
+    printf("bo_present_last_virtio_us %lu\n",
+           stats.bo_present_last_virtio_us);
+    printf("bo_present_last_total_us %lu\n",
+           stats.bo_present_last_total_us);
     printf("gpu_backend %lu\n", stats.gpu_backend);
     printf("gpu_backend_flags %lu\n", stats.gpu_backend_flags);
     printf("dxg_global_open_stat %lu\n", stats.dxg_global_open);
