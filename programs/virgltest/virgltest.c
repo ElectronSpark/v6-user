@@ -4,10 +4,18 @@
 #include "user/user.h"
 
 #define VIRGL_CCMD_NOP 0
+#define VIRGL_CCMD_CLEAR_TEXTURE 47
+#define VIRGL_CCMD_RESOURCE_COPY_REGION 17
 #define VIRGL_CMD0(cmd, obj, len) ((cmd) | ((obj) << 8) | ((len) << 16))
+#define VIRGL_CLEAR_TEXTURE_SIZE 12
+#define VIRGL_CMD_RESOURCE_COPY_REGION_SIZE 13
 #define VIRGL_FORMAT_B8G8R8A8_UNORM 1
 #define VIRGL_BIND_RENDER_TARGET (1u << 1)
 #define VIRGL_BIND_DISPLAY_TARGET (1u << 7)
+#define VIRGL_BIND_SAMPLER_VIEW (1u << 3)
+#define VIRGL_BIND_SHARED (1u << 20)
+#define VIRGL_BIND_LINEAR (1u << 22)
+#define VIRGL_BIND_SCANOUT (1u << 18)
 #define PIPE_TEXTURE_2D 2
 
 static int submit_nop(int fd, uint32 ctx_id, uint64 *fence_out,
@@ -293,6 +301,386 @@ out:
     return ret;
 }
 
+static void fill_copy_pattern(volatile uint32 *pixels, uint32 width,
+                              uint32 height)
+{
+    uint32 colors[5] = {
+        0xff336699, 0xffcc5522, 0xff22aa66, 0xff8833cc, 0xffe0d050,
+    };
+    uint32 xs[5] = {
+        width / 2, width / 4, (width * 3) / 4, width / 4,
+        (width * 3) / 4,
+    };
+    uint32 ys[5] = {
+        height / 2, height / 4, height / 4, (height * 3) / 4,
+        (height * 3) / 4,
+    };
+
+    for (uint32 y = 0; y < height; y++) {
+        for (uint32 x = 0; x < width; x++)
+            pixels[y * width + x] = 0xff101820;
+    }
+    for (int i = 0; i < 5; i++)
+        pixels[ys[i] * width + xs[i]] = colors[i];
+}
+
+static int check_copy_pattern(volatile uint32 *src, volatile uint32 *dst,
+                              uint32 width, uint32 height)
+{
+    uint32 xs[5] = {
+        width / 2, width / 4, (width * 3) / 4, width / 4,
+        (width * 3) / 4,
+    };
+    uint32 ys[5] = {
+        height / 2, height / 4, height / 4, (height * 3) / 4,
+        (height * 3) / 4,
+    };
+    int matches = 0;
+
+    for (int i = 0; i < 5; i++) {
+        uint32 off = ys[i] * width + xs[i];
+        if ((src[off] & 0x00ffffffu) != 0 &&
+            (src[off] & 0x00ffffffu) == (dst[off] & 0x00ffffffu))
+            matches++;
+    }
+    return matches;
+}
+
+static void destroy_resource_if_created(int fd,
+                                        struct fb_gpu_virgl_resource_create *r)
+{
+    if (r->addr != 0 && r->size != 0)
+        (void)munmap((void *)r->addr, r->size);
+    if (r->resource_id != 0) {
+        struct fb_gpu_virgl_resource_destroy destroy = {
+            .resource_id = r->resource_id,
+        };
+
+        (void)ioctl(fd, FB_GPU_VIRGL_RESOURCE_DESTROY, &destroy);
+    }
+}
+
+static int dmabuf_resource_import_test(void)
+{
+    int fd;
+    struct fb_gpu_virgl_ctx ctx = {0};
+    struct fb_gpu_virgl_resource_create res = {0};
+    struct fb_gpu_virgl_resource_export_fd export_fd = {0};
+    struct fb_gpu_bo_import_fd import_fd = {0};
+    struct fb_gpu_bo_info info = {0};
+    struct fb_gpu_bo_destroy destroy_bo = {0};
+    int ret = 1;
+
+    fd = open("/dev/fb0", O_RDWR);
+    if (fd < 0) {
+        printf("virgltest: dmabuf import open /dev/fb0 failed\n");
+        return 1;
+    }
+
+    strcpy(ctx.debug_name, "virgltest-dmabuf");
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_CREATE, &ctx) < 0 || ctx.ctx_id == 0) {
+        printf("virgltest: dmabuf import ctx create failed\n");
+        goto out;
+    }
+
+    export_fd.fd = -1;
+    res.ctx_id = ctx.ctx_id;
+    res.target = PIPE_TEXTURE_2D;
+    res.format = VIRGL_FORMAT_B8G8R8A8_UNORM;
+    res.bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW |
+               VIRGL_BIND_SHARED | VIRGL_BIND_LINEAR;
+    res.width = 64;
+    res.height = 64;
+    res.depth = 1;
+    res.array_size = 1;
+    if (ioctl(fd, FB_GPU_VIRGL_RESOURCE_CREATE, &res) < 0 ||
+        res.resource_id == 0 || res.addr == 0 || res.size == 0) {
+        printf("virgltest: dmabuf import resource create failed ctx=%u res=%u addr=%lu size=%lu\n",
+               ctx.ctx_id, res.resource_id, res.addr, res.size);
+        goto out_ctx;
+    }
+
+    export_fd.resource_id = res.resource_id;
+    if (ioctl(fd, FB_GPU_VIRGL_RESOURCE_EXPORT_FD, &export_fd) < 0 ||
+        export_fd.fd < 0 || export_fd.width != res.width ||
+        export_fd.height != res.height || export_fd.pitch == 0 ||
+        export_fd.size == 0) {
+        printf("virgltest: dmabuf import export failed res=%u fd=%d size=%lu pitch=%u\n",
+               res.resource_id, export_fd.fd, export_fd.size,
+               export_fd.pitch);
+        goto out_res;
+    }
+
+    import_fd.fd = export_fd.fd;
+    if (ioctl(fd, FB_GPU_BO_IMPORT_FD, &import_fd) < 0 ||
+        import_fd.handle == 0 || import_fd.addr == 0 ||
+        import_fd.size == 0) {
+        printf("virgltest: dmabuf import fd failed fd=%d handle=%u addr=%lu size=%lu\n",
+               export_fd.fd, import_fd.handle, import_fd.addr,
+               import_fd.size);
+        goto out_export_fd;
+    }
+
+    info.handle = import_fd.handle;
+    if (ioctl(fd, FB_GPU_BO_INFO, &info) < 0) {
+        printf("virgltest: dmabuf import info failed handle=%u\n",
+               import_fd.handle);
+        goto out_import_bo;
+    }
+    if (info.virtio_resource_id != res.resource_id ||
+        info.width != res.width || info.height != res.height ||
+        info.pitch != import_fd.pitch || info.size != import_fd.size) {
+        printf("virgltest: dmabuf import mismatch res=%u imported_res=%u size=%lu/%lu pitch=%u/%u wh=%ux%u/%ux%u\n",
+               res.resource_id, info.virtio_resource_id, info.size,
+               import_fd.size, info.pitch, import_fd.pitch, info.width,
+               info.height, res.width, res.height);
+        goto out_import_bo;
+    }
+
+    printf("virgltest: dmabuf-resource-import ok ctx=%u res=%u fd=%d bo=%u imported_resource=%u size=%lu pitch=%u\n",
+           ctx.ctx_id, res.resource_id, export_fd.fd, import_fd.handle,
+           info.virtio_resource_id, info.size, info.pitch);
+    ret = 0;
+
+out_import_bo:
+    destroy_bo.handle = import_fd.handle;
+    if (destroy_bo.handle != 0 &&
+        ioctl(fd, FB_GPU_BO_DESTROY, &destroy_bo) < 0) {
+        printf("virgltest: dmabuf import bo destroy failed handle=%u\n",
+               destroy_bo.handle);
+        ret = 1;
+    }
+out_export_fd:
+    if (export_fd.fd >= 0)
+        close(export_fd.fd);
+out_res:
+    destroy_resource_if_created(fd, &res);
+out_ctx:
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx) < 0) {
+        printf("virgltest: dmabuf import ctx destroy failed ctx=%u\n",
+               ctx.ctx_id);
+        ret = 1;
+    }
+out:
+    close(fd);
+    return ret;
+}
+
+static int submit_clear_texture(int fd, uint32 ctx_id, uint32 resource_id,
+                                uint32 width, uint32 height,
+                                uint64 *fence_out, uint64 *signaled_out)
+{
+    uint32 cmds[VIRGL_CLEAR_TEXTURE_SIZE + 1];
+    struct fb_gpu_virgl_submit submit = {0};
+    struct fb_gpu_virgl_fence fence = {0};
+
+    memset(cmds, 0, sizeof(cmds));
+    cmds[0] = VIRGL_CMD0(VIRGL_CCMD_CLEAR_TEXTURE, 0,
+                         VIRGL_CLEAR_TEXTURE_SIZE);
+    cmds[1] = resource_id;
+    cmds[2] = 0;
+    cmds[3] = 0;
+    cmds[4] = 0;
+    cmds[5] = 0;
+    cmds[6] = width;
+    cmds[7] = height;
+    cmds[8] = 1;
+    cmds[9] = 0xff2a7bd8;
+    cmds[10] = 0;
+    cmds[11] = 0;
+    cmds[12] = 0;
+
+    submit.ctx_id = ctx_id;
+    submit.cmd_size = sizeof(cmds);
+    submit.cmd = (uint64)cmds;
+    if (ioctl(fd, FB_GPU_VIRGL_SUBMIT, &submit) < 0 ||
+        submit.fence == 0)
+        return -1;
+    fence.flags = FB_GPU_VIRGL_FENCE_WAIT;
+    fence.wait_for = submit.fence;
+    if (ioctl(fd, FB_GPU_VIRGL_FENCE, &fence) < 0 ||
+        fence.signaled < submit.fence)
+        return -1;
+    if (fence_out)
+        *fence_out = submit.fence;
+    if (signaled_out)
+        *signaled_out = fence.signaled;
+    return 0;
+}
+
+static int resource_copy_test(int scanout_dst, int clear_src, int render_bind)
+{
+    int fd;
+    struct fb_gpu_virgl_ctx ctx = {0};
+    struct fb_gpu_virgl_resource_create src = {0};
+    struct fb_gpu_virgl_resource_create dst = {0};
+    struct fb_gpu_virgl_transfer transfer = {0};
+    struct fb_gpu_virgl_submit submit = {0};
+    struct fb_gpu_virgl_fence fence = {0};
+    uint32 cmds[VIRGL_CMD_RESOURCE_COPY_REGION_SIZE + 1];
+    uint32 bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW |
+                  VIRGL_BIND_SHARED;
+    int matches;
+    int ret = 1;
+
+    fd = open("/dev/fb0", O_RDWR);
+    if (fd < 0) {
+        printf("virgltest: copy open /dev/fb0 failed\n");
+        return 1;
+    }
+
+    strcpy(ctx.debug_name, "virgltest-copy");
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_CREATE, &ctx) < 0 || ctx.ctx_id == 0) {
+        printf("virgltest: copy ctx create failed\n");
+        goto out;
+    }
+
+    src.ctx_id = ctx.ctx_id;
+    src.target = PIPE_TEXTURE_2D;
+    src.format = VIRGL_FORMAT_B8G8R8A8_UNORM;
+    if (!render_bind)
+        bind |= VIRGL_BIND_DISPLAY_TARGET | VIRGL_BIND_LINEAR;
+    src.bind = bind;
+    src.width = 64;
+    src.height = 64;
+    src.depth = 1;
+    src.array_size = 1;
+    if (ioctl(fd, FB_GPU_VIRGL_RESOURCE_CREATE, &src) < 0 ||
+        src.resource_id == 0 || src.addr == 0 || src.size == 0) {
+        printf("virgltest: copy src create failed ctx=%u res=%u addr=%lu size=%lu\n",
+               ctx.ctx_id, src.resource_id, src.addr, src.size);
+        goto out_ctx;
+    }
+
+    dst = src;
+    if (scanout_dst)
+        dst.bind |= VIRGL_BIND_SCANOUT;
+    dst.resource_id = 0;
+    dst.addr = 0;
+    dst.size = 0;
+    if (ioctl(fd, FB_GPU_VIRGL_RESOURCE_CREATE, &dst) < 0 ||
+        dst.resource_id == 0 || dst.addr == 0 || dst.size == 0) {
+        printf("virgltest: copy dst create failed ctx=%u res=%u addr=%lu size=%lu\n",
+               ctx.ctx_id, dst.resource_id, dst.addr, dst.size);
+        goto out_resources;
+    }
+
+    transfer.resource_id = src.resource_id;
+    transfer.w = src.width;
+    transfer.h = src.height;
+    transfer.d = 1;
+    transfer.stride = src.width * sizeof(uint32);
+    transfer.layer_stride = transfer.stride * src.height;
+    if (clear_src) {
+        memset((void *)src.addr, 0, src.size);
+        if (ioctl(fd, FB_GPU_VIRGL_TRANSFER_TO_HOST, &transfer) < 0) {
+            printf("virgltest: copy clear-src zero upload failed src=%u\n",
+                   src.resource_id);
+            goto out_resources;
+        }
+        if (submit_clear_texture(fd, ctx.ctx_id, src.resource_id,
+                                 src.width, src.height, &submit.fence,
+                                 &fence.signaled) != 0) {
+            printf("virgltest: copy clear-src submit failed ctx=%u src=%u\n",
+                   ctx.ctx_id, src.resource_id);
+            goto out_resources;
+        }
+        if (ioctl(fd, FB_GPU_VIRGL_TRANSFER_FROM_HOST, &transfer) < 0) {
+            printf("virgltest: copy clear-src download failed src=%u\n",
+                   src.resource_id);
+            goto out_resources;
+        }
+    } else {
+        fill_copy_pattern((volatile uint32 *)src.addr, src.width, src.height);
+    }
+    memset((void *)dst.addr, 0, dst.size);
+    if (!clear_src && ioctl(fd, FB_GPU_VIRGL_TRANSFER_TO_HOST, &transfer) < 0) {
+        printf("virgltest: copy upload failed src=%u\n", src.resource_id);
+        goto out_resources;
+    }
+
+    memset(cmds, 0, sizeof(cmds));
+    cmds[0] = VIRGL_CMD0(VIRGL_CCMD_RESOURCE_COPY_REGION, 0,
+                         VIRGL_CMD_RESOURCE_COPY_REGION_SIZE);
+    cmds[1] = dst.resource_id;
+    cmds[2] = 0;
+    cmds[3] = 0;
+    cmds[4] = 0;
+    cmds[5] = 0;
+    cmds[6] = src.resource_id;
+    cmds[7] = 0;
+    cmds[8] = 0;
+    cmds[9] = 0;
+    cmds[10] = 0;
+    cmds[11] = src.width;
+    cmds[12] = src.height;
+    cmds[13] = 1;
+
+    submit.ctx_id = ctx.ctx_id;
+    submit.cmd_size = sizeof(cmds);
+    submit.cmd = (uint64)cmds;
+    if (ioctl(fd, FB_GPU_VIRGL_SUBMIT, &submit) < 0 ||
+        submit.fence == 0) {
+        printf("virgltest: copy submit failed ctx=%u src=%u dst=%u fence=%lu signaled=%lu\n",
+               ctx.ctx_id, src.resource_id, dst.resource_id, submit.fence,
+               submit.signaled);
+        goto out_resources;
+    }
+    fence.flags = FB_GPU_VIRGL_FENCE_WAIT;
+    fence.wait_for = submit.fence;
+    if (ioctl(fd, FB_GPU_VIRGL_FENCE, &fence) < 0 ||
+        fence.signaled < submit.fence) {
+        printf("virgltest: copy fence wait failed fence=%lu signaled=%lu\n",
+               submit.fence, fence.signaled);
+        goto out_resources;
+    }
+
+    transfer.resource_id = dst.resource_id;
+    if (ioctl(fd, FB_GPU_VIRGL_TRANSFER_FROM_HOST, &transfer) < 0) {
+        printf("virgltest: copy download failed dst=%u\n", dst.resource_id);
+        goto out_resources;
+    }
+
+    matches = check_copy_pattern((volatile uint32 *)src.addr,
+                                 (volatile uint32 *)dst.addr,
+                                 src.width, src.height);
+    if (matches < 5) {
+        printf("virgltest: copy mismatch matches=%d src=%08x,%08x,%08x,%08x,%08x dst=%08x,%08x,%08x,%08x,%08x\n",
+               matches,
+               ((volatile uint32 *)src.addr)[(src.height / 2) * src.width + src.width / 2],
+               ((volatile uint32 *)src.addr)[(src.height / 4) * src.width + src.width / 4],
+               ((volatile uint32 *)src.addr)[(src.height / 4) * src.width + (src.width * 3) / 4],
+               ((volatile uint32 *)src.addr)[((src.height * 3) / 4) * src.width + src.width / 4],
+               ((volatile uint32 *)src.addr)[((src.height * 3) / 4) * src.width + (src.width * 3) / 4],
+               ((volatile uint32 *)dst.addr)[(dst.height / 2) * dst.width + dst.width / 2],
+               ((volatile uint32 *)dst.addr)[(dst.height / 4) * dst.width + dst.width / 4],
+               ((volatile uint32 *)dst.addr)[(dst.height / 4) * dst.width + (dst.width * 3) / 4],
+               ((volatile uint32 *)dst.addr)[((dst.height * 3) / 4) * dst.width + dst.width / 4],
+               ((volatile uint32 *)dst.addr)[((dst.height * 3) / 4) * dst.width + (dst.width * 3) / 4]);
+        goto out_resources;
+    }
+
+    printf("virgltest: copy-region%s%s%s ok ctx=%u src=%u dst=%u fence=%lu signaled=%lu matches=%d\n",
+           clear_src ? "-clear-src" : "",
+           render_bind ? "-render-bind" : "",
+           scanout_dst ? "-scanout" : "",
+           ctx.ctx_id, src.resource_id, dst.resource_id, submit.fence,
+           fence.signaled, matches);
+    ret = 0;
+
+out_resources:
+    destroy_resource_if_created(fd, &dst);
+    destroy_resource_if_created(fd, &src);
+out_ctx:
+    if (ioctl(fd, FB_GPU_VIRGL_CTX_DESTROY, &ctx) < 0) {
+        printf("virgltest: copy ctx destroy failed ctx=%u\n", ctx.ctx_id);
+        ret = 1;
+    }
+out:
+    close(fd);
+    return ret;
+}
+
 int main(int argc, char **argv)
 {
     int fd;
@@ -315,6 +703,18 @@ int main(int argc, char **argv)
         return async_submit_test();
     if (argc > 1 && strcmp(argv[1], "--invalid-submit") == 0)
         return invalid_submit_test();
+    if (argc > 1 && strcmp(argv[1], "--copy-region") == 0)
+        return resource_copy_test(0, 0, 0);
+    if (argc > 1 && strcmp(argv[1], "--copy-region-scanout") == 0)
+        return resource_copy_test(1, 0, 0);
+    if (argc > 1 && strcmp(argv[1], "--copy-region-clear-src") == 0)
+        return resource_copy_test(0, 1, 0);
+    if (argc > 1 && strcmp(argv[1], "--copy-region-clear-src-scanout") == 0)
+        return resource_copy_test(1, 1, 0);
+    if (argc > 1 && strcmp(argv[1], "--copy-region-clear-src-render-bind") == 0)
+        return resource_copy_test(0, 1, 1);
+    if (argc > 1 && strcmp(argv[1], "--dmabuf-resource-import") == 0)
+        return dmabuf_resource_import_test();
 
     fd = open("/dev/fb0", O_RDWR);
     if (fd < 0) {

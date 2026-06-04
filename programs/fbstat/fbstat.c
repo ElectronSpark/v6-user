@@ -336,6 +336,140 @@ static int sample_rect(const char *x_arg, const char *y_arg,
     return 0;
 }
 
+static int print_sample_pixels(const char *label, uint32 screen_w,
+                               uint32 screen_h, uint32 pitch,
+                               uint32 x, uint32 y, uint32 w, uint32 h,
+                               uint8 *pixels)
+{
+    uint64 total = 0;
+    uint64 nonzero = 0;
+    uint64 nonblack = 0;
+    uint64 sum_r = 0;
+    uint64 sum_g = 0;
+    uint64 sum_b = 0;
+    uint64 hash = 1469598103934665603UL;
+    uint32 center;
+    uint32 tl;
+    uint32 tr;
+    uint32 bl;
+    uint32 br;
+
+    for (uint32 row = 0; row < h; row++) {
+        uint32 *p = (uint32 *)(pixels + (uint64)row * pitch);
+
+        for (uint32 col = 0; col < w; col++) {
+            uint32 px = p[col];
+            uint32 rgb = px & 0x00ffffffU;
+            uint32 r = rgb & 0xffU;
+            uint32 g = (rgb >> 8) & 0xffU;
+            uint32 b = (rgb >> 16) & 0xffU;
+
+            total++;
+            if (px != 0)
+                nonzero++;
+            if (rgb != 0)
+                nonblack++;
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
+            hash ^= px;
+            hash *= 1099511628211UL;
+        }
+    }
+
+    tl = *(uint32 *)pixels;
+    tr = *(uint32 *)(pixels + (uint64)(w - 1) * 4);
+    bl = *(uint32 *)(pixels + (uint64)(h - 1) * pitch);
+    br = *(uint32 *)(pixels + (uint64)(h - 1) * pitch +
+                    (uint64)(w - 1) * 4);
+    center = *(uint32 *)(pixels + (uint64)(h / 2) * pitch +
+                        (uint64)(w / 2) * 4);
+
+    printf("%s screen=%ux%u pitch=%u rect=%u,%u %ux%u "
+           "total=%lu nonzero=%lu nonblack=%lu "
+           "avg_rgb=%lu,%lu,%lu hash=0x%lx "
+           "center=0x%x corners=0x%x,0x%x,0x%x,0x%x\n",
+           label, screen_w, screen_h, pitch, x, y, w, h,
+           total, nonzero, nonblack,
+           total ? sum_r / total : 0,
+           total ? sum_g / total : 0,
+           total ? sum_b / total : 0,
+           hash, center, tl, tr, bl, br);
+    return 0;
+}
+
+static int sample_current_rect(const char *x_arg, const char *y_arg,
+                               const char *w_arg, const char *h_arg)
+{
+    struct fb_var_screeninfo info;
+    struct fb_gpu_scanout_read req;
+    uint32 x, y, w, h;
+    uint8 *pixels;
+    uint64 size;
+    int fd;
+
+    if (parse_u32_arg(x_arg, &x) != 0 || parse_u32_arg(y_arg, &y) != 0 ||
+        parse_u32_arg(w_arg, &w) != 0 || parse_u32_arg(h_arg, &h) != 0 ||
+        w == 0 || h == 0) {
+        fprintf(2, "usage: fbstat sample-current <x> <y> <w> <h>\n");
+        return 1;
+    }
+
+    fd = open("/dev/fb0", O_RDWR);
+    if (fd < 0) {
+        fprintf(2, "fbstat: open /dev/fb0 failed\n");
+        return 1;
+    }
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) < 0) {
+        fprintf(2, "fbstat: FBIOGET_VSCREENINFO failed\n");
+        close(fd);
+        return 1;
+    }
+    if (info.bits_per_pixel != 32) {
+        fprintf(2, "fbstat: unsupported fb bpp %u\n", info.bits_per_pixel);
+        close(fd);
+        return 1;
+    }
+    if (x >= info.xres || y >= info.yres) {
+        fprintf(2, "fbstat: sample-current origin outside %ux%u\n",
+                info.xres, info.yres);
+        close(fd);
+        return 1;
+    }
+    if (x + w > info.xres)
+        w = info.xres - x;
+    if (y + h > info.yres)
+        h = info.yres - y;
+
+    size = (uint64)w * h * sizeof(uint32);
+    pixels = malloc((uint)size);
+    if (!pixels) {
+        fprintf(2, "fbstat: sample-current allocation failed\n");
+        close(fd);
+        return 1;
+    }
+
+    memset(&req, 0, sizeof(req));
+    req.x = x;
+    req.y = y;
+    req.w = w;
+    req.h = h;
+    req.pitch = w * sizeof(uint32);
+    req.pixels = (uint64)pixels;
+    if (ioctl(fd, FB_GPU_SCANOUT_READ, &req) < 0) {
+        fprintf(2, "fbstat: FB_GPU_SCANOUT_READ failed\n");
+        free(pixels);
+        close(fd);
+        return 1;
+    }
+
+    print_sample_pixels("fb_sample_current", req.screen_width,
+                        req.screen_height, req.pitch, x, y, w, h, pixels);
+    free(pixels);
+    close(fd);
+    return 0;
+}
+
 static int write_full(int fd, const void *buf, uint64 len)
 {
     const uint8 *p = buf;
@@ -468,6 +602,118 @@ write_failed:
         free(fb);
     else
         munmap(fb, (int)map_len);
+    close(fbfd);
+    return 1;
+}
+
+static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
+                            uint32 h, int use_rect)
+{
+    struct fb_var_screeninfo info;
+    struct fb_gpu_scanout_read req;
+    uint8 *pixels;
+    int fbfd;
+    int outfd;
+    char header[64];
+    char row[4096];
+    uint64 size;
+
+    fbfd = open("/dev/fb0", O_RDWR);
+    if (fbfd < 0) {
+        fprintf(2, "fbstat: open /dev/fb0 failed\n");
+        return 1;
+    }
+    if (ioctl(fbfd, FBIOGET_VSCREENINFO, &info) < 0) {
+        fprintf(2, "fbstat: FBIOGET_VSCREENINFO failed\n");
+        close(fbfd);
+        return 1;
+    }
+    if (info.bits_per_pixel != 32) {
+        fprintf(2, "fbstat: unsupported fb bpp %u\n", info.bits_per_pixel);
+        close(fbfd);
+        return 1;
+    }
+    if (!use_rect) {
+        x = 0;
+        y = 0;
+        w = info.xres;
+        h = info.yres;
+    }
+    if (x >= info.xres || y >= info.yres || w == 0 || h == 0) {
+        fprintf(2, "fbstat: ppm-current rect outside %ux%u\n",
+                info.xres, info.yres);
+        close(fbfd);
+        return 1;
+    }
+    if (x + w > info.xres)
+        w = info.xres - x;
+    if (y + h > info.yres)
+        h = info.yres - y;
+    if (w * 3 > sizeof(row)) {
+        fprintf(2, "fbstat: ppm-current width too large: %u\n", w);
+        close(fbfd);
+        return 1;
+    }
+
+    size = (uint64)w * h * sizeof(uint32);
+    pixels = malloc((uint)size);
+    if (pixels == NULL) {
+        fprintf(2, "fbstat: ppm-current allocation failed\n");
+        close(fbfd);
+        return 1;
+    }
+
+    memset(&req, 0, sizeof(req));
+    req.x = x;
+    req.y = y;
+    req.w = w;
+    req.h = h;
+    req.pitch = w * sizeof(uint32);
+    req.pixels = (uint64)pixels;
+    if (ioctl(fbfd, FB_GPU_SCANOUT_READ, &req) < 0) {
+        fprintf(2, "fbstat: FB_GPU_SCANOUT_READ failed\n");
+        free(pixels);
+        close(fbfd);
+        return 1;
+    }
+
+    outfd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (outfd < 0) {
+        fprintf(2, "fbstat: open output failed: %s\n", path);
+        free(pixels);
+        close(fbfd);
+        return 1;
+    }
+
+    snprintf(header, sizeof(header), "P6\n%u %u\n255\n", w, h);
+    if (write_full(outfd, header, strlen(header)) != 0)
+        goto write_failed;
+    for (uint32 yy = 0; yy < h; yy++) {
+        uint32 *src = (uint32 *)(pixels + (uint64)yy * req.pitch);
+
+        for (uint32 xx = 0; xx < w; xx++) {
+            uint32 px = src[xx];
+
+            row[xx * 3 + 0] = (char)((px >> 16) & 0xff);
+            row[xx * 3 + 1] = (char)((px >> 8) & 0xff);
+            row[xx * 3 + 2] = (char)(px & 0xff);
+        }
+        if (write_full(outfd, row, (uint64)w * 3) != 0)
+            goto write_failed;
+    }
+
+    close(outfd);
+    free(pixels);
+    close(fbfd);
+    printf("fb_ppm_current path=%s screen=%ux%u scanout=%ux%u rect=%u,%u %ux%u\n",
+           path, info.xres, info.yres, req.screen_width, req.screen_height,
+           x, y, w, h);
+    return 0;
+
+write_failed:
+    fprintf(2, "fbstat: write output failed: %s\n", path);
+    close(outfd);
+    free(pixels);
     close(fbfd);
     return 1;
 }
@@ -712,8 +958,12 @@ int main(int argc, char *argv[])
 
     if (argc == 6 && strcmp(argv[1], "sample") == 0)
         return sample_rect(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 6 && strcmp(argv[1], "sample-current") == 0)
+        return sample_current_rect(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 3 && strcmp(argv[1], "ppm") == 0)
         return dump_ppm(argv[2], 0, 0, 0, 0, 0);
+    if (argc == 3 && strcmp(argv[1], "ppm-current") == 0)
+        return dump_ppm_current(argv[2], 0, 0, 0, 0, 0);
     if (argc == 7 && strcmp(argv[1], "ppm") == 0) {
         uint32 x, y, w, h;
 
@@ -725,6 +975,18 @@ int main(int argc, char *argv[])
             return 1;
         }
         return dump_ppm(argv[2], x, y, w, h, 1);
+    }
+    if (argc == 7 && strcmp(argv[1], "ppm-current") == 0) {
+        uint32 x, y, w, h;
+
+        if (parse_u32_arg(argv[3], &x) != 0 ||
+            parse_u32_arg(argv[4], &y) != 0 ||
+            parse_u32_arg(argv[5], &w) != 0 ||
+            parse_u32_arg(argv[6], &h) != 0) {
+            fprintf(2, "usage: fbstat ppm-current <path> [x y w h]\n");
+            return 1;
+        }
+        return dump_ppm_current(argv[2], x, y, w, h, 1);
     }
 
     if (argc == 2) {
@@ -4074,6 +4336,40 @@ int main(int argc, char *argv[])
     printf("virtio_last_fence %lu\n", stats.virtio_last_fence);
     printf("virtio_irq_completions %lu\n", stats.virtio_irq_completions);
     printf("virtio_poll_fallbacks %lu\n", stats.virtio_poll_fallbacks);
+    printf("virtio_async_posted %lu\n", stats.virtio_async_posted);
+    printf("virtio_async_posted_submit_3d %lu\n",
+           stats.virtio_async_posted_submit_3d);
+    printf("virtio_async_posted_flush %lu\n",
+           stats.virtio_async_posted_flush);
+    printf("virtio_async_posted_transfer %lu\n",
+           stats.virtio_async_posted_transfer);
+    printf("virtio_async_retired %lu\n", stats.virtio_async_retired);
+    printf("virtio_async_pending %lu\n", stats.virtio_async_pending);
+    printf("virtio_async_depth %lu\n", stats.virtio_async_depth);
+    printf("virtio_async_make_room_calls %lu\n",
+           stats.virtio_async_make_room_calls);
+    printf("virtio_async_make_room_submit_3d_calls %lu\n",
+           stats.virtio_async_make_room_submit_3d_calls);
+    printf("virtio_async_make_room_flush_calls %lu\n",
+           stats.virtio_async_make_room_flush_calls);
+    printf("virtio_async_make_room_transfer_calls %lu\n",
+           stats.virtio_async_make_room_transfer_calls);
+    printf("virtio_async_make_room_stalls %lu\n",
+           stats.virtio_async_make_room_stalls);
+    printf("virtio_async_make_room_submit_3d_stalls %lu\n",
+           stats.virtio_async_make_room_submit_3d_stalls);
+    printf("virtio_async_make_room_flush_stalls %lu\n",
+           stats.virtio_async_make_room_flush_stalls);
+    printf("virtio_async_make_room_transfer_stalls %lu\n",
+           stats.virtio_async_make_room_transfer_stalls);
+    printf("virtio_async_wait_progress_calls %lu\n",
+           stats.virtio_async_wait_progress_calls);
+    printf("virtio_async_make_room_wait_ticks %lu\n",
+           stats.virtio_async_make_room_wait_ticks);
+    printf("virtio_async_make_room_last_wait_us %lu\n",
+           stats.virtio_async_make_room_last_wait_us);
+    printf("virtio_async_make_room_max_wait_us %lu\n",
+           stats.virtio_async_make_room_max_wait_us);
     printf("virgl_bo_presents %lu\n", stats.virgl_bo_presents);
     printf("virgl_bo_present_pixels %lu\n",
            stats.virgl_bo_present_pixels);
