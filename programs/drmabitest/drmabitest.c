@@ -1055,6 +1055,76 @@ static void probe_dumb_bo(struct drm_node *node)
         close(prime_fd);
     }
 
+    memset(&prime, 0, sizeof(prime));
+    prime.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime);
+    if (ret == 0 && prime.fd >= 0) {
+        int child_status = -1;
+        int child = fork();
+
+        if (child == 0) {
+            int child_fd = open(node->path, 0);
+            struct drm_mode_create_dumb_compat child_dummy;
+            struct drm_prime_handle_compat child_import;
+            struct drm_mode_destroy_dumb_compat child_destroy;
+            struct drm_gem_close_compat child_close;
+            int dummy_ret;
+            int import_ret;
+            int close_ret = -999;
+            int destroy_ret = -999;
+
+            memset(&child_dummy, 0, sizeof(child_dummy));
+            child_dummy.width = 16;
+            child_dummy.height = 16;
+            child_dummy.bpp = 32;
+            dummy_ret = child_fd >= 0 ?
+                call_ioctl(child_fd, DRM_IOCTL_MODE_CREATE_DUMB,
+                           &child_dummy) : -EBADF;
+            memset(&child_import, 0, sizeof(child_import));
+            child_import.fd = prime.fd;
+            import_ret = child_fd >= 0 ?
+                call_ioctl(child_fd, DRM_IOCTL_PRIME_FD_TO_HANDLE,
+                           &child_import) : -EBADF;
+            if (import_ret == 0) {
+                memset(&child_close, 0, sizeof(child_close));
+                child_close.handle = child_import.handle;
+                close_ret = call_ioctl(child_fd, DRM_IOCTL_GEM_CLOSE,
+                                       &child_close);
+            }
+            if (dummy_ret == 0) {
+                memset(&child_destroy, 0, sizeof(child_destroy));
+                child_destroy.handle = child_dummy.handle;
+                destroy_ret = call_ioctl(child_fd,
+                                         DRM_IOCTL_MODE_DESTROY_DUMB,
+                                         &child_destroy);
+            }
+            printf("%s:DRM_IOCTL_PRIME_FD_TO_HANDLE.cross_owner.child: "
+                   "open=%d dummy=%d dummy_handle=%u import=%d errno=%d "
+                   "child_handle=%u parent_handle=%u different=%u "
+                   "close=%d close_errno=%d destroy=%d destroy_errno=%d\n",
+                   node->name, child_fd, dummy_ret, child_dummy.handle,
+                   import_ret, saved_errno(import_ret), child_import.handle,
+                   create.handle, child_import.handle != create.handle,
+                   close_ret, saved_errno(close_ret), destroy_ret,
+                   saved_errno(destroy_ret));
+            if (child_fd >= 0)
+                close(child_fd);
+            exit(dummy_ret == 0 && import_ret == 0 && close_ret == 0 &&
+                 destroy_ret == 0 && child_import.handle != 0 &&
+                 child_import.handle != create.handle ? 0 : 1);
+        }
+        if (child > 0)
+            wait(&child_status);
+
+        memset(&map, 0, sizeof(map));
+        map.handle = create.handle;
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+        printf("%s:DRM_IOCTL_PRIME_FD_TO_HANDLE.cross_owner.parent: "
+               "child_status=%d map=%d errno=%d offset=%lu\n",
+               node->name, child_status, ret, saved_errno(ret), map.offset);
+        close(prime.fd);
+    }
+
     memset(&flink, 0, sizeof(flink));
     flink.handle = create.handle;
     ret = call_ioctl(node->fd, DRM_IOCTL_GEM_FLINK, &flink);
