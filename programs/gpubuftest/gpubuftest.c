@@ -207,15 +207,49 @@ static int verify_render_fd_ownership(void)
 
     memset(&test_import_fd, 0, sizeof(test_import_fd));
     test_import_fd.fd = test_export_fd.fd;
+    uint32 *test_pixels = (uint32 *)mmap(0, (int)create.size,
+                                         PROT_READ | PROT_WRITE,
+                                         MAP_SHARED, test_export_fd.fd, 0);
+    if (test_pixels == MAP_FAILED) {
+        printf("gpubuftest: generic test dma_buf mmap failed\n");
+        close(test_export_fd.fd);
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    test_pixels[0] = 0xff314159U;
+    test_pixels[(create.size / sizeof(uint32)) - 1] = 0xff271828U;
+
     if (ioctl(fd2, FB_GPU_BO_IMPORT_FD, &test_import_fd) < 0 ||
         test_import_fd.handle == 0 || test_import_fd.addr == 0 ||
         test_import_fd.width != create.width ||
         test_import_fd.height != create.height) {
         printf("gpubuftest: generic test dma_buf import failed\n");
+        munmap((void *)test_pixels, (int)create.size);
         close(test_export_fd.fd);
         close(export_fd.fd);
         goto out_unmap;
     }
+    uint32 *import_pixels = (uint32 *)(uintptr_t)test_import_fd.addr;
+    if (import_pixels[0] != 0xff314159U ||
+        import_pixels[(test_import_fd.size / sizeof(uint32)) - 1] !=
+            0xff271828U) {
+        printf("gpubuftest: generic test dma_buf mmap pixels mismatch\n");
+        munmap((void *)test_pixels, (int)create.size);
+        munmap((void *)test_import_fd.addr, (int)test_import_fd.size);
+        close(test_export_fd.fd);
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    import_pixels[1] = 0xff123456U;
+    if (test_pixels[1] != 0xff123456U) {
+        printf("gpubuftest: generic test dma_buf mmap writeback failed\n");
+        munmap((void *)test_pixels, (int)create.size);
+        munmap((void *)test_import_fd.addr, (int)test_import_fd.size);
+        close(test_export_fd.fd);
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    munmap((void *)test_pixels, (int)create.size);
     close(test_export_fd.fd);
     memset(&destroy, 0, sizeof(destroy));
     destroy.handle = test_import_fd.handle;
@@ -226,7 +260,7 @@ static int verify_render_fd_ownership(void)
         goto out_unmap;
     }
     munmap((void *)test_import_fd.addr, (int)test_import_fd.size);
-    printf("gpubuftest: generic test dma_buf import verified handle=%u\n",
+    printf("gpubuftest: generic test dma_buf mmap/import verified handle=%u\n",
            test_import_fd.handle);
 
     close(fd1);
