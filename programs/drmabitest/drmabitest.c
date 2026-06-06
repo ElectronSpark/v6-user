@@ -8,6 +8,13 @@
 
 #define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
+#define VIRGL_CCMD_NOP 0
+#define VIRGL_CMD0(cmd, obj, len) ((cmd) | ((obj) << 8) | ((len) << 16))
+#define VIRGL_FORMAT_B8G8R8A8_UNORM 1
+#define VIRGL_BIND_RENDER_TARGET (1u << 1)
+#define VIRGL_BIND_SAMPLER_VIEW (1u << 3)
+#define PIPE_TEXTURE_2D 2
+
 struct drm_node {
     const char *name;
     const char *path;
@@ -2035,6 +2042,87 @@ static void probe_virtgpu(struct drm_node *node)
     }
 }
 
+static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
+{
+    struct drm_virtgpu_resource_create_compat create;
+    struct drm_virtgpu_execbuffer_compat exec;
+    struct drm_gem_close_compat close_req;
+    struct pollfd pfd;
+    uint32 nop = VIRGL_CMD0(VIRGL_CCMD_NOP, 0, 0);
+    uint32 handles[1];
+    int create_ret;
+    int exec_out_ret = -999;
+    int exec_inout_ret = -999;
+    int poll_ret = -999;
+    int first_fd = -1;
+    int second_fd = -1;
+
+    memset(&create, 0, sizeof(create));
+    create.target = PIPE_TEXTURE_2D;
+    create.format = VIRGL_FORMAT_B8G8R8A8_UNORM;
+    create.bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW;
+    create.width = 16;
+    create.height = 16;
+    create.depth = 1;
+    create.array_size = 1;
+    create.size = 16 * 16 * 4;
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE,
+                            &create);
+
+    if (create_ret == 0 && create.bo_handle != 0) {
+        handles[0] = create.bo_handle;
+
+        memset(&exec, 0, sizeof(exec));
+        exec.flags = VIRTGPU_EXECBUF_FENCE_FD_OUT;
+        exec.size = sizeof(nop);
+        exec.command = (uint64)&nop;
+        exec.bo_handles = (uint64)handles;
+        exec.num_bo_handles = ARRAY_SIZE(handles);
+        exec.fence_fd = -1;
+        exec_out_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_EXECBUFFER,
+                                  &exec);
+        if (exec_out_ret == 0)
+            first_fd = exec.fence_fd;
+
+        if (first_fd >= 0) {
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = first_fd;
+            pfd.events = POLLIN;
+            poll_ret = poll(&pfd, 1, 0);
+
+            memset(&exec, 0, sizeof(exec));
+            exec.flags = VIRTGPU_EXECBUF_FENCE_FD_IN |
+                         VIRTGPU_EXECBUF_FENCE_FD_OUT;
+            exec.size = sizeof(nop);
+            exec.command = (uint64)&nop;
+            exec.bo_handles = (uint64)handles;
+            exec.num_bo_handles = ARRAY_SIZE(handles);
+            exec.fence_fd = first_fd;
+            exec_inout_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_EXECBUFFER,
+                                        &exec);
+            if (exec_inout_ret == 0)
+                second_fd = exec.fence_fd;
+        }
+    }
+
+    printf("%s:DRM_IOCTL_VIRTGPU_EXECBUFFER.sync_fd: create=%d "
+           "create_errno=%d handle=%u out=%d out_errno=%d first_fd=%d "
+           "poll=%d inout=%d inout_errno=%d second_fd=%d\n",
+           node->name, create_ret, saved_errno(create_ret), create.bo_handle,
+           exec_out_ret, saved_errno(exec_out_ret), first_fd, poll_ret,
+           exec_inout_ret, saved_errno(exec_inout_ret), second_fd);
+
+    if (second_fd >= 0)
+        close(second_fd);
+    if (first_fd >= 0)
+        close(first_fd);
+    if (create_ret == 0 && create.bo_handle != 0) {
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = create.bo_handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    }
+}
+
 static void probe_virtgpu_invalids(struct drm_node *node)
 {
     struct drm_virtgpu_resource_create_compat create;
@@ -2196,6 +2284,7 @@ static void probe_node(struct drm_node *node)
     probe_atomic_fences(node);
     probe_cursor_plane(node);
     probe_virtgpu(node);
+    probe_virtgpu_execbuffer_sync(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
 }
