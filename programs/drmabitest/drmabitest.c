@@ -1,4 +1,5 @@
 #include "kernel/inc/types.h"
+#include "kernel/inc/errno.h"
 #include "kernel/inc/uabi/drm.h"
 #include "kernel/inc/uabi/fcntl.h"
 #include "user/user.h"
@@ -609,6 +610,36 @@ static void probe_syncobj(struct drm_node *node)
     array.count_handles = 1;
     ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
     print_ret(node->name, "DRM_IOCTL_SYNCOBJ_RESET", ret);
+
+    if (ret == 0) {
+        int child = fork();
+
+        if (child == 0) {
+            sleep(50);
+            ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
+            printf("%s:DRM_IOCTL_SYNCOBJ_SIGNAL.blocking_child: ret=%d "
+                   "errno=%d\n",
+                   node->name, ret, saved_errno(ret));
+            exit(ret == 0 ? 0 : 1);
+        } else if (child < 0) {
+            printf("%s:DRM_IOCTL_SYNCOBJ_WAIT.blocking: ret=-1 errno=%d "
+                   "child=-1\n",
+                   node->name, EAGAIN);
+        } else {
+            int child_status = -1;
+
+            memset(&wait_req, 0, sizeof(wait_req));
+            wait_req.handles = (uint64)handles;
+            wait_req.count_handles = 1;
+            wait_req.timeout_nsec = 2000000000LL;
+            ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait_req);
+            wait(&child_status);
+            printf("%s:DRM_IOCTL_SYNCOBJ_WAIT.blocking: ret=%d errno=%d "
+                   "first=%u child_status=%d\n",
+                   node->name, ret, saved_errno(ret),
+                   wait_req.first_signaled, child_status);
+        }
+    }
 
     ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
     print_ret(node->name, "DRM_IOCTL_SYNCOBJ_SIGNAL", ret);
