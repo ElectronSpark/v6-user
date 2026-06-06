@@ -61,6 +61,15 @@ static int call_ioctl(int fd, uint64 request, void *arg)
 }
 
 #if defined(__riscv)
+static inline int64 raw_syscall2(int num, int64 a, int64 b)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    register int64 a1 asm("a1") = b;
+    asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a7) : "memory");
+    return a0;
+}
+
 static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
 {
     register int64 a7 asm("a7") = num;
@@ -71,6 +80,15 @@ static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
     return a0;
 }
 #elif defined(__x86_64__)
+static inline int64 raw_syscall2(int num, int64 a, int64 b)
+{
+    int64 ret;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a), "S"(b)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
 static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
 {
     int64 ret;
@@ -86,6 +104,11 @@ static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
 static int poll_raw(struct pollfd *fds, int nfds, int timeout)
 {
     return (int)raw_syscall3(SYS_poll, (int64)fds, nfds, timeout);
+}
+
+static int eventfd2_raw(uint32 initval, int flags)
+{
+    return (int)raw_syscall2(SYS_eventfd2, initval, flags);
 }
 
 static void probe_version(struct drm_node *node)
@@ -877,6 +900,91 @@ static void probe_syncobj(struct drm_node *node)
             print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.poll_source",
                       call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
                                  &poll_destroy));
+        }
+    }
+
+    {
+        struct drm_syncobj_create_compat ev_create;
+        struct drm_syncobj_eventfd_compat ev_req;
+        struct drm_syncobj_array_compat ev_array;
+        struct drm_syncobj_destroy_compat ev_destroy;
+        struct pollfd pfd;
+        uint64 event_value = 0;
+        int create_ret;
+        int event_fd = -1;
+        int arm_ret = -1;
+        int poll0_ret = -1;
+        int poll_ret = -1;
+        int read_ret = -1;
+        int child_status = -1;
+        short poll0_revents = 0;
+
+        memset(&ev_create, 0, sizeof(ev_create));
+        create_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                                &ev_create);
+        if (create_ret == 0)
+            event_fd = eventfd2_raw(0, 0);
+        if (create_ret == 0 && event_fd >= 0) {
+            memset(&ev_req, 0, sizeof(ev_req));
+            ev_req.handle = ev_create.handle;
+            ev_req.fd = event_fd;
+            arm_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                 &ev_req);
+        }
+        if (arm_ret == 0) {
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = event_fd;
+            pfd.events = POLLIN;
+            poll0_ret = poll_raw(&pfd, 1, 0);
+            poll0_revents = pfd.revents;
+
+            int child = fork();
+
+            if (child == 0) {
+                sleep(50);
+                memset(&ev_array, 0, sizeof(ev_array));
+                handles[0] = ev_create.handle;
+                ev_array.handles = (uint64)handles;
+                ev_array.count_handles = 1;
+                ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL,
+                                 &ev_array);
+                printf("%s:DRM_IOCTL_SYNCOBJ_SIGNAL.eventfd_child: ret=%d "
+                       "errno=%d\n",
+                       node->name, ret, saved_errno(ret));
+                exit(ret == 0 ? 0 : 1);
+            } else if (child >= 0) {
+                memset(&pfd, 0, sizeof(pfd));
+                pfd.fd = event_fd;
+                pfd.events = POLLIN;
+                poll_ret = poll_raw(&pfd, 1, 2000);
+                if (poll_ret > 0)
+                    read_ret = read(event_fd, &event_value,
+                                    sizeof(event_value));
+                wait(&child_status);
+            } else {
+                child_status = -EAGAIN;
+            }
+            printf("%s:DRM_IOCTL_SYNCOBJ_EVENTFD.blocking: create=%d "
+                   "eventfd=%d arm=%d poll0=%d poll0_revents=0x%x poll=%d "
+                   "errno=%d revents=0x%x read=%d value=%lu "
+                   "child_status=%d\n",
+                   node->name, create_ret, event_fd, arm_ret, poll0_ret,
+                   (uint32)poll0_revents, poll_ret, saved_errno(poll_ret),
+                   (uint32)pfd.revents, read_ret, event_value, child_status);
+        } else {
+            printf("%s:DRM_IOCTL_SYNCOBJ_EVENTFD.blocking: create=%d "
+                   "eventfd=%d arm=%d errno=%d\n",
+                   node->name, create_ret, event_fd, arm_ret,
+                   saved_errno(arm_ret));
+        }
+        if (event_fd >= 0)
+            close(event_fd);
+        if (create_ret == 0) {
+            memset(&ev_destroy, 0, sizeof(ev_destroy));
+            ev_destroy.handle = ev_create.handle;
+            print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.eventfd_source",
+                      call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                                 &ev_destroy));
         }
     }
 
