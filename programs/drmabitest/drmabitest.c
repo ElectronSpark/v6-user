@@ -453,6 +453,21 @@ static int atomic_commit_props(struct drm_node *node, uint32 *objs,
     return call_ioctl(node->fd, DRM_IOCTL_MODE_ATOMIC, &atomic);
 }
 
+static int get_plane_fb_id(struct drm_node *node, uint32 plane_id,
+                           uint32 *fb_id)
+{
+    struct drm_mode_get_plane_compat plane;
+
+    if (fb_id == NULL)
+        return -EINVAL;
+    memset(&plane, 0, sizeof(plane));
+    plane.plane_id = plane_id;
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANE, &plane) != 0)
+        return -1;
+    *fb_id = plane.fb_id;
+    return 0;
+}
+
 static void probe_plane(struct drm_node *node, uint32 plane_id)
 {
     struct drm_mode_get_plane_compat plane;
@@ -1528,6 +1543,14 @@ static void probe_atomic_fences(struct drm_node *node)
     int atomic_ret = -999;
     int poll_ret = -999;
     int signal_ret = -999;
+    uint32 rollback_before = 0;
+    uint32 rollback_after_test = 0;
+    uint32 rollback_after_real = 0;
+    int rollback_query_before = -999;
+    int rollback_query_after_test = -999;
+    int rollback_query_after_real = -999;
+    int rollback_test_ret = -999;
+    int rollback_real_ret = -999;
 
     memset(&res, 0, sizeof(res));
     memset(crtcs, 0, sizeof(crtcs));
@@ -1641,6 +1664,25 @@ static void probe_atomic_fences(struct drm_node *node)
             pfd.events = POLLIN | POLLOUT;
             poll_ret = poll_raw(&pfd, 1, 0);
         }
+
+        rollback_query_before =
+            get_plane_fb_id(node, plane_id, &rollback_before);
+        objs[0] = crtc_id;
+        counts[0] = 1;
+        props[0] = crtc_out_fence_prop;
+        values[0] = 0;
+        objs[1] = plane_id;
+        counts[1] = 1;
+        props[1] = plane_crtc_prop;
+        values[1] = 0xfeedfaceU;
+        rollback_test_ret = atomic_commit_props(
+            node, objs, counts, 2, props, values, DRM_MODE_ATOMIC_TEST_ONLY);
+        rollback_query_after_test =
+            get_plane_fb_id(node, plane_id, &rollback_after_test);
+        rollback_real_ret = atomic_commit_props(
+            node, objs, counts, 2, props, values, 0);
+        rollback_query_after_real =
+            get_plane_fb_id(node, plane_id, &rollback_after_real);
     }
 
     printf("%s:DRM_IOCTL_MODE_ATOMIC.fences: kms=%d crtc=%u plane=%u "
@@ -1653,6 +1695,19 @@ static void probe_atomic_fences(struct drm_node *node)
            sync_create_ret, sync_export_ret, sync_fd, atomic_ret,
            saved_errno(atomic_ret), out_fence, poll_ret,
            out_fence >= 0 ? pfd.revents : 0, child_status);
+    printf("%s:DRM_IOCTL_MODE_ATOMIC.check_rollback: before_q=%d "
+           "before=%u test_ret=%d test_errno=%d after_test_q=%d "
+           "after_test=%u test_unchanged=%d real_ret=%d real_errno=%d "
+           "after_real_q=%d after_real=%u real_unchanged=%d\n",
+           node->name, rollback_query_before, rollback_before,
+           rollback_test_ret, saved_errno(rollback_test_ret),
+           rollback_query_after_test, rollback_after_test,
+           rollback_query_before == 0 && rollback_query_after_test == 0 &&
+               rollback_after_test == rollback_before,
+           rollback_real_ret, saved_errno(rollback_real_ret),
+           rollback_query_after_real, rollback_after_real,
+           rollback_query_before == 0 && rollback_query_after_real == 0 &&
+               rollback_after_real == rollback_before);
 
     if (out_fence >= 0)
         close(out_fence);
