@@ -347,6 +347,24 @@ static void probe_connector(struct drm_node *node, uint32 connector_id)
            node->name, ret, saved_errno(ret), connector_id, conn.count_modes,
            conn.count_props, conn.count_encoders, conn.encoder_id,
            conn.count_modes > 0 ? modes[0].name : "");
+    if (ret == 0) {
+        uint32 mode_print_count = conn.count_modes;
+        int preferred_count = 0;
+
+        if (mode_print_count > ARRAY_SIZE(modes))
+            mode_print_count = ARRAY_SIZE(modes);
+        for (uint32 i = 0; i < mode_print_count; i++) {
+            if ((modes[i].type & DRM_MODE_TYPE_PREFERRED) != 0)
+                preferred_count++;
+            printf("%s:DRM_IOCTL_MODE_GETCONNECTOR.mode%u: name=\"%s\" "
+                   "size=%ux%u refresh=%u type=0x%x flags=0x%x\n",
+                   node->name, i, modes[i].name, modes[i].hdisplay,
+                   modes[i].vdisplay, modes[i].vrefresh, modes[i].type,
+                   modes[i].flags);
+        }
+        printf("%s:DRM_CONNECTOR_MODES.valid: modes=%u preferred=%d\n",
+               node->name, conn.count_modes, preferred_count);
+    }
 }
 
 static void probe_property(struct drm_node *node, uint32 prop_id)
