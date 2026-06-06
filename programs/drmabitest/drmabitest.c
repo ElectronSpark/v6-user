@@ -475,7 +475,10 @@ static void probe_kms(struct drm_node *node)
     if (res.count_crtcs > 0) {
         struct drm_mode_crtc_compat crtc;
         struct drm_crtc_get_sequence_compat seq;
+        union drm_wait_vblank_compat wait_vblank;
         struct drm_crtc_queue_sequence_compat queue_seq;
+        uint64 start_sequence;
+        int64 start_ns;
 
         memset(&crtc, 0, sizeof(crtc));
         crtc.crtc_id = crtcs[0];
@@ -492,6 +495,24 @@ static void probe_kms(struct drm_node *node)
                "active=%u sequence=%lu ns=%ld\n",
                node->name, ret, saved_errno(ret), crtcs[0], seq.active,
                seq.sequence, seq.sequence_ns);
+        start_sequence = seq.sequence;
+        start_ns = seq.sequence_ns;
+
+        memset(&wait_vblank, 0, sizeof(wait_vblank));
+        wait_vblank.request.sequence = (uint32)start_sequence;
+        ret = call_ioctl(node->fd, DRM_IOCTL_WAIT_VBLANK, &wait_vblank);
+        printf("%s:DRM_IOCTL_WAIT_VBLANK.real_present: ret=%d errno=%d "
+               "start=%lu reply=%u advanced=%d start_ns=%ld reply_us=%ld "
+               "monotonic=%d\n",
+               node->name, ret, saved_errno(ret), start_sequence,
+               wait_vblank.reply.sequence,
+               ret == 0 && wait_vblank.reply.sequence > start_sequence,
+               start_ns,
+               (int64)wait_vblank.reply.tval_sec * 1000000LL +
+                   wait_vblank.reply.tval_usec,
+               ret == 0 &&
+                   ((int64)wait_vblank.reply.tval_sec * 1000000000LL +
+                    wait_vblank.reply.tval_usec * 1000LL) >= start_ns);
 
         memset(&queue_seq, 0, sizeof(queue_seq));
         queue_seq.crtc_id = crtcs[0];
