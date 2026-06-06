@@ -1493,11 +1493,29 @@ static void probe_dumb_bo(struct drm_node *node)
     }
 
     {
+        struct drm_mode_fb_cmd_compat addfb;
         struct drm_mode_fb_cmd2_compat addfb2;
         struct drm_mode_fb_cmd_compat getfb;
         struct drm_mode_fb_cmd2_compat getfb2;
         struct drm_mode_closefb_compat closefb;
         uint32 rmfb;
+
+        memset(&addfb, 0, sizeof(addfb));
+        addfb.width = create.width;
+        addfb.height = create.height;
+        addfb.pitch = create.pitch;
+        addfb.bpp = 32;
+        addfb.depth = 24;
+        addfb.handle = create.handle;
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB, &addfb);
+        print_ret_u32(node->name, "DRM_IOCTL_MODE_ADDFB.valid", ret,
+                      addfb.fb_id);
+        if (ret == 0 && addfb.fb_id != 0) {
+            rmfb = addfb.fb_id;
+            ret = call_ioctl(node->fd, DRM_IOCTL_MODE_RMFB, &rmfb);
+            print_ret(node->name, "DRM_IOCTL_MODE_RMFB.legacy_addfb",
+                      ret);
+        }
 
         memset(&addfb2, 0, sizeof(addfb2));
         addfb2.width = create.width;
