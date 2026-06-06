@@ -1185,6 +1185,125 @@ static void probe_dumb_bo(struct drm_node *node)
     flink.handle = create.handle;
     ret = call_ioctl(node->fd, DRM_IOCTL_GEM_FLINK, &flink);
     print_ret_u32(node->name, "DRM_IOCTL_GEM_FLINK.valid", ret, flink.name);
+    if (ret == 0 && flink.name != 0) {
+        uint32 *parent_pixels;
+        uint32 parent_first = 0;
+        uint32 parent_child_write = 0;
+        uint32 pattern_first = 0xff13579b;
+        uint32 pattern_last = 0xff2468ac;
+        int child_status = -1;
+        int child = fork();
+
+        memset(&map, 0, sizeof(map));
+        map.handle = create.handle;
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+        parent_pixels = ret == 0 ?
+            mmap(0, (int)create.size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                 node->fd, map.offset) : MAP_FAILED;
+        if (parent_pixels != MAP_FAILED) {
+            parent_pixels[0] = pattern_first;
+            parent_pixels[(create.height - 1) * (create.pitch / 4) +
+                          (create.width - 1)] = pattern_last;
+        }
+
+        if (child == 0) {
+            int child_fd = open(node->path, 0);
+            struct drm_mode_create_dumb_compat child_dummy;
+            struct drm_mode_destroy_dumb_compat child_destroy;
+            struct drm_mode_map_dumb_compat child_map;
+            struct drm_gem_open_compat child_open;
+            struct drm_gem_close_compat child_close;
+            uint32 *child_pixels = MAP_FAILED;
+            uint32 child_first = 0;
+            uint32 child_last = 0;
+            int dummy_ret;
+            int open_ret;
+            int map_ret = -999;
+            int close_ret = -999;
+            int destroy_ret = -999;
+
+            memset(&child_dummy, 0, sizeof(child_dummy));
+            child_dummy.width = 16;
+            child_dummy.height = 16;
+            child_dummy.bpp = 32;
+            dummy_ret = child_fd >= 0 ?
+                call_ioctl(child_fd, DRM_IOCTL_MODE_CREATE_DUMB,
+                           &child_dummy) : -EBADF;
+            memset(&child_open, 0, sizeof(child_open));
+            child_open.name = flink.name;
+            open_ret = child_fd >= 0 ?
+                call_ioctl(child_fd, DRM_IOCTL_GEM_OPEN, &child_open) :
+                -EBADF;
+            if (open_ret == 0) {
+                memset(&child_map, 0, sizeof(child_map));
+                child_map.handle = child_open.handle;
+                map_ret = call_ioctl(child_fd, DRM_IOCTL_MODE_MAP_DUMB,
+                                     &child_map);
+                if (map_ret == 0) {
+                    child_pixels = mmap(0, (int)child_open.size,
+                                        PROT_READ | PROT_WRITE, MAP_SHARED,
+                                        child_fd, child_map.offset);
+                    if (child_pixels != MAP_FAILED) {
+                        child_first = child_pixels[0];
+                        child_last =
+                            child_pixels[(create.height - 1) *
+                                         (create.pitch / 4) +
+                                         (create.width - 1)];
+                        child_pixels[2] = 0xff102030;
+                    }
+                }
+                memset(&child_close, 0, sizeof(child_close));
+                child_close.handle = child_open.handle;
+                close_ret = call_ioctl(child_fd, DRM_IOCTL_GEM_CLOSE,
+                                       &child_close);
+            }
+            if (dummy_ret == 0) {
+                memset(&child_destroy, 0, sizeof(child_destroy));
+                child_destroy.handle = child_dummy.handle;
+                destroy_ret = call_ioctl(child_fd,
+                                         DRM_IOCTL_MODE_DESTROY_DUMB,
+                                         &child_destroy);
+            }
+            printf("%s:DRM_IOCTL_GEM_OPEN.cross_owner.child: open_fd=%d "
+                   "dummy=%d dummy_handle=%u open=%d errno=%d "
+                   "name=%u child_handle=%u parent_handle=%u size=%lu "
+                   "different=%u map=%d map_errno=%d same_pixels=%u "
+                   "child_first=0x%x child_last=0x%x close=%d "
+                   "close_errno=%d destroy=%d destroy_errno=%d\n",
+                   node->name, child_fd, dummy_ret, child_dummy.handle,
+                   open_ret, saved_errno(open_ret), flink.name,
+                   child_open.handle, create.handle, child_open.size,
+                   child_open.handle != create.handle, map_ret,
+                   saved_errno(map_ret),
+                   child_first == pattern_first && child_last == pattern_last,
+                   child_first, child_last, close_ret, saved_errno(close_ret),
+                   destroy_ret, saved_errno(destroy_ret));
+            if (child_pixels != MAP_FAILED)
+                munmap((void *)child_pixels, (int)child_open.size);
+            if (child_fd >= 0)
+                close(child_fd);
+            exit(dummy_ret == 0 && open_ret == 0 && map_ret == 0 &&
+                 close_ret == 0 && destroy_ret == 0 &&
+                 child_open.handle != 0 &&
+                 child_first == pattern_first &&
+                 child_last == pattern_last ? 0 : 1);
+        }
+        if (child > 0)
+            wait(&child_status);
+        if (parent_pixels != MAP_FAILED) {
+            parent_first = parent_pixels[0];
+            parent_child_write = parent_pixels[2];
+            munmap((void *)parent_pixels, (int)create.size);
+        }
+        memset(&map, 0, sizeof(map));
+        map.handle = create.handle;
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+        printf("%s:DRM_IOCTL_GEM_OPEN.cross_owner.parent: child_status=%d "
+               "map=%d errno=%d offset=%lu parent_first=0x%x "
+               "child_write=0x%x\n",
+               node->name, child_status, ret, saved_errno(ret), map.offset,
+               parent_first, parent_child_write);
+    }
 
     {
         struct drm_mode_fb_cmd2_compat addfb2;
