@@ -613,6 +613,74 @@ static void probe_kms_invalids(struct drm_node *node)
               call_ioctl(node->fd, DRM_IOCTL_MODE_CLOSEFB, &closefb));
 }
 
+static void probe_prop_blobs(struct drm_node *node)
+{
+    static const uint8 mode_blob_payload[64] = {
+        0x21, 0x43, 0x65, 0x87, 0xaa, 0x55, 0x19, 0x83,
+        0x10, 0x32, 0x54, 0x76, 0xfe, 0xdc, 0xba, 0x98,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+        0x42, 0x24, 0x66, 0x99, 0x11, 0x22, 0x33, 0x44,
+        0x55, 0x66, 0x77, 0x88, 0x13, 0x57, 0x9b, 0xdf,
+        0x20, 0x26, 0x06, 0x06, 0x12, 0x34, 0x56, 0x78,
+        0x87, 0x65, 0x43, 0x21, 0xbe, 0xef, 0xca, 0xfe,
+    };
+    uint8 readback[sizeof(mode_blob_payload)];
+    struct drm_mode_create_blob_compat create;
+    struct drm_mode_get_blob_compat get_probe;
+    struct drm_mode_get_blob_compat get_read;
+    struct drm_mode_get_blob_compat get_after_destroy;
+    struct drm_mode_destroy_blob_compat destroy;
+    int create_ret;
+    int probe_ret;
+    int read_ret;
+    int destroy_ret;
+    int after_destroy_ret;
+    int match = 0;
+
+    memset(readback, 0, sizeof(readback));
+    memset(&create, 0, sizeof(create));
+    create.data = (uint64)mode_blob_payload;
+    create.length = sizeof(mode_blob_payload);
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &create);
+
+    memset(&get_probe, 0, sizeof(get_probe));
+    get_probe.blob_id = create.blob_id;
+    probe_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPBLOB, &get_probe);
+
+    memset(&get_read, 0, sizeof(get_read));
+    get_read.blob_id = create.blob_id;
+    get_read.data = (uint64)readback;
+    get_read.length = sizeof(readback);
+    read_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPBLOB, &get_read);
+    if (read_ret == 0 && get_read.length == sizeof(mode_blob_payload) &&
+        memcmp(readback, mode_blob_payload, sizeof(mode_blob_payload)) == 0)
+        match = 1;
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.blob_id = create.blob_id;
+    destroy_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROYPROPBLOB,
+                             &destroy);
+
+    memset(&get_after_destroy, 0, sizeof(get_after_destroy));
+    get_after_destroy.blob_id = create.blob_id;
+    after_destroy_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPBLOB,
+                                   &get_after_destroy);
+
+    printf("%s:DRM_IOCTL_MODE_CREATEPROPBLOB.mode_id_roundtrip: "
+           "create=%d create_errno=%d blob=%u probe=%d probe_errno=%d "
+           "probe_len=%u read=%d read_errno=%d read_len=%u match=%d "
+           "destroy=%d destroy_errno=%d after_destroy=%d "
+           "after_destroy_errno=%d\n",
+           node->name, create_ret, saved_errno(create_ret), create.blob_id,
+           probe_ret, saved_errno(probe_ret),
+           probe_ret == 0 ? get_probe.length : 0,
+           read_ret, saved_errno(read_ret),
+           read_ret == 0 ? get_read.length : 0,
+           match, destroy_ret, saved_errno(destroy_ret), after_destroy_ret,
+           saved_errno(after_destroy_ret));
+}
+
 static void probe_syncobj(struct drm_node *node)
 {
     struct drm_syncobj_create_compat create;
@@ -1452,6 +1520,7 @@ static void probe_safe_invalids(struct drm_node *node)
               call_ioctl(node->fd, DRM_IOCTL_GEM_OPEN, &gem_open));
 
     memset(&create_blob, 0, sizeof(create_blob));
+    create_blob.length = 16;
     print_ret_u32(node->name, "DRM_IOCTL_MODE_CREATEPROPBLOB.invalid",
                   call_ioctl(node->fd, DRM_IOCTL_MODE_CREATEPROPBLOB,
                              &create_blob),
@@ -1537,6 +1606,7 @@ static void probe_node(struct drm_node *node)
     probe_legacy_core_stubs(node);
     probe_kms(node);
     probe_kms_invalids(node);
+    probe_prop_blobs(node);
     probe_syncobj(node);
     probe_dumb_bo(node);
     probe_virtgpu(node);
