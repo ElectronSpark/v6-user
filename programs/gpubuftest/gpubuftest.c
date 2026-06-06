@@ -67,6 +67,7 @@ static uint32 pattern_pixel(uint32 x, uint32 y, int loop)
 static int verify_fullscreen_bo_present(int fd)
 {
     struct fb_var_screeninfo info;
+    struct fb_fix_screeninfo fix;
     struct fb_gpu_bo_create create;
     struct fb_gpu_bo_present present;
     uint32 *readback;
@@ -80,7 +81,8 @@ static int verify_fullscreen_bo_present(int fd)
     int ret = 1;
 
     if (ioctl(fd, FBIOGET_VSCREENINFO, &info) < 0 ||
-        info.xres == 0 || info.yres == 0 || info.pitch == 0) {
+        ioctl(fd, FBIOGET_FSCREENINFO, &fix) < 0 ||
+        info.xres == 0 || info.yres == 0 || fix.line_length == 0) {
         printf("gpubuftest: FBIOGET_VSCREENINFO failed\n");
         return 1;
     }
@@ -107,13 +109,13 @@ static int verify_fullscreen_bo_present(int fd)
         goto out;
     }
 
-    readback = malloc((uint)(info.pitch * info.yres));
+    readback = malloc((uint)(fix.line_length * info.yres));
     if (!readback) {
         printf("gpubuftest: readback malloc failed\n");
         goto out;
     }
-    if (read(fd, readback, (int)(info.pitch * info.yres)) !=
-        (int)(info.pitch * info.yres)) {
+    if (read(fd, readback, (int)(fix.line_length * info.yres)) !=
+        (int)(fix.line_length * info.yres)) {
         printf("gpubuftest: framebuffer readback failed\n");
         free(readback);
         goto out;
@@ -127,7 +129,7 @@ static int verify_fullscreen_bo_present(int fd)
 
         if (x >= info.xres || y >= info.yres)
             continue;
-        got = readback[y * (info.pitch / 4) + x];
+        got = readback[y * (fix.line_length / 4) + x];
         want = pattern_pixel(x, y, 23);
         if (got != want) {
             printf("gpubuftest: fullscreen mismatch x=%u y=%u got=%x want=%x\n",

@@ -170,6 +170,7 @@ static void print_refresh(uint32 millihz)
 static int print_probe(void)
 {
     struct fb_var_screeninfo info;
+    struct fb_fix_screeninfo fix;
     struct fb_gpu_display_probe probe;
     int fd = open("/dev/fb0", O_RDONLY);
 
@@ -182,6 +183,11 @@ static int print_probe(void)
         close(fd);
         return 1;
     }
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &fix) < 0) {
+        fprintf(2, "fbstat: FBIOGET_FSCREENINFO failed\n");
+        close(fd);
+        return 1;
+    }
     memset(&probe, 0, sizeof(probe));
     if (ioctl(fd, FB_GPU_DISPLAY_PROBE, &probe) < 0) {
         fprintf(2, "fbstat: FB_GPU_DISPLAY_PROBE failed\n");
@@ -189,9 +195,16 @@ static int print_probe(void)
         return 1;
     }
     printf("current %ux%u pitch %u bpp %u refresh ",
-           info.xres, info.yres, info.pitch, info.bits_per_pixel);
+           info.xres, info.yres, fix.line_length, info.bits_per_pixel);
     print_refresh(probe.current_refresh_millihz);
     printf("\n");
+    printf("fbdev id %s smem_len %u type %u visual %u accel %u "
+           "rgba r%u/%u g%u/%u b%u/%u a%u/%u\n",
+           fix.id, fix.smem_len, fix.type, fix.visual, fix.accel,
+           info.red.offset, info.red.length,
+           info.green.offset, info.green.length,
+           info.blue.offset, info.blue.length,
+           info.transp.offset, info.transp.length);
     if (probe.flags & FB_GPU_DISPLAY_F_EDID) {
         printf("preferred_edid %ux%u@", probe.preferred_width,
                probe.preferred_height);
@@ -212,7 +225,9 @@ static int sample_rect(const char *x_arg, const char *y_arg,
                        const char *w_arg, const char *h_arg)
 {
     struct fb_var_screeninfo info;
+    struct fb_fix_screeninfo fix;
     uint32 x, y, w, h;
+    uint32 pitch;
     uint64 total = 0;
     uint64 nonzero = 0;
     uint64 nonblack = 0;
@@ -247,9 +262,15 @@ static int sample_rect(const char *x_arg, const char *y_arg,
         close(fd);
         return 1;
     }
-    if (info.bits_per_pixel != 32 || info.pitch < info.xres * 4) {
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &fix) < 0) {
+        fprintf(2, "fbstat: FBIOGET_FSCREENINFO failed\n");
+        close(fd);
+        return 1;
+    }
+    pitch = fix.line_length;
+    if (info.bits_per_pixel != 32 || pitch < info.xres * 4) {
         fprintf(2, "fbstat: unsupported fb layout %ux%u pitch %u bpp %u\n",
-                info.xres, info.yres, info.pitch, info.bits_per_pixel);
+                info.xres, info.yres, pitch, info.bits_per_pixel);
         close(fd);
         return 1;
     }
@@ -264,7 +285,7 @@ static int sample_rect(const char *x_arg, const char *y_arg,
     if (y + h > info.yres)
         h = info.yres - y;
 
-    map_len = (uint64)info.pitch * info.yres;
+    map_len = (uint64)pitch * info.yres;
     fb = mmap(0, (int)map_len, PROT_READ, MAP_SHARED, fd, 0);
     if (fb == MAP_FAILED) {
         ssize_t nread;
@@ -287,14 +308,14 @@ static int sample_rect(const char *x_arg, const char *y_arg,
     }
 
     for (uint32 row = 0; row < h; row++) {
-        uint32 *p = (uint32 *)(fb + (uint64)(y + row) * info.pitch) + x;
+        uint32 *p = (uint32 *)(fb + (uint64)(y + row) * pitch) + x;
 
         for (uint32 col = 0; col < w; col++) {
             uint32 px = p[col];
             uint32 rgb = px & 0x00ffffffU;
-            uint32 r = rgb & 0xffU;
+            uint32 r = (rgb >> 16) & 0xffU;
             uint32 g = (rgb >> 8) & 0xffU;
-            uint32 b = (rgb >> 16) & 0xffU;
+            uint32 b = rgb & 0xffU;
 
             total++;
             if (px != 0)
@@ -309,19 +330,19 @@ static int sample_rect(const char *x_arg, const char *y_arg,
         }
     }
 
-    tl = *(uint32 *)(fb + (uint64)y * info.pitch + x * 4);
-    tr = *(uint32 *)(fb + (uint64)y * info.pitch + (x + w - 1) * 4);
-    bl = *(uint32 *)(fb + (uint64)(y + h - 1) * info.pitch + x * 4);
-    br = *(uint32 *)(fb + (uint64)(y + h - 1) * info.pitch +
+    tl = *(uint32 *)(fb + (uint64)y * pitch + x * 4);
+    tr = *(uint32 *)(fb + (uint64)y * pitch + (x + w - 1) * 4);
+    bl = *(uint32 *)(fb + (uint64)(y + h - 1) * pitch + x * 4);
+    br = *(uint32 *)(fb + (uint64)(y + h - 1) * pitch +
                     (x + w - 1) * 4);
-    center = *(uint32 *)(fb + (uint64)(y + h / 2) * info.pitch +
+    center = *(uint32 *)(fb + (uint64)(y + h / 2) * pitch +
                         (x + w / 2) * 4);
 
     printf("fb_sample screen=%ux%u pitch=%u rect=%u,%u %ux%u "
            "total=%lu nonzero=%lu nonblack=%lu "
            "avg_rgb=%lu,%lu,%lu hash=0x%lx "
            "center=0x%x corners=0x%x,0x%x,0x%x,0x%x\n",
-           info.xres, info.yres, info.pitch, x, y, w, h,
+           info.xres, info.yres, pitch, x, y, w, h,
            total, nonzero, nonblack,
            total ? sum_r / total : 0,
            total ? sum_g / total : 0,
@@ -490,8 +511,10 @@ static int dump_ppm(const char *path, uint32 x, uint32 y, uint32 w, uint32 h,
                     int use_rect)
 {
     struct fb_var_screeninfo info;
+    struct fb_fix_screeninfo fix;
     uint8 *fb;
     int fb_from_malloc = 0;
+    uint32 pitch;
     uint64 map_len;
     int fbfd;
     int outfd;
@@ -508,9 +531,15 @@ static int dump_ppm(const char *path, uint32 x, uint32 y, uint32 w, uint32 h,
         close(fbfd);
         return 1;
     }
-    if (info.bits_per_pixel != 32 || info.pitch < info.xres * 4) {
+    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &fix) < 0) {
+        fprintf(2, "fbstat: FBIOGET_FSCREENINFO failed\n");
+        close(fbfd);
+        return 1;
+    }
+    pitch = fix.line_length;
+    if (info.bits_per_pixel != 32 || pitch < info.xres * 4) {
         fprintf(2, "fbstat: unsupported fb layout %ux%u pitch %u bpp %u\n",
-                info.xres, info.yres, info.pitch, info.bits_per_pixel);
+                info.xres, info.yres, pitch, info.bits_per_pixel);
         close(fbfd);
         return 1;
     }
@@ -535,7 +564,7 @@ static int dump_ppm(const char *path, uint32 x, uint32 y, uint32 w, uint32 h,
         return 1;
     }
 
-    map_len = (uint64)info.pitch * info.yres;
+    map_len = (uint64)pitch * info.yres;
     fb = mmap(0, (int)map_len, PROT_READ, MAP_SHARED, fbfd, 0);
     if (fb == MAP_FAILED) {
         ssize_t nread;
@@ -572,7 +601,7 @@ static int dump_ppm(const char *path, uint32 x, uint32 y, uint32 w, uint32 h,
     if (write_full(outfd, header, strlen(header)) != 0)
         goto write_failed;
     for (uint32 yy = 0; yy < h; yy++) {
-        uint32 *src = (uint32 *)(fb + (uint64)(y + yy) * info.pitch) + x;
+        uint32 *src = (uint32 *)(fb + (uint64)(y + yy) * pitch) + x;
 
         for (uint32 xx = 0; xx < w; xx++) {
             uint32 px = src[xx];
