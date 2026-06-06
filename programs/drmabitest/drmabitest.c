@@ -661,6 +661,86 @@ static void probe_syncobj(struct drm_node *node)
     ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_TRANSFER, &transfer);
     print_ret(node->name, "DRM_IOCTL_SYNCOBJ_TRANSFER.self", ret);
 
+    {
+        struct drm_syncobj_create_compat pending_src;
+        struct drm_syncobj_create_compat pending_dst;
+        struct drm_syncobj_transfer_compat pending_transfer;
+        struct drm_syncobj_timeline_array_compat pending_query;
+        struct drm_syncobj_destroy_compat pending_destroy;
+        uint32 pending_handles[1];
+        uint64 pending_signaled_points[1];
+        uint64 pending_submitted_points[1];
+        int ret_src;
+        int ret_dst;
+        int ret_transfer = -1;
+        int ret_signaled = -1;
+        int ret_submitted = -1;
+
+        memset(&pending_src, 0, sizeof(pending_src));
+        memset(&pending_dst, 0, sizeof(pending_dst));
+        pending_signaled_points[0] = 0;
+        pending_submitted_points[0] = 0;
+        ret_src = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                             &pending_src);
+        ret_dst = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                             &pending_dst);
+        if (ret_src == 0 && ret_dst == 0) {
+            memset(&pending_transfer, 0, sizeof(pending_transfer));
+            pending_transfer.src_handle = pending_src.handle;
+            pending_transfer.dst_handle = pending_dst.handle;
+            pending_transfer.src_point = 1;
+            pending_transfer.dst_point = 5;
+            ret_transfer = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_TRANSFER,
+                                      &pending_transfer);
+            if (ret_transfer == 0) {
+                pending_handles[0] = pending_dst.handle;
+                pending_signaled_points[0] = 99;
+                memset(&pending_query, 0, sizeof(pending_query));
+                pending_query.handles = (uint64)pending_handles;
+                pending_query.points = (uint64)pending_signaled_points;
+                pending_query.count_handles = 1;
+                ret_signaled = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_QUERY,
+                                          &pending_query);
+
+                pending_submitted_points[0] = 0;
+                memset(&pending_query, 0, sizeof(pending_query));
+                pending_query.handles = (uint64)pending_handles;
+                pending_query.points = (uint64)pending_submitted_points;
+                pending_query.count_handles = 1;
+                pending_query.flags =
+                    DRM_SYNCOBJ_QUERY_FLAGS_LAST_SUBMITTED;
+                ret_submitted = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_QUERY,
+                                           &pending_query);
+            }
+        }
+        printf("%s:DRM_IOCTL_SYNCOBJ_QUERY.pending_transfer: "
+               "create_src=%d create_dst=%d transfer=%d signaled_ret=%d "
+               "submitted_ret=%d signaled=%lu submitted=%lu "
+               "expect_signaled=0 expect_submitted=5\n",
+               node->name, ret_src, ret_dst, ret_transfer, ret_signaled,
+               ret_submitted, pending_signaled_points[0],
+               pending_submitted_points[0]);
+        if (ret_signaled == 0 && ret_submitted == 0 &&
+            (pending_signaled_points[0] != 0 ||
+             pending_submitted_points[0] != 5))
+            printf("%s:DRM_IOCTL_SYNCOBJ_QUERY.pending_transfer: FAIL\n",
+                   node->name);
+        if (ret_dst == 0) {
+            memset(&pending_destroy, 0, sizeof(pending_destroy));
+            pending_destroy.handle = pending_dst.handle;
+            print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.pending_dst",
+                      call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                                 &pending_destroy));
+        }
+        if (ret_src == 0) {
+            memset(&pending_destroy, 0, sizeof(pending_destroy));
+            pending_destroy.handle = pending_src.handle;
+            print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.pending_src",
+                      call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                                 &pending_destroy));
+        }
+    }
+
     memset(&handle_fd, 0, sizeof(handle_fd));
     handle_fd.handle = create.handle;
     handle_fd.flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE;
