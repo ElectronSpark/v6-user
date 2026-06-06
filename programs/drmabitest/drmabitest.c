@@ -2046,6 +2046,7 @@ static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
 {
     struct drm_virtgpu_resource_create_compat create;
     struct drm_virtgpu_execbuffer_compat exec;
+    struct drm_virtgpu_3d_wait_compat wait_req;
     struct drm_gem_close_compat close_req;
     struct pollfd pfd;
     uint32 nop = VIRGL_CMD0(VIRGL_CCMD_NOP, 0, 0);
@@ -2053,6 +2054,8 @@ static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
     int create_ret;
     int exec_out_ret = -999;
     int exec_inout_ret = -999;
+    int wait_ret = -999;
+    int nowait_ret = -999;
     int poll_ret = -999;
     int first_fd = -1;
     int second_fd = -1;
@@ -2103,14 +2106,22 @@ static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
             if (exec_inout_ret == 0)
                 second_fd = exec.fence_fd;
         }
+
+        memset(&wait_req, 0, sizeof(wait_req));
+        wait_req.handle = create.bo_handle;
+        wait_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_WAIT, &wait_req);
+        wait_req.flags = VIRTGPU_WAIT_NOWAIT;
+        nowait_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_WAIT, &wait_req);
     }
 
     printf("%s:DRM_IOCTL_VIRTGPU_EXECBUFFER.sync_fd: create=%d "
            "create_errno=%d handle=%u out=%d out_errno=%d first_fd=%d "
-           "poll=%d inout=%d inout_errno=%d second_fd=%d\n",
+           "poll=%d inout=%d inout_errno=%d second_fd=%d wait=%d "
+           "wait_errno=%d nowait=%d nowait_errno=%d\n",
            node->name, create_ret, saved_errno(create_ret), create.bo_handle,
            exec_out_ret, saved_errno(exec_out_ret), first_fd, poll_ret,
-           exec_inout_ret, saved_errno(exec_inout_ret), second_fd);
+           exec_inout_ret, saved_errno(exec_inout_ret), second_fd, wait_ret,
+           saved_errno(wait_ret), nowait_ret, saved_errno(nowait_ret));
 
     if (second_fd >= 0)
         close(second_fd);
