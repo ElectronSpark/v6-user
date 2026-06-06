@@ -407,6 +407,52 @@ static void probe_obj_props(struct drm_node *node, uint32 obj_id,
         probe_property(node, props[0]);
 }
 
+static uint32 find_obj_prop_named(struct drm_node *node, uint32 obj_id,
+                                  uint32 obj_type, const char *name)
+{
+    struct drm_mode_obj_get_properties_compat req;
+    uint32 props[32];
+    uint64 values[32];
+
+    memset(&req, 0, sizeof(req));
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    req.obj_id = obj_id;
+    req.obj_type = obj_type;
+    req.props_ptr = (uint64)props;
+    req.prop_values_ptr = (uint64)values;
+    req.count_props = ARRAY_SIZE(props);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &req) != 0)
+        return 0;
+    for (uint32 i = 0; i < req.count_props && i < ARRAY_SIZE(props); i++) {
+        struct drm_mode_get_property_compat prop;
+
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = props[i];
+        if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) == 0 &&
+            strcmp(prop.name, name) == 0)
+            return props[i];
+    }
+    return 0;
+}
+
+static int atomic_commit_props(struct drm_node *node, uint32 *objs,
+                               uint32 *counts, uint32 count_objs,
+                               uint32 *props, uint64 *values,
+                               uint32 flags)
+{
+    struct drm_mode_atomic_compat atomic;
+
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = flags;
+    atomic.count_objs = count_objs;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    return call_ioctl(node->fd, DRM_IOCTL_MODE_ATOMIC, &atomic);
+}
+
 static void probe_plane(struct drm_node *node, uint32 plane_id)
 {
     struct drm_mode_get_plane_compat plane;
@@ -1446,6 +1492,189 @@ static void probe_dumb_bo(struct drm_node *node)
     print_ret(node->name, "DRM_IOCTL_MODE_DESTROY_DUMB.valid", ret);
 }
 
+static void probe_atomic_fences(struct drm_node *node)
+{
+    struct drm_mode_card_res_compat res;
+    struct drm_mode_get_plane_res_compat plane_res;
+    struct drm_mode_create_dumb_compat create;
+    struct drm_mode_map_dumb_compat map;
+    struct drm_mode_fb_cmd2_compat addfb2;
+    struct drm_mode_destroy_dumb_compat destroy;
+    struct drm_syncobj_create_compat sync_create;
+    struct drm_syncobj_handle_compat sync_export;
+    struct drm_syncobj_array_compat sync_signal;
+    struct pollfd pfd;
+    uint32 crtcs[4];
+    uint32 planes[4];
+    uint32 objs[2];
+    uint32 counts[2];
+    uint32 props[4];
+    uint64 values[4];
+    uint32 crtc_id = 0;
+    uint32 plane_id = 0;
+    uint32 crtc_out_fence_prop = 0;
+    uint32 plane_crtc_prop = 0;
+    uint32 plane_fb_prop = 0;
+    uint32 plane_in_fence_prop = 0;
+    uint32 rmfb = 0;
+    int32 out_fence = -2;
+    int sync_fd = -1;
+    int child = -1;
+    int child_status = -1;
+    int create_ret;
+    int addfb_ret = -999;
+    int sync_create_ret = -999;
+    int sync_export_ret = -999;
+    int atomic_ret = -999;
+    int poll_ret = -999;
+    int signal_ret = -999;
+
+    memset(&res, 0, sizeof(res));
+    memset(crtcs, 0, sizeof(crtcs));
+    res.crtc_id_ptr = (uint64)crtcs;
+    res.count_crtcs = ARRAY_SIZE(crtcs);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETRESOURCES, &res) == 0 &&
+        res.count_crtcs > 0)
+        crtc_id = crtcs[0];
+
+    memset(&plane_res, 0, sizeof(plane_res));
+    memset(planes, 0, sizeof(planes));
+    plane_res.plane_id_ptr = (uint64)planes;
+    plane_res.count_planes = ARRAY_SIZE(planes);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANERESOURCES,
+                   &plane_res) == 0 && plane_res.count_planes > 0)
+        plane_id = planes[0];
+
+    if (crtc_id != 0 && plane_id != 0) {
+        crtc_out_fence_prop = find_obj_prop_named(
+            node, crtc_id, DRM_MODE_OBJECT_CRTC, "OUT_FENCE_PTR");
+        plane_crtc_prop = find_obj_prop_named(
+            node, plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+        plane_fb_prop = find_obj_prop_named(
+            node, plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID");
+        plane_in_fence_prop = find_obj_prop_named(
+            node, plane_id, DRM_MODE_OBJECT_PLANE, "IN_FENCE_FD");
+    }
+
+    memset(&create, 0, sizeof(create));
+    create.width = 64;
+    create.height = 64;
+    create.bpp = 32;
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
+    if (create_ret == 0 && create.handle != 0) {
+        uint32 *pixels = MAP_FAILED;
+
+        memset(&map, 0, sizeof(map));
+        map.handle = create.handle;
+        if (call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map) == 0) {
+            pixels = mmap(0, (int)create.size, PROT_READ | PROT_WRITE,
+                          MAP_SHARED, node->fd, map.offset);
+            if (pixels != MAP_FAILED) {
+                for (uint32 y = 0; y < create.height; y++) {
+                    for (uint32 x = 0; x < create.width; x++)
+                        pixels[y * (create.pitch / 4) + x] =
+                            0xff000000 | ((x * 3) << 16) |
+                            ((y * 5) << 8) | 0x55;
+                }
+                munmap((void *)pixels, (int)create.size);
+            }
+        }
+
+        memset(&addfb2, 0, sizeof(addfb2));
+        addfb2.width = create.width;
+        addfb2.height = create.height;
+        addfb2.pixel_format = DRM_FORMAT_XRGB8888;
+        addfb2.handles[0] = create.handle;
+        addfb2.pitches[0] = create.pitch;
+        addfb_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB2, &addfb2);
+        if (addfb_ret == 0)
+            rmfb = addfb2.fb_id;
+    }
+
+    memset(&sync_create, 0, sizeof(sync_create));
+    sync_create_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                                 &sync_create);
+    if (sync_create_ret == 0) {
+        memset(&sync_export, 0, sizeof(sync_export));
+        sync_export.handle = sync_create.handle;
+        sync_export.flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE;
+        sync_export_ret = call_ioctl(node->fd,
+                                     DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD,
+                                     &sync_export);
+        if (sync_export_ret == 0)
+            sync_fd = sync_export.fd;
+    }
+
+    if (crtc_id != 0 && plane_id != 0 && crtc_out_fence_prop != 0 &&
+        plane_crtc_prop != 0 && plane_fb_prop != 0 &&
+        plane_in_fence_prop != 0 && addfb_ret == 0 && sync_fd >= 0) {
+        child = fork();
+        if (child == 0) {
+            sleep(50);
+            memset(&sync_signal, 0, sizeof(sync_signal));
+            sync_signal.handles = (uint64)&sync_create.handle;
+            sync_signal.count_handles = 1;
+            signal_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL,
+                                    &sync_signal);
+            exit(signal_ret == 0 ? 0 : 1);
+        }
+
+        objs[0] = crtc_id;
+        counts[0] = 1;
+        props[0] = crtc_out_fence_prop;
+        values[0] = (uint64)&out_fence;
+        objs[1] = plane_id;
+        counts[1] = 3;
+        props[1] = plane_crtc_prop;
+        values[1] = crtc_id;
+        props[2] = plane_fb_prop;
+        values[2] = addfb2.fb_id;
+        props[3] = plane_in_fence_prop;
+        values[3] = (uint64)(uint32)sync_fd;
+        atomic_ret = atomic_commit_props(node, objs, counts, 2, props,
+                                         values, 0);
+        if (child > 0)
+            wait(&child_status);
+        if (out_fence >= 0) {
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = out_fence;
+            pfd.events = POLLIN | POLLOUT;
+            poll_ret = poll_raw(&pfd, 1, 0);
+        }
+    }
+
+    printf("%s:DRM_IOCTL_MODE_ATOMIC.fences: kms=%d crtc=%u plane=%u "
+           "props=%u/%u/%u/%u create=%d addfb=%d fb=%u sync_create=%d "
+           "sync_export=%d sync_fd=%d atomic=%d errno=%d out_fence=%d "
+           "poll=%d revents=0x%x child_status=%d\n",
+           node->name, crtc_id != 0 && plane_id != 0, crtc_id, plane_id,
+           crtc_out_fence_prop, plane_crtc_prop, plane_fb_prop,
+           plane_in_fence_prop, create_ret, addfb_ret, addfb2.fb_id,
+           sync_create_ret, sync_export_ret, sync_fd, atomic_ret,
+           saved_errno(atomic_ret), out_fence, poll_ret,
+           out_fence >= 0 ? pfd.revents : 0, child_status);
+
+    if (out_fence >= 0)
+        close(out_fence);
+    if (sync_fd >= 0)
+        close(sync_fd);
+    if (sync_create_ret == 0) {
+        struct drm_syncobj_destroy_compat sync_destroy;
+
+        memset(&sync_destroy, 0, sizeof(sync_destroy));
+        sync_destroy.handle = sync_create.handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                         &sync_destroy);
+    }
+    if (rmfb != 0)
+        (void)call_ioctl(node->fd, DRM_IOCTL_MODE_RMFB, &rmfb);
+    if (create_ret == 0 && create.handle != 0) {
+        memset(&destroy, 0, sizeof(destroy));
+        destroy.handle = create.handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+    }
+}
+
 static void probe_virtgpu(struct drm_node *node)
 {
     static const uint64 params[] = {
@@ -1630,6 +1859,7 @@ static void probe_node(struct drm_node *node)
     probe_prop_blobs(node);
     probe_syncobj(node);
     probe_dumb_bo(node);
+    probe_atomic_fences(node);
     probe_virtgpu(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
