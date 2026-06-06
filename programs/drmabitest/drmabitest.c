@@ -1,7 +1,9 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/errno.h"
+#include "kernel/inc/syscall.h"
 #include "kernel/inc/uabi/drm.h"
 #include "kernel/inc/uabi/fcntl.h"
+#include "kernel/inc/uabi/poll.h"
 #include "user/user.h"
 
 #define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -10,6 +12,12 @@ struct drm_node {
     const char *name;
     const char *path;
     int fd;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
 };
 
 struct cap_case {
@@ -50,6 +58,34 @@ static void print_ret_u32(const char *node, const char *name, int ret,
 static int call_ioctl(int fd, uint64 request, void *arg)
 {
     return ioctl(fd, (int)request, arg);
+}
+
+#if defined(__riscv)
+static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    register int64 a1 asm("a1") = b;
+    register int64 a2 asm("a2") = c;
+    asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "memory");
+    return a0;
+}
+#elif defined(__x86_64__)
+static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
+{
+    int64 ret;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a), "S"(b), "d"(c)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+#else
+#error "raw_syscall3 is not defined for this architecture"
+#endif
+
+static int poll_raw(struct pollfd *fds, int nfds, int timeout)
+{
+    return (int)raw_syscall3(SYS_poll, (int64)fds, nfds, timeout);
 }
 
 static void probe_version(struct drm_node *node)
@@ -768,6 +804,80 @@ static void probe_syncobj(struct drm_node *node)
                                  &destroy_import));
         }
         close(handle_fd.fd);
+    }
+
+    {
+        struct drm_syncobj_create_compat poll_create;
+        struct drm_syncobj_array_compat poll_array;
+        struct drm_syncobj_handle_compat poll_fd;
+        struct drm_syncobj_destroy_compat poll_destroy;
+        struct pollfd pfd;
+        int create_ret;
+        int export_ret = -1;
+        int poll0_ret = -1;
+        int poll_ret = -1;
+        int child_status = -1;
+        short poll0_revents = 0;
+
+        memset(&poll_create, 0, sizeof(poll_create));
+        create_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                                &poll_create);
+        memset(&poll_fd, 0, sizeof(poll_fd));
+        if (create_ret == 0) {
+            poll_fd.handle = poll_create.handle;
+            poll_fd.flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE;
+            export_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD,
+                                    &poll_fd);
+        }
+        if (export_ret == 0 && poll_fd.fd >= 0) {
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = poll_fd.fd;
+            pfd.events = POLLIN;
+            poll0_ret = poll_raw(&pfd, 1, 0);
+            poll0_revents = pfd.revents;
+
+            int child = fork();
+
+            if (child == 0) {
+                sleep(50);
+                memset(&poll_array, 0, sizeof(poll_array));
+                handles[0] = poll_create.handle;
+                poll_array.handles = (uint64)handles;
+                poll_array.count_handles = 1;
+                ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL,
+                                 &poll_array);
+                printf("%s:DRM_IOCTL_SYNCOBJ_SIGNAL.poll_child: ret=%d "
+                       "errno=%d\n",
+                       node->name, ret, saved_errno(ret));
+                exit(ret == 0 ? 0 : 1);
+            } else if (child >= 0) {
+                memset(&pfd, 0, sizeof(pfd));
+                pfd.fd = poll_fd.fd;
+                pfd.events = POLLIN;
+                poll_ret = poll_raw(&pfd, 1, 2000);
+                wait(&child_status);
+            } else {
+                child_status = -EAGAIN;
+            }
+            printf("%s:DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD.poll_blocking: "
+                   "create=%d export=%d poll0=%d poll0_revents=0x%x "
+                   "poll=%d errno=%d revents=0x%x child_status=%d\n",
+                   node->name, create_ret, export_ret, poll0_ret,
+                   (uint32)poll0_revents, poll_ret, saved_errno(poll_ret),
+                   (uint32)pfd.revents, child_status);
+            close(poll_fd.fd);
+        } else {
+            printf("%s:DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD.poll_blocking: "
+                   "create=%d export=%d fd=%d\n",
+                   node->name, create_ret, export_ret, poll_fd.fd);
+        }
+        if (create_ret == 0) {
+            memset(&poll_destroy, 0, sizeof(poll_destroy));
+            poll_destroy.handle = poll_create.handle;
+            print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.poll_source",
+                      call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                                 &poll_destroy));
+        }
     }
 
     memset(&eventfd, 0, sizeof(eventfd));
