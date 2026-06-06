@@ -436,6 +436,40 @@ static uint32 find_obj_prop_named(struct drm_node *node, uint32 obj_id,
     return 0;
 }
 
+static int get_obj_prop_value_named(struct drm_node *node, uint32 obj_id,
+                                    uint32 obj_type, const char *name,
+                                    uint64 *value)
+{
+    struct drm_mode_obj_get_properties_compat req;
+    uint32 props[32];
+    uint64 values[32];
+
+    if (value == NULL)
+        return -EINVAL;
+    memset(&req, 0, sizeof(req));
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    req.obj_id = obj_id;
+    req.obj_type = obj_type;
+    req.props_ptr = (uint64)props;
+    req.prop_values_ptr = (uint64)values;
+    req.count_props = ARRAY_SIZE(props);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &req) != 0)
+        return -1;
+    for (uint32 i = 0; i < req.count_props && i < ARRAY_SIZE(props); i++) {
+        struct drm_mode_get_property_compat prop;
+
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = props[i];
+        if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) == 0 &&
+            strcmp(prop.name, name) == 0) {
+            *value = values[i];
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
 static int atomic_commit_props(struct drm_node *node, uint32 *objs,
                                uint32 *counts, uint32 count_objs,
                                uint32 *props, uint64 *values,
@@ -615,13 +649,16 @@ static void probe_kms(struct drm_node *node)
     plane_res.count_planes = ARRAY_SIZE(planes);
     ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res);
     printf("%s:DRM_IOCTL_MODE_GETPLANERESOURCES.fill: ret=%d errno=%d "
-           "planes=%u plane0=%u\n",
+           "planes=%u plane0=%u plane1=%u\n",
            node->name, ret, saved_errno(ret), plane_res.count_planes,
-           first_id(planes, plane_res.count_planes));
+           first_id(planes, plane_res.count_planes),
+           plane_res.count_planes > 1 ? planes[1] : 0);
 
-    if (plane_res.count_planes > 0) {
-        probe_plane(node, planes[0]);
-        probe_obj_props(node, planes[0], DRM_MODE_OBJECT_PLANE, "plane");
+    for (uint32 i = 0; ret == 0 && i < plane_res.count_planes &&
+         i < ARRAY_SIZE(planes); i++) {
+        probe_plane(node, planes[i]);
+        probe_obj_props(node, planes[i], DRM_MODE_OBJECT_PLANE,
+                        i == 0 ? "plane" : "plane_extra");
     }
 }
 
@@ -1730,6 +1767,212 @@ static void probe_atomic_fences(struct drm_node *node)
     }
 }
 
+static void probe_cursor_plane(struct drm_node *node)
+{
+    struct drm_mode_card_res_compat res;
+    struct drm_mode_get_plane_res_compat plane_res;
+    struct drm_mode_create_dumb_compat create;
+    struct drm_mode_map_dumb_compat map;
+    struct drm_mode_fb_cmd2_compat addfb2;
+    struct drm_mode_cursor2_compat cursor2;
+    struct drm_mode_set_plane_compat setplane;
+    struct drm_mode_destroy_dumb_compat destroy;
+    uint32 crtcs[4];
+    uint32 planes[8];
+    uint32 cursor_plane = 0;
+    uint32 crtc_id = 0;
+    uint32 rmfb = 0;
+    int create_ret;
+    int map_ret = -999;
+    int cursor_set_ret = -999;
+    int cursor_move_ret = -999;
+    int addfb_ret = -999;
+    int setplane_ret = -999;
+    int atomic_ret = -999;
+    int hide_ret = -999;
+
+    memset(&addfb2, 0, sizeof(addfb2));
+    memset(&res, 0, sizeof(res));
+    memset(crtcs, 0, sizeof(crtcs));
+    res.crtc_id_ptr = (uint64)crtcs;
+    res.count_crtcs = ARRAY_SIZE(crtcs);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETRESOURCES, &res) == 0 &&
+        res.count_crtcs > 0)
+        crtc_id = crtcs[0];
+
+    memset(&plane_res, 0, sizeof(plane_res));
+    memset(planes, 0, sizeof(planes));
+    plane_res.plane_id_ptr = (uint64)planes;
+    plane_res.count_planes = ARRAY_SIZE(planes);
+    if (call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANERESOURCES,
+                   &plane_res) == 0) {
+        for (uint32 i = 0; i < plane_res.count_planes &&
+             i < ARRAY_SIZE(planes); i++) {
+            uint64 type = 0;
+
+            if (get_obj_prop_value_named(node, planes[i],
+                                         DRM_MODE_OBJECT_PLANE, "type",
+                                         &type) == 0 &&
+                type == DRM_PLANE_TYPE_CURSOR) {
+                cursor_plane = planes[i];
+                break;
+            }
+        }
+    }
+
+    memset(&create, 0, sizeof(create));
+    create.width = 64;
+    create.height = 64;
+    create.bpp = 32;
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
+    if (create_ret == 0 && create.handle != 0) {
+        uint32 *pixels = MAP_FAILED;
+
+        memset(&map, 0, sizeof(map));
+        map.handle = create.handle;
+        map_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+        if (map_ret == 0) {
+            pixels = mmap(0, (int)create.size, PROT_READ | PROT_WRITE,
+                          MAP_SHARED, node->fd, map.offset);
+            if (pixels != MAP_FAILED) {
+                for (uint32 y = 0; y < create.height; y++) {
+                    for (uint32 x = 0; x < create.width; x++) {
+                        uint32 alpha = (x < 8 || y < 8) ? 0x80 : 0xff;
+                        pixels[y * (create.pitch / 4) + x] =
+                            (alpha << 24) | 0x00ff2020 |
+                            ((x & 0x3f) << 8) | (y & 0x3f);
+                    }
+                }
+                munmap((void *)pixels, (int)create.size);
+            }
+        }
+    }
+
+    if (crtc_id != 0 && create_ret == 0 && create.handle != 0) {
+        memset(&cursor2, 0, sizeof(cursor2));
+        cursor2.flags = DRM_MODE_CURSOR_BO | DRM_MODE_CURSOR_MOVE;
+        cursor2.crtc_id = crtc_id;
+        cursor2.x = 48;
+        cursor2.y = 48;
+        cursor2.width = create.width;
+        cursor2.height = create.height;
+        cursor2.handle = create.handle;
+        cursor2.hot_x = 4;
+        cursor2.hot_y = 4;
+        cursor_set_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CURSOR2,
+                                    &cursor2);
+
+        memset(&cursor2, 0, sizeof(cursor2));
+        cursor2.flags = DRM_MODE_CURSOR_MOVE;
+        cursor2.crtc_id = crtc_id;
+        cursor2.x = 96;
+        cursor2.y = 72;
+        cursor_move_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CURSOR2,
+                                     &cursor2);
+    }
+
+    if (cursor_plane != 0 && crtc_id != 0 && create_ret == 0) {
+        memset(&addfb2, 0, sizeof(addfb2));
+        addfb2.width = create.width;
+        addfb2.height = create.height;
+        addfb2.pixel_format = DRM_FORMAT_ARGB8888;
+        addfb2.handles[0] = create.handle;
+        addfb2.pitches[0] = create.pitch;
+        addfb_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB2, &addfb2);
+        if (addfb_ret == 0)
+            rmfb = addfb2.fb_id;
+
+        if (addfb_ret == 0) {
+            memset(&setplane, 0, sizeof(setplane));
+            setplane.plane_id = cursor_plane;
+            setplane.crtc_id = crtc_id;
+            setplane.fb_id = addfb2.fb_id;
+            setplane.crtc_x = 128;
+            setplane.crtc_y = 80;
+            setplane.crtc_w = create.width;
+            setplane.crtc_h = create.height;
+            setplane.src_w = create.width << 16;
+            setplane.src_h = create.height << 16;
+            setplane_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_SETPLANE,
+                                      &setplane);
+        }
+
+        if (addfb_ret == 0) {
+            uint32 props[8];
+            uint64 values[8];
+            uint32 objs[1];
+            uint32 counts[1];
+            uint32 crtc_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+            uint32 fb_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "FB_ID");
+            uint32 src_w_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "SRC_W");
+            uint32 src_h_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "SRC_H");
+            uint32 crtc_x_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "CRTC_X");
+            uint32 crtc_y_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
+            uint32 crtc_w_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "CRTC_W");
+            uint32 crtc_h_prop = find_obj_prop_named(
+                node, cursor_plane, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+
+            if (crtc_prop != 0 && fb_prop != 0 && src_w_prop != 0 &&
+                src_h_prop != 0 && crtc_x_prop != 0 &&
+                crtc_y_prop != 0 && crtc_w_prop != 0 &&
+                crtc_h_prop != 0) {
+                objs[0] = cursor_plane;
+                counts[0] = 8;
+                props[0] = crtc_prop;
+                values[0] = crtc_id;
+                props[1] = fb_prop;
+                values[1] = addfb2.fb_id;
+                props[2] = src_w_prop;
+                values[2] = create.width << 16;
+                props[3] = src_h_prop;
+                values[3] = create.height << 16;
+                props[4] = crtc_x_prop;
+                values[4] = 160;
+                props[5] = crtc_y_prop;
+                values[5] = 96;
+                props[6] = crtc_w_prop;
+                values[6] = create.width;
+                props[7] = crtc_h_prop;
+                values[7] = create.height;
+                atomic_ret = atomic_commit_props(node, objs, counts, 1,
+                                                 props, values, 0);
+            }
+        }
+    }
+
+    if (crtc_id != 0) {
+        memset(&cursor2, 0, sizeof(cursor2));
+        cursor2.flags = DRM_MODE_CURSOR_BO;
+        cursor2.crtc_id = crtc_id;
+        hide_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CURSOR2, &cursor2);
+    }
+
+    printf("%s:DRM_CURSOR_PLANE.valid: kms=%d crtc=%u cursor_plane=%u "
+           "create=%d map=%d cursor_set=%d cursor_set_errno=%d "
+           "cursor_move=%d setplane=%d setplane_errno=%d addfb=%d fb=%u "
+           "atomic=%d atomic_errno=%d hide=%d hide_errno=%d\n",
+           node->name, crtc_id != 0 && cursor_plane != 0, crtc_id,
+           cursor_plane, create_ret, map_ret, cursor_set_ret,
+           saved_errno(cursor_set_ret), cursor_move_ret, setplane_ret,
+           saved_errno(setplane_ret), addfb_ret, addfb2.fb_id, atomic_ret,
+           saved_errno(atomic_ret), hide_ret, saved_errno(hide_ret));
+
+    if (rmfb != 0)
+        (void)call_ioctl(node->fd, DRM_IOCTL_MODE_RMFB, &rmfb);
+    if (create_ret == 0 && create.handle != 0) {
+        memset(&destroy, 0, sizeof(destroy));
+        destroy.handle = create.handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+    }
+}
+
 static void probe_virtgpu(struct drm_node *node)
 {
     static const uint64 params[] = {
@@ -1915,6 +2158,7 @@ static void probe_node(struct drm_node *node)
     probe_syncobj(node);
     probe_dumb_bo(node);
     probe_atomic_fences(node);
+    probe_cursor_plane(node);
     probe_virtgpu(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
