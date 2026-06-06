@@ -165,8 +165,10 @@ static int verify_render_fd_ownership(void)
         .flags = FB_GPU_BO_F_EXPORTABLE,
     };
     struct fb_gpu_bo_export_fd export_fd;
+    struct fb_gpu_bo_export_fd test_export_fd;
     struct fb_gpu_bo_destroy destroy;
     struct fb_gpu_bo_import_fd import_fd;
+    struct fb_gpu_bo_import_fd test_import_fd;
     int ret = 1;
 
     if (fd1 < 0 || fd2 < 0) {
@@ -193,6 +195,39 @@ static int verify_render_fd_ownership(void)
         printf("gpubuftest: gpu0 BO_EXPORT_FD failed\n");
         goto out_unmap;
     }
+
+    memset(&test_export_fd, 0, sizeof(test_export_fd));
+    test_export_fd.handle = create.handle;
+    if (ioctl(fd1, FB_GPU_TEST_DMABUF_EXPORT_FD, &test_export_fd) < 0 ||
+        test_export_fd.fd < 0) {
+        printf("gpubuftest: TEST_DMABUF_EXPORT_FD failed\n");
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+
+    memset(&test_import_fd, 0, sizeof(test_import_fd));
+    test_import_fd.fd = test_export_fd.fd;
+    if (ioctl(fd2, FB_GPU_BO_IMPORT_FD, &test_import_fd) < 0 ||
+        test_import_fd.handle == 0 || test_import_fd.addr == 0 ||
+        test_import_fd.width != create.width ||
+        test_import_fd.height != create.height) {
+        printf("gpubuftest: generic test dma_buf import failed\n");
+        close(test_export_fd.fd);
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    close(test_export_fd.fd);
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = test_import_fd.handle;
+    if (ioctl(fd2, FB_GPU_BO_DESTROY, &destroy) < 0) {
+        printf("gpubuftest: generic test dma_buf destroy failed\n");
+        munmap((void *)test_import_fd.addr, (int)test_import_fd.size);
+        close(export_fd.fd);
+        goto out_unmap;
+    }
+    munmap((void *)test_import_fd.addr, (int)test_import_fd.size);
+    printf("gpubuftest: generic test dma_buf import verified handle=%u\n",
+           test_import_fd.handle);
 
     close(fd1);
     fd1 = -1;
