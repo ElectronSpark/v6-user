@@ -1,0 +1,992 @@
+#include "kernel/inc/types.h"
+#include "kernel/inc/uabi/drm.h"
+#include "kernel/inc/uabi/fcntl.h"
+#include "user/user.h"
+
+#define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
+
+struct drm_node {
+    const char *name;
+    const char *path;
+    int fd;
+};
+
+struct cap_case {
+    uint64 cap;
+    const char *name;
+};
+
+struct simple_ioctl {
+    uint64 request;
+    const char *name;
+    void *arg;
+};
+
+static int saved_errno(int ret)
+{
+    return ret < 0 ? -ret : 0;
+}
+
+static void print_ret(const char *node, const char *name, int ret)
+{
+    printf("%s:%s: ret=%d errno=%d\n", node, name, ret, saved_errno(ret));
+}
+
+static void print_ret_u64(const char *node, const char *name, int ret,
+                          uint64 value)
+{
+    printf("%s:%s: ret=%d errno=%d value=%lu\n",
+           node, name, ret, saved_errno(ret), value);
+}
+
+static void print_ret_u32(const char *node, const char *name, int ret,
+                          uint32 value)
+{
+    printf("%s:%s: ret=%d errno=%d value=%u\n",
+           node, name, ret, saved_errno(ret), value);
+}
+
+static int call_ioctl(int fd, uint64 request, void *arg)
+{
+    return ioctl(fd, (int)request, arg);
+}
+
+static void probe_version(struct drm_node *node)
+{
+    struct drm_version_compat ver;
+    char name[64];
+    char date[64];
+    char desc[128];
+    int ret;
+
+    memset(&ver, 0, sizeof(ver));
+    ret = call_ioctl(node->fd, DRM_IOCTL_VERSION, &ver);
+    printf("%s:DRM_IOCTL_VERSION.probe: ret=%d errno=%d major=%d minor=%d "
+           "patch=%d name_len=%lu date_len=%lu desc_len=%lu\n",
+           node->name, ret, saved_errno(ret), ver.version_major,
+           ver.version_minor, ver.version_patchlevel, ver.name_len,
+           ver.date_len, ver.desc_len);
+
+    memset(name, 0, sizeof(name));
+    memset(date, 0, sizeof(date));
+    memset(desc, 0, sizeof(desc));
+    ver.name = (uint64)name;
+    ver.name_len = sizeof(name);
+    ver.date = (uint64)date;
+    ver.date_len = sizeof(date);
+    ver.desc = (uint64)desc;
+    ver.desc_len = sizeof(desc);
+    ret = call_ioctl(node->fd, DRM_IOCTL_VERSION, &ver);
+    printf("%s:DRM_IOCTL_VERSION.fill: ret=%d errno=%d major=%d minor=%d "
+           "patch=%d name=\"%s\" date=\"%s\" desc=\"%s\"\n",
+           node->name, ret, saved_errno(ret), ver.version_major,
+           ver.version_minor, ver.version_patchlevel, name, date, desc);
+}
+
+static void probe_unique(struct drm_node *node)
+{
+    struct drm_unique_compat req;
+    char unique[128];
+    int ret;
+
+    memset(&req, 0, sizeof(req));
+    ret = call_ioctl(node->fd, DRM_IOCTL_GET_UNIQUE, &req);
+    print_ret_u64(node->name, "DRM_IOCTL_GET_UNIQUE.probe", ret,
+                  req.unique_len);
+
+    memset(unique, 0, sizeof(unique));
+    req.unique = (uint64)unique;
+    req.unique_len = sizeof(unique);
+    ret = call_ioctl(node->fd, DRM_IOCTL_GET_UNIQUE, &req);
+    printf("%s:DRM_IOCTL_GET_UNIQUE.fill: ret=%d errno=%d unique_len=%lu "
+           "unique=\"%s\"\n",
+           node->name, ret, saved_errno(ret), req.unique_len, unique);
+}
+
+static void probe_caps(struct drm_node *node)
+{
+    static const struct cap_case caps[] = {
+        { DRM_CAP_DUMB_BUFFER, "DUMB_BUFFER" },
+        { DRM_CAP_VBLANK_HIGH_CRTC, "VBLANK_HIGH_CRTC" },
+        { DRM_CAP_DUMB_PREFERRED_DEPTH, "DUMB_PREFERRED_DEPTH" },
+        { DRM_CAP_DUMB_PREFER_SHADOW, "DUMB_PREFER_SHADOW" },
+        { DRM_CAP_PRIME, "PRIME" },
+        { DRM_CAP_TIMESTAMP_MONOTONIC, "TIMESTAMP_MONOTONIC" },
+        { DRM_CAP_ASYNC_PAGE_FLIP, "ASYNC_PAGE_FLIP" },
+        { DRM_CAP_CURSOR_WIDTH, "CURSOR_WIDTH" },
+        { DRM_CAP_CURSOR_HEIGHT, "CURSOR_HEIGHT" },
+        { DRM_CAP_ADDFB2_MODIFIERS, "ADDFB2_MODIFIERS" },
+        { DRM_CAP_PAGE_FLIP_TARGET, "PAGE_FLIP_TARGET" },
+        { DRM_CAP_CRTC_IN_VBLANK_EVENT, "CRTC_IN_VBLANK_EVENT" },
+        { DRM_CAP_SYNCOBJ, "SYNCOBJ" },
+        { DRM_CAP_SYNCOBJ_TIMELINE, "SYNCOBJ_TIMELINE" },
+        { DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, "ATOMIC_ASYNC_PAGE_FLIP" },
+        { 0xffffffffULL, "INVALID" },
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(caps); i++) {
+        struct drm_get_cap_compat req;
+        int ret;
+
+        memset(&req, 0, sizeof(req));
+        req.capability = caps[i].cap;
+        ret = call_ioctl(node->fd, DRM_IOCTL_GET_CAP, &req);
+        printf("%s:DRM_IOCTL_GET_CAP[%s]: ret=%d errno=%d value=%lu\n",
+               node->name, caps[i].name, ret, saved_errno(ret), req.value);
+    }
+}
+
+static void probe_client_caps(struct drm_node *node)
+{
+    static const uint64 client_caps[] = {
+        DRM_CLIENT_CAP_UNIVERSAL_PLANES,
+        DRM_CLIENT_CAP_ATOMIC,
+        DRM_CLIENT_CAP_ASPECT_RATIO,
+        DRM_CLIENT_CAP_WRITEBACK_CONNECTORS,
+        0xffffffffULL,
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(client_caps); i++) {
+        struct drm_set_client_cap_compat req;
+        int ret;
+
+        memset(&req, 0, sizeof(req));
+        req.capability = client_caps[i];
+        req.value = 1;
+        ret = call_ioctl(node->fd, DRM_IOCTL_SET_CLIENT_CAP, &req);
+        printf("%s:DRM_IOCTL_SET_CLIENT_CAP[%lu]: ret=%d errno=%d\n",
+               node->name, client_caps[i], ret, saved_errno(ret));
+    }
+}
+
+static void probe_core_misc(struct drm_node *node)
+{
+    struct drm_auth_compat auth;
+    struct drm_client_compat client;
+    struct drm_set_version_compat set_version;
+    struct drm_set_client_name_compat client_name;
+    char name[] = "drmabitest";
+    uint64 scratch[32];
+    int ret;
+
+    memset(&auth, 0, sizeof(auth));
+    ret = call_ioctl(node->fd, DRM_IOCTL_GET_MAGIC, &auth);
+    print_ret_u32(node->name, "DRM_IOCTL_GET_MAGIC", ret, auth.magic);
+    ret = call_ioctl(node->fd, DRM_IOCTL_AUTH_MAGIC, &auth);
+    print_ret(node->name, "DRM_IOCTL_AUTH_MAGIC.self", ret);
+
+    memset(&client, 0, sizeof(client));
+    client.idx = 0;
+    ret = call_ioctl(node->fd, DRM_IOCTL_GET_CLIENT, &client);
+    printf("%s:DRM_IOCTL_GET_CLIENT[0]: ret=%d errno=%d auth=%d pid=%lu "
+           "uid=%lu magic=%lu iocs=%lu\n",
+           node->name, ret, saved_errno(ret), client.auth, client.pid,
+           client.uid, client.magic, client.iocs);
+
+    memset(&set_version, 0, sizeof(set_version));
+    set_version.drm_di_major = 1;
+    set_version.drm_di_minor = 4;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SET_VERSION, &set_version);
+    printf("%s:DRM_IOCTL_SET_VERSION: ret=%d errno=%d di=%d.%d dd=%d.%d\n",
+           node->name, ret, saved_errno(ret), set_version.drm_di_major,
+           set_version.drm_di_minor, set_version.drm_dd_major,
+           set_version.drm_dd_minor);
+
+    memset(&client_name, 0, sizeof(client_name));
+    client_name.name = (uint64)name;
+    client_name.name_len = strlen(name);
+    print_ret(node->name, "DRM_IOCTL_SET_CLIENT_NAME",
+              call_ioctl(node->fd, DRM_IOCTL_SET_CLIENT_NAME, &client_name));
+
+    print_ret(node->name, "DRM_IOCTL_SET_MASTER",
+              call_ioctl(node->fd, DRM_IOCTL_SET_MASTER, scratch));
+    print_ret(node->name, "DRM_IOCTL_DROP_MASTER",
+              call_ioctl(node->fd, DRM_IOCTL_DROP_MASTER, scratch));
+}
+
+static void probe_legacy_core_stubs(struct drm_node *node)
+{
+    static const struct simple_ioctl ioctls[] = {
+        { DRM_IOCTL_GET_MAP, "DRM_IOCTL_GET_MAP", 0 },
+        { DRM_IOCTL_GET_STATS, "DRM_IOCTL_GET_STATS", 0 },
+        { DRM_IOCTL_ADD_MAP, "DRM_IOCTL_ADD_MAP", 0 },
+        { DRM_IOCTL_ADD_BUFS, "DRM_IOCTL_ADD_BUFS", 0 },
+        { DRM_IOCTL_MARK_BUFS, "DRM_IOCTL_MARK_BUFS", 0 },
+        { DRM_IOCTL_INFO_BUFS, "DRM_IOCTL_INFO_BUFS", 0 },
+        { DRM_IOCTL_MAP_BUFS, "DRM_IOCTL_MAP_BUFS", 0 },
+        { DRM_IOCTL_FREE_BUFS, "DRM_IOCTL_FREE_BUFS", 0 },
+        { DRM_IOCTL_RM_MAP, "DRM_IOCTL_RM_MAP", 0 },
+        { DRM_IOCTL_SET_SAREA_CTX, "DRM_IOCTL_SET_SAREA_CTX", 0 },
+        { DRM_IOCTL_GET_SAREA_CTX, "DRM_IOCTL_GET_SAREA_CTX", 0 },
+        { DRM_IOCTL_ADD_CTX, "DRM_IOCTL_ADD_CTX", 0 },
+        { DRM_IOCTL_RM_CTX, "DRM_IOCTL_RM_CTX", 0 },
+        { DRM_IOCTL_MOD_CTX, "DRM_IOCTL_MOD_CTX", 0 },
+        { DRM_IOCTL_GET_CTX, "DRM_IOCTL_GET_CTX", 0 },
+        { DRM_IOCTL_SWITCH_CTX, "DRM_IOCTL_SWITCH_CTX", 0 },
+        { DRM_IOCTL_NEW_CTX, "DRM_IOCTL_NEW_CTX", 0 },
+        { DRM_IOCTL_RES_CTX, "DRM_IOCTL_RES_CTX", 0 },
+        { DRM_IOCTL_DMA, "DRM_IOCTL_DMA", 0 },
+        { DRM_IOCTL_LOCK, "DRM_IOCTL_LOCK", 0 },
+        { DRM_IOCTL_UNLOCK, "DRM_IOCTL_UNLOCK", 0 },
+        { DRM_IOCTL_FINISH, "DRM_IOCTL_FINISH", 0 },
+        { DRM_IOCTL_AGP_ACQUIRE, "DRM_IOCTL_AGP_ACQUIRE", 0 },
+        { DRM_IOCTL_AGP_RELEASE, "DRM_IOCTL_AGP_RELEASE", 0 },
+        { DRM_IOCTL_AGP_ENABLE, "DRM_IOCTL_AGP_ENABLE", 0 },
+        { DRM_IOCTL_AGP_INFO, "DRM_IOCTL_AGP_INFO", 0 },
+        { DRM_IOCTL_AGP_ALLOC, "DRM_IOCTL_AGP_ALLOC", 0 },
+        { DRM_IOCTL_AGP_FREE, "DRM_IOCTL_AGP_FREE", 0 },
+        { DRM_IOCTL_AGP_BIND, "DRM_IOCTL_AGP_BIND", 0 },
+        { DRM_IOCTL_AGP_UNBIND, "DRM_IOCTL_AGP_UNBIND", 0 },
+        { DRM_IOCTL_SG_ALLOC, "DRM_IOCTL_SG_ALLOC", 0 },
+        { DRM_IOCTL_SG_FREE, "DRM_IOCTL_SG_FREE", 0 },
+    };
+    uint64 scratch[32];
+
+    memset(scratch, 0, sizeof(scratch));
+    for (int i = 0; i < ARRAY_SIZE(ioctls); i++)
+        print_ret(node->name, ioctls[i].name,
+                  call_ioctl(node->fd, ioctls[i].request, scratch));
+}
+
+static uint32 first_id(uint32 *ids, uint32 count)
+{
+    return count > 0 ? ids[0] : 0;
+}
+
+static void probe_connector(struct drm_node *node, uint32 connector_id)
+{
+    struct drm_mode_get_connector_compat conn;
+    uint32 encoders[8];
+    uint32 props[32];
+    uint64 values[32];
+    struct drm_mode_modeinfo_compat modes[16];
+    int ret;
+
+    memset(&conn, 0, sizeof(conn));
+    conn.connector_id = connector_id;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
+    printf("%s:DRM_IOCTL_MODE_GETCONNECTOR.probe: ret=%d errno=%d id=%u "
+           "modes=%u props=%u encoders=%u connection=%u\n",
+           node->name, ret, saved_errno(ret), connector_id, conn.count_modes,
+           conn.count_props, conn.count_encoders, conn.connection);
+
+    memset(encoders, 0, sizeof(encoders));
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    memset(modes, 0, sizeof(modes));
+    conn.encoders_ptr = (uint64)encoders;
+    conn.count_encoders = ARRAY_SIZE(encoders);
+    conn.props_ptr = (uint64)props;
+    conn.prop_values_ptr = (uint64)values;
+    conn.count_props = ARRAY_SIZE(props);
+    conn.modes_ptr = (uint64)modes;
+    conn.count_modes = ARRAY_SIZE(modes);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
+    printf("%s:DRM_IOCTL_MODE_GETCONNECTOR.fill: ret=%d errno=%d id=%u "
+           "modes=%u props=%u encoders=%u encoder_id=%u mode0=\"%s\"\n",
+           node->name, ret, saved_errno(ret), connector_id, conn.count_modes,
+           conn.count_props, conn.count_encoders, conn.encoder_id,
+           conn.count_modes > 0 ? modes[0].name : "");
+}
+
+static void probe_property(struct drm_node *node, uint32 prop_id)
+{
+    struct drm_mode_get_property_compat prop;
+    uint64 values[16];
+    struct drm_mode_property_enum_compat enums[16];
+    int ret;
+
+    memset(&prop, 0, sizeof(prop));
+    prop.prop_id = prop_id;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPERTY, &prop);
+    printf("%s:DRM_IOCTL_MODE_GETPROPERTY.probe: ret=%d errno=%d id=%u "
+           "flags=0x%x values=%u enums=%u name=\"%s\"\n",
+           node->name, ret, saved_errno(ret), prop_id, prop.flags,
+           prop.count_values, prop.count_enum_blobs, prop.name);
+
+    memset(values, 0, sizeof(values));
+    memset(enums, 0, sizeof(enums));
+    prop.values_ptr = (uint64)values;
+    prop.count_values = ARRAY_SIZE(values);
+    prop.enum_blob_ptr = (uint64)enums;
+    prop.count_enum_blobs = ARRAY_SIZE(enums);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPERTY, &prop);
+    printf("%s:DRM_IOCTL_MODE_GETPROPERTY.fill: ret=%d errno=%d id=%u "
+           "flags=0x%x values=%u enums=%u name=\"%s\"\n",
+           node->name, ret, saved_errno(ret), prop_id, prop.flags,
+           prop.count_values, prop.count_enum_blobs, prop.name);
+}
+
+static void probe_obj_props(struct drm_node *node, uint32 obj_id,
+                            uint32 obj_type, const char *label)
+{
+    struct drm_mode_obj_get_properties_compat req;
+    uint32 props[32];
+    uint64 values[32];
+    int ret;
+
+    memset(&req, 0, sizeof(req));
+    req.obj_id = obj_id;
+    req.obj_type = obj_type;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &req);
+    printf("%s:DRM_IOCTL_MODE_OBJ_GETPROPERTIES.%s.probe: ret=%d errno=%d "
+           "id=%u count=%u\n",
+           node->name, label, ret, saved_errno(ret), obj_id, req.count_props);
+
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    req.props_ptr = (uint64)props;
+    req.prop_values_ptr = (uint64)values;
+    req.count_props = ARRAY_SIZE(props);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &req);
+    printf("%s:DRM_IOCTL_MODE_OBJ_GETPROPERTIES.%s.fill: ret=%d errno=%d "
+           "id=%u count=%u\n",
+           node->name, label, ret, saved_errno(ret), obj_id, req.count_props);
+
+    if (ret == 0 && req.count_props > 0)
+        probe_property(node, props[0]);
+}
+
+static void probe_plane(struct drm_node *node, uint32 plane_id)
+{
+    struct drm_mode_get_plane_compat plane;
+    uint32 formats[16];
+    int ret;
+
+    memset(&plane, 0, sizeof(plane));
+    plane.plane_id = plane_id;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANE, &plane);
+    printf("%s:DRM_IOCTL_MODE_GETPLANE.probe: ret=%d errno=%d id=%u "
+           "formats=%u crtc=%u fb=%u possible=0x%x\n",
+           node->name, ret, saved_errno(ret), plane_id,
+           plane.count_format_types, plane.crtc_id, plane.fb_id,
+           plane.possible_crtcs);
+
+    memset(formats, 0, sizeof(formats));
+    plane.format_type_ptr = (uint64)formats;
+    plane.count_format_types = ARRAY_SIZE(formats);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANE, &plane);
+    printf("%s:DRM_IOCTL_MODE_GETPLANE.fill: ret=%d errno=%d id=%u "
+           "formats=%u format0=0x%x\n",
+           node->name, ret, saved_errno(ret), plane_id,
+           plane.count_format_types, plane.count_format_types > 0 ? formats[0] : 0);
+}
+
+static void probe_kms(struct drm_node *node)
+{
+    struct drm_mode_card_res_compat res;
+    struct drm_mode_get_plane_res_compat plane_res;
+    uint32 crtcs[8];
+    uint32 connectors[8];
+    uint32 encoders[8];
+    uint32 fbs[16];
+    uint32 planes[8];
+    int ret;
+
+    memset(&res, 0, sizeof(res));
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETRESOURCES, &res);
+    printf("%s:DRM_IOCTL_MODE_GETRESOURCES.probe: ret=%d errno=%d "
+           "fbs=%u crtcs=%u connectors=%u encoders=%u size=%ux%u..%ux%u\n",
+           node->name, ret, saved_errno(ret), res.count_fbs, res.count_crtcs,
+           res.count_connectors, res.count_encoders, res.min_width,
+           res.min_height, res.max_width, res.max_height);
+
+    memset(crtcs, 0, sizeof(crtcs));
+    memset(connectors, 0, sizeof(connectors));
+    memset(encoders, 0, sizeof(encoders));
+    memset(fbs, 0, sizeof(fbs));
+    res.fb_id_ptr = (uint64)fbs;
+    res.count_fbs = ARRAY_SIZE(fbs);
+    res.crtc_id_ptr = (uint64)crtcs;
+    res.count_crtcs = ARRAY_SIZE(crtcs);
+    res.connector_id_ptr = (uint64)connectors;
+    res.count_connectors = ARRAY_SIZE(connectors);
+    res.encoder_id_ptr = (uint64)encoders;
+    res.count_encoders = ARRAY_SIZE(encoders);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETRESOURCES, &res);
+    printf("%s:DRM_IOCTL_MODE_GETRESOURCES.fill: ret=%d errno=%d "
+           "fbs=%u crtcs=%u connectors=%u encoders=%u crtc0=%u conn0=%u "
+           "enc0=%u fb0=%u\n",
+           node->name, ret, saved_errno(ret), res.count_fbs, res.count_crtcs,
+           res.count_connectors, res.count_encoders, first_id(crtcs, res.count_crtcs),
+           first_id(connectors, res.count_connectors),
+           first_id(encoders, res.count_encoders), first_id(fbs, res.count_fbs));
+
+    if (res.count_crtcs > 0) {
+        struct drm_mode_crtc_compat crtc;
+        struct drm_crtc_get_sequence_compat seq;
+        struct drm_crtc_queue_sequence_compat queue_seq;
+
+        memset(&crtc, 0, sizeof(crtc));
+        crtc.crtc_id = crtcs[0];
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETCRTC, &crtc);
+        printf("%s:DRM_IOCTL_MODE_GETCRTC: ret=%d errno=%d id=%u fb=%u "
+               "mode_valid=%u mode=\"%s\"\n",
+               node->name, ret, saved_errno(ret), crtcs[0], crtc.fb_id,
+               crtc.mode_valid, crtc.mode.name);
+
+        memset(&seq, 0, sizeof(seq));
+        seq.crtc_id = crtcs[0];
+        ret = call_ioctl(node->fd, DRM_IOCTL_CRTC_GET_SEQUENCE, &seq);
+        printf("%s:DRM_IOCTL_CRTC_GET_SEQUENCE: ret=%d errno=%d id=%u "
+               "active=%u sequence=%lu ns=%ld\n",
+               node->name, ret, saved_errno(ret), crtcs[0], seq.active,
+               seq.sequence, seq.sequence_ns);
+
+        memset(&queue_seq, 0, sizeof(queue_seq));
+        queue_seq.crtc_id = crtcs[0];
+        queue_seq.flags = DRM_CRTC_SEQUENCE_RELATIVE;
+        queue_seq.sequence = 1;
+        ret = call_ioctl(node->fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq);
+        print_ret_u64(node->name, "DRM_IOCTL_CRTC_QUEUE_SEQUENCE.relative",
+                      ret, queue_seq.sequence);
+
+        probe_obj_props(node, crtcs[0], DRM_MODE_OBJECT_CRTC, "crtc");
+    }
+
+    if (res.count_connectors > 0) {
+        probe_connector(node, connectors[0]);
+        probe_obj_props(node, connectors[0], DRM_MODE_OBJECT_CONNECTOR,
+                        "connector");
+    }
+
+    if (res.count_encoders > 0) {
+        struct drm_mode_get_encoder_compat enc;
+
+        memset(&enc, 0, sizeof(enc));
+        enc.encoder_id = encoders[0];
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETENCODER, &enc);
+        printf("%s:DRM_IOCTL_MODE_GETENCODER: ret=%d errno=%d id=%u "
+               "type=%u crtc=%u possible=0x%x\n",
+               node->name, ret, saved_errno(ret), encoders[0],
+               enc.encoder_type, enc.crtc_id, enc.possible_crtcs);
+    }
+
+    memset(&plane_res, 0, sizeof(plane_res));
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res);
+    printf("%s:DRM_IOCTL_MODE_GETPLANERESOURCES.probe: ret=%d errno=%d "
+           "planes=%u\n",
+           node->name, ret, saved_errno(ret), plane_res.count_planes);
+
+    memset(planes, 0, sizeof(planes));
+    plane_res.plane_id_ptr = (uint64)planes;
+    plane_res.count_planes = ARRAY_SIZE(planes);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res);
+    printf("%s:DRM_IOCTL_MODE_GETPLANERESOURCES.fill: ret=%d errno=%d "
+           "planes=%u plane0=%u\n",
+           node->name, ret, saved_errno(ret), plane_res.count_planes,
+           first_id(planes, plane_res.count_planes));
+
+    if (plane_res.count_planes > 0) {
+        probe_plane(node, planes[0]);
+        probe_obj_props(node, planes[0], DRM_MODE_OBJECT_PLANE, "plane");
+    }
+}
+
+static void probe_kms_invalids(struct drm_node *node)
+{
+    struct drm_mode_crtc_compat crtc;
+    struct drm_mode_crtc_lut_compat gamma;
+    struct drm_mode_get_blob_compat blob;
+    struct drm_mode_get_property_compat prop;
+    struct drm_mode_obj_get_properties_compat obj_props;
+    struct drm_mode_obj_set_property_compat obj_set;
+    struct drm_mode_fb_dirty_cmd_compat dirtyfb;
+    struct drm_mode_create_lease_compat create_lease;
+    struct drm_mode_list_lessees_compat list_lessees;
+    struct drm_mode_get_lease_compat get_lease;
+    struct drm_mode_revoke_lease_compat revoke_lease;
+    struct drm_mode_closefb_compat closefb;
+
+    memset(&crtc, 0, sizeof(crtc));
+    print_ret(node->name, "DRM_IOCTL_MODE_SETCRTC.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_SETCRTC, &crtc));
+
+    memset(&gamma, 0, sizeof(gamma));
+    print_ret(node->name, "DRM_IOCTL_MODE_GETGAMMA.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_GETGAMMA, &gamma));
+    print_ret(node->name, "DRM_IOCTL_MODE_SETGAMMA.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_SETGAMMA, &gamma));
+
+    memset(&blob, 0, sizeof(blob));
+    print_ret(node->name, "DRM_IOCTL_MODE_GETPROPBLOB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob));
+
+    memset(&prop, 0, sizeof(prop));
+    print_ret(node->name, "DRM_IOCTL_MODE_GETPROPERTY.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_GETPROPERTY, &prop));
+
+    memset(&obj_props, 0, sizeof(obj_props));
+    print_ret(node->name, "DRM_IOCTL_MODE_OBJ_GETPROPERTIES.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES,
+                         &obj_props));
+
+    memset(&obj_set, 0, sizeof(obj_set));
+    print_ret(node->name, "DRM_IOCTL_MODE_OBJ_SETPROPERTY.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &obj_set));
+
+    memset(&dirtyfb, 0, sizeof(dirtyfb));
+    print_ret(node->name, "DRM_IOCTL_MODE_DIRTYFB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_DIRTYFB, &dirtyfb));
+
+    memset(&create_lease, 0, sizeof(create_lease));
+    print_ret(node->name, "DRM_IOCTL_MODE_CREATE_LEASE.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_CREATE_LEASE,
+                         &create_lease));
+
+    memset(&list_lessees, 0, sizeof(list_lessees));
+    print_ret(node->name, "DRM_IOCTL_MODE_LIST_LESSEES.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_LIST_LESSEES,
+                         &list_lessees));
+
+    memset(&get_lease, 0, sizeof(get_lease));
+    print_ret(node->name, "DRM_IOCTL_MODE_GET_LEASE.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_GET_LEASE, &get_lease));
+
+    memset(&revoke_lease, 0, sizeof(revoke_lease));
+    print_ret(node->name, "DRM_IOCTL_MODE_REVOKE_LEASE.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_REVOKE_LEASE,
+                         &revoke_lease));
+
+    memset(&closefb, 0, sizeof(closefb));
+    print_ret(node->name, "DRM_IOCTL_MODE_CLOSEFB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_CLOSEFB, &closefb));
+}
+
+static void probe_syncobj(struct drm_node *node)
+{
+    struct drm_syncobj_create_compat create;
+    struct drm_syncobj_array_compat array;
+    struct drm_syncobj_timeline_array_compat timeline_array;
+    struct drm_syncobj_wait_compat wait_req;
+    struct drm_syncobj_timeline_wait_compat timeline_wait;
+    struct drm_syncobj_handle_compat handle_fd;
+    struct drm_syncobj_transfer_compat transfer;
+    struct drm_syncobj_eventfd_compat eventfd;
+    struct drm_syncobj_destroy_compat destroy;
+    uint32 handles[1];
+    uint64 points[1];
+    int ret;
+
+    memset(&create, 0, sizeof(create));
+    create.flags = DRM_SYNCOBJ_CREATE_SIGNALED;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE, &create);
+    print_ret_u32(node->name, "DRM_IOCTL_SYNCOBJ_CREATE.signaled", ret,
+                  create.handle);
+    if (ret < 0 || create.handle == 0)
+        return;
+
+    handles[0] = create.handle;
+    points[0] = 1;
+
+    memset(&wait_req, 0, sizeof(wait_req));
+    wait_req.handles = (uint64)handles;
+    wait_req.count_handles = 1;
+    wait_req.timeout_nsec = 0;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait_req);
+    print_ret_u32(node->name, "DRM_IOCTL_SYNCOBJ_WAIT.signaled", ret,
+                  wait_req.first_signaled);
+
+    memset(&timeline_wait, 0, sizeof(timeline_wait));
+    timeline_wait.handles = (uint64)handles;
+    timeline_wait.points = (uint64)points;
+    timeline_wait.count_handles = 1;
+    timeline_wait.timeout_nsec = 0;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &timeline_wait);
+    print_ret_u32(node->name, "DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT.point1", ret,
+                  timeline_wait.first_signaled);
+
+    memset(&timeline_array, 0, sizeof(timeline_array));
+    timeline_array.handles = (uint64)handles;
+    timeline_array.points = (uint64)points;
+    timeline_array.count_handles = 1;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_QUERY, &timeline_array);
+    printf("%s:DRM_IOCTL_SYNCOBJ_QUERY: ret=%d errno=%d point0=%lu\n",
+           node->name, ret, saved_errno(ret), points[0]);
+
+    memset(&array, 0, sizeof(array));
+    array.handles = (uint64)handles;
+    array.count_handles = 1;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_RESET", ret);
+
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_SIGNAL", ret);
+
+    memset(&timeline_array, 0, sizeof(timeline_array));
+    points[0] = 2;
+    timeline_array.handles = (uint64)handles;
+    timeline_array.points = (uint64)points;
+    timeline_array.count_handles = 1;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL,
+                     &timeline_array);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL.point2", ret);
+
+    memset(&transfer, 0, sizeof(transfer));
+    transfer.src_handle = create.handle;
+    transfer.dst_handle = create.handle;
+    transfer.src_point = 2;
+    transfer.dst_point = 3;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_TRANSFER, &transfer);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_TRANSFER.self", ret);
+
+    memset(&handle_fd, 0, sizeof(handle_fd));
+    handle_fd.handle = create.handle;
+    handle_fd.flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &handle_fd);
+    printf("%s:DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD.sync_file: ret=%d errno=%d "
+           "fd=%d\n",
+           node->name, ret, saved_errno(ret), handle_fd.fd);
+    if (ret == 0 && handle_fd.fd >= 0) {
+        struct drm_syncobj_handle_compat import_fd;
+
+        memset(&import_fd, 0, sizeof(import_fd));
+        import_fd.fd = handle_fd.fd;
+        import_fd.flags = DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE;
+        ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, &import_fd);
+        printf("%s:DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE.sync_file: ret=%d "
+               "errno=%d handle=%u\n",
+               node->name, ret, saved_errno(ret), import_fd.handle);
+        if (ret == 0 && import_fd.handle != 0) {
+            struct drm_syncobj_destroy_compat destroy_import;
+
+            memset(&destroy_import, 0, sizeof(destroy_import));
+            destroy_import.handle = import_fd.handle;
+            print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY.imported",
+                      call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                                 &destroy_import));
+        }
+        close(handle_fd.fd);
+    }
+
+    memset(&eventfd, 0, sizeof(eventfd));
+    eventfd.handle = create.handle;
+    eventfd.fd = -1;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_EVENTFD, &eventfd);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_EVENTFD.invalid_fd", ret);
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+    print_ret(node->name, "DRM_IOCTL_SYNCOBJ_DESTROY", ret);
+}
+
+static void probe_dumb_bo(struct drm_node *node)
+{
+    struct drm_mode_create_dumb_compat create;
+    struct drm_mode_map_dumb_compat map;
+    struct drm_prime_handle_compat prime;
+    struct drm_gem_flink_compat flink;
+    struct drm_gem_close_compat close_req;
+    struct drm_mode_destroy_dumb_compat destroy;
+    int prime_fd = -1;
+    int ret;
+
+    memset(&create, 0, sizeof(create));
+    create.width = 64;
+    create.height = 64;
+    create.bpp = 32;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
+    printf("%s:DRM_IOCTL_MODE_CREATE_DUMB.valid: ret=%d errno=%d handle=%u "
+           "pitch=%u size=%lu\n",
+           node->name, ret, saved_errno(ret), create.handle, create.pitch,
+           create.size);
+    if (ret < 0 || create.handle == 0)
+        return;
+
+    memset(&map, 0, sizeof(map));
+    map.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+    print_ret_u64(node->name, "DRM_IOCTL_MODE_MAP_DUMB.valid", ret,
+                  map.offset);
+
+    memset(&prime, 0, sizeof(prime));
+    prime.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime);
+    printf("%s:DRM_IOCTL_PRIME_HANDLE_TO_FD.valid: ret=%d errno=%d fd=%d\n",
+           node->name, ret, saved_errno(ret), prime.fd);
+    if (ret == 0 && prime.fd >= 0)
+        prime_fd = prime.fd;
+
+    if (prime_fd >= 0) {
+        struct drm_prime_handle_compat import_req;
+
+        memset(&import_req, 0, sizeof(import_req));
+        import_req.fd = prime_fd;
+        ret = call_ioctl(node->fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &import_req);
+        printf("%s:DRM_IOCTL_PRIME_FD_TO_HANDLE.valid: ret=%d errno=%d "
+               "handle=%u\n",
+               node->name, ret, saved_errno(ret), import_req.handle);
+        if (import_req.handle != 0 && import_req.handle != create.handle) {
+            memset(&close_req, 0, sizeof(close_req));
+            close_req.handle = import_req.handle;
+            print_ret(node->name, "DRM_IOCTL_GEM_CLOSE.imported",
+                      call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req));
+        }
+        close(prime_fd);
+    }
+
+    memset(&flink, 0, sizeof(flink));
+    flink.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_GEM_FLINK, &flink);
+    print_ret_u32(node->name, "DRM_IOCTL_GEM_FLINK.valid", ret, flink.name);
+
+    {
+        struct drm_mode_fb_cmd2_compat addfb2;
+        struct drm_mode_fb_cmd_compat getfb;
+        struct drm_mode_fb_cmd2_compat getfb2;
+        struct drm_mode_closefb_compat closefb;
+        uint32 rmfb;
+
+        memset(&addfb2, 0, sizeof(addfb2));
+        addfb2.width = create.width;
+        addfb2.height = create.height;
+        addfb2.pixel_format = DRM_FORMAT_XRGB8888;
+        addfb2.handles[0] = create.handle;
+        addfb2.pitches[0] = create.pitch;
+        ret = call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB2, &addfb2);
+        print_ret_u32(node->name, "DRM_IOCTL_MODE_ADDFB2.valid", ret,
+                      addfb2.fb_id);
+        if (ret == 0 && addfb2.fb_id != 0) {
+            memset(&getfb, 0, sizeof(getfb));
+            getfb.fb_id = addfb2.fb_id;
+            ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETFB, &getfb);
+            printf("%s:DRM_IOCTL_MODE_GETFB.valid: ret=%d errno=%d "
+                   "fb=%u handle=%u %ux%u pitch=%u bpp=%u depth=%u\n",
+                   node->name, ret, saved_errno(ret), getfb.fb_id,
+                   getfb.handle, getfb.width, getfb.height, getfb.pitch,
+                   getfb.bpp, getfb.depth);
+
+            memset(&getfb2, 0, sizeof(getfb2));
+            getfb2.fb_id = addfb2.fb_id;
+            ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETFB2, &getfb2);
+            printf("%s:DRM_IOCTL_MODE_GETFB2.valid: ret=%d errno=%d "
+                   "fb=%u handle0=%u %ux%u format=0x%x\n",
+                   node->name, ret, saved_errno(ret), getfb2.fb_id,
+                   getfb2.handles[0], getfb2.width, getfb2.height,
+                   getfb2.pixel_format);
+
+            memset(&closefb, 0, sizeof(closefb));
+            closefb.fb_id = addfb2.fb_id;
+            ret = call_ioctl(node->fd, DRM_IOCTL_MODE_CLOSEFB, &closefb);
+            print_ret(node->name, "DRM_IOCTL_MODE_CLOSEFB.valid", ret);
+
+            rmfb = addfb2.fb_id;
+            ret = call_ioctl(node->fd, DRM_IOCTL_MODE_RMFB, &rmfb);
+            print_ret(node->name, "DRM_IOCTL_MODE_RMFB.after_closefb", ret);
+        }
+    }
+
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = create.handle;
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+    print_ret(node->name, "DRM_IOCTL_MODE_DESTROY_DUMB.valid", ret);
+}
+
+static void probe_virtgpu(struct drm_node *node)
+{
+    static const uint64 params[] = {
+        VIRTGPU_PARAM_3D_FEATURES,
+        VIRTGPU_PARAM_CAPSET_QUERY_FIX,
+        VIRTGPU_PARAM_RESOURCE_BLOB,
+        VIRTGPU_PARAM_HOST_VISIBLE,
+        VIRTGPU_PARAM_CONTEXT_INIT,
+        VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs,
+        VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME,
+        0xffffffffULL,
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(params); i++) {
+        struct drm_virtgpu_getparam_compat req;
+        int ret;
+
+        memset(&req, 0, sizeof(req));
+        req.param = params[i];
+        ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GETPARAM, &req);
+        printf("%s:DRM_IOCTL_VIRTGPU_GETPARAM[%lu]: ret=%d errno=%d "
+               "value=%lu\n",
+               node->name, params[i], ret, saved_errno(ret), req.value);
+    }
+}
+
+static void probe_virtgpu_invalids(struct drm_node *node)
+{
+    struct drm_virtgpu_resource_create_compat create;
+    struct drm_virtgpu_resource_create_blob_compat blob;
+    struct drm_virtgpu_3d_transfer_compat transfer;
+    struct drm_virtgpu_context_init_compat context_init;
+
+    memset(&context_init, 0, sizeof(context_init));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_CONTEXT_INIT.empty",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_CONTEXT_INIT,
+                         &context_init));
+
+    memset(&create, 0, sizeof(create));
+    print_ret_u32(node->name, "DRM_IOCTL_VIRTGPU_RESOURCE_CREATE.invalid",
+                  call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE,
+                             &create),
+                  create.bo_handle);
+
+    memset(&blob, 0, sizeof(blob));
+    print_ret_u32(node->name, "DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.invalid",
+                  call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
+                             &blob),
+                  blob.bo_handle);
+
+    memset(&transfer, 0, sizeof(transfer));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST,
+                         &transfer));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST,
+                         &transfer));
+}
+
+static void probe_safe_invalids(struct drm_node *node)
+{
+    struct drm_gem_close_compat gem_close;
+    struct drm_gem_flink_compat flink;
+    struct drm_gem_open_compat gem_open;
+    struct drm_mode_destroy_blob_compat destroy_blob;
+    struct drm_mode_create_blob_compat create_blob;
+    struct drm_mode_set_plane_compat set_plane;
+    struct drm_mode_cursor_compat cursor;
+    struct drm_mode_cursor2_compat cursor2;
+    struct drm_mode_atomic_compat atomic;
+    struct drm_mode_crtc_page_flip_compat flip;
+    struct drm_mode_fb_cmd_compat addfb;
+    struct drm_mode_fb_cmd2_compat addfb2;
+    struct drm_mode_destroy_dumb_compat destroy_dumb;
+    struct drm_virtgpu_3d_wait_compat virt_wait;
+    struct drm_virtgpu_map_compat virt_map;
+    struct drm_virtgpu_resource_info_compat virt_info;
+    struct drm_virtgpu_get_caps_compat virt_caps;
+    struct drm_virtgpu_execbuffer_compat execbuffer;
+    union drm_wait_vblank_compat vblank;
+    int ret;
+
+    memset(&gem_close, 0, sizeof(gem_close));
+    print_ret(node->name, "DRM_IOCTL_GEM_CLOSE.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &gem_close));
+
+    memset(&flink, 0, sizeof(flink));
+    print_ret(node->name, "DRM_IOCTL_GEM_FLINK.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_GEM_FLINK, &flink));
+
+    memset(&gem_open, 0, sizeof(gem_open));
+    print_ret(node->name, "DRM_IOCTL_GEM_OPEN.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_GEM_OPEN, &gem_open));
+
+    memset(&create_blob, 0, sizeof(create_blob));
+    print_ret_u32(node->name, "DRM_IOCTL_MODE_CREATEPROPBLOB.invalid",
+                  call_ioctl(node->fd, DRM_IOCTL_MODE_CREATEPROPBLOB,
+                             &create_blob),
+                  create_blob.blob_id);
+
+    memset(&destroy_blob, 0, sizeof(destroy_blob));
+    print_ret(node->name, "DRM_IOCTL_MODE_DESTROYPROPBLOB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROYPROPBLOB,
+                         &destroy_blob));
+
+    memset(&set_plane, 0, sizeof(set_plane));
+    print_ret(node->name, "DRM_IOCTL_MODE_SETPLANE.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_SETPLANE, &set_plane));
+
+    memset(&cursor, 0, sizeof(cursor));
+    print_ret(node->name, "DRM_IOCTL_MODE_CURSOR.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_CURSOR, &cursor));
+
+    memset(&cursor2, 0, sizeof(cursor2));
+    print_ret(node->name, "DRM_IOCTL_MODE_CURSOR2.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_CURSOR2, &cursor2));
+
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY;
+    print_ret(node->name, "DRM_IOCTL_MODE_ATOMIC.empty_test_only",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_ATOMIC, &atomic));
+
+    memset(&flip, 0, sizeof(flip));
+    print_ret(node->name, "DRM_IOCTL_MODE_PAGE_FLIP.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip));
+
+    memset(&addfb, 0, sizeof(addfb));
+    print_ret(node->name, "DRM_IOCTL_MODE_ADDFB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB, &addfb));
+
+    memset(&addfb2, 0, sizeof(addfb2));
+    print_ret(node->name, "DRM_IOCTL_MODE_ADDFB2.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_ADDFB2, &addfb2));
+
+    memset(&destroy_dumb, 0, sizeof(destroy_dumb));
+    print_ret(node->name, "DRM_IOCTL_MODE_DESTROY_DUMB.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_dumb));
+
+    memset(&virt_wait, 0, sizeof(virt_wait));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_WAIT.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_WAIT, &virt_wait));
+
+    memset(&virt_map, 0, sizeof(virt_map));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_MAP.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_MAP, &virt_map));
+
+    memset(&virt_info, 0, sizeof(virt_info));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_RESOURCE_INFO.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_INFO, &virt_info));
+
+    memset(&virt_caps, 0, sizeof(virt_caps));
+    ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GET_CAPS, &virt_caps);
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_GET_CAPS.invalid", ret);
+
+    memset(&execbuffer, 0, sizeof(execbuffer));
+    print_ret(node->name, "DRM_IOCTL_VIRTGPU_EXECBUFFER.invalid",
+              call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &execbuffer));
+
+    memset(&vblank, 0, sizeof(vblank));
+    print_ret(node->name, "DRM_IOCTL_WAIT_VBLANK.zero",
+              call_ioctl(node->fd, DRM_IOCTL_WAIT_VBLANK, &vblank));
+}
+
+static void probe_node(struct drm_node *node)
+{
+    if (node->fd < 0) {
+        printf("%s:open(%s): ret=%d errno=%d\n",
+               node->name, node->path, node->fd, saved_errno(node->fd));
+        return;
+    }
+
+    printf("%s:open(%s): ret=%d errno=0\n", node->name, node->path, node->fd);
+    probe_version(node);
+    probe_unique(node);
+    probe_caps(node);
+    probe_client_caps(node);
+    probe_core_misc(node);
+    probe_legacy_core_stubs(node);
+    probe_kms(node);
+    probe_kms_invalids(node);
+    probe_syncobj(node);
+    probe_dumb_bo(node);
+    probe_virtgpu(node);
+    probe_virtgpu_invalids(node);
+    probe_safe_invalids(node);
+}
+
+int main(int argc, char **argv)
+{
+    struct drm_node nodes[] = {
+        { "card0", "/dev/dri/card0", -1 },
+        { "renderD128", "/dev/dri/renderD128", -1 },
+    };
+
+    (void)argc;
+    (void)argv;
+
+    printf("drmabitest: begin\n");
+    for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+        nodes[i].fd = open(nodes[i].path, O_RDWR);
+        probe_node(&nodes[i]);
+        if (nodes[i].fd >= 0)
+            close(nodes[i].fd);
+    }
+    printf("drmabitest: end\n");
+    return 0;
+}
