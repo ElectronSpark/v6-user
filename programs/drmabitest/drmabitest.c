@@ -2033,14 +2033,16 @@ static void probe_virtgpu(struct drm_node *node)
 
     for (int i = 0; i < ARRAY_SIZE(params); i++) {
         struct drm_virtgpu_getparam_compat req;
+        uint64 value = 0;
         int ret;
 
         memset(&req, 0, sizeof(req));
         req.param = params[i];
+        req.value = (uint64)&value;
         ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GETPARAM, &req);
         printf("%s:DRM_IOCTL_VIRTGPU_GETPARAM[%lu]: ret=%d errno=%d "
                "value=%lu\n",
-               node->name, params[i], ret, saved_errno(ret), req.value);
+               node->name, params[i], ret, saved_errno(ret), value);
     }
 }
 
@@ -2132,6 +2134,41 @@ static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
     if (create_ret == 0 && create.bo_handle != 0) {
         memset(&close_req, 0, sizeof(close_req));
         close_req.handle = create.bo_handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    }
+}
+
+static void probe_virtgpu_blob_create(struct drm_node *node)
+{
+    struct drm_virtgpu_resource_create_blob_compat blob;
+    struct drm_virtgpu_resource_info_compat info;
+    struct drm_gem_close_compat close_req;
+    int create_ret;
+    int info_ret = -999;
+
+    memset(&blob, 0, sizeof(blob));
+    blob.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
+    blob.size = 4096;
+    blob.blob_id = 0x587636626c6f6231ULL;
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
+                            &blob);
+    memset(&info, 0, sizeof(info));
+    if (create_ret == 0 && blob.bo_handle != 0) {
+        info.bo_handle = blob.bo_handle;
+        info_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_INFO,
+                              &info);
+    }
+
+    printf("%s:DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.valid: create=%d "
+           "create_errno=%d bo=%u res=%u size=%lu info=%d info_errno=%d "
+           "info_res=%u info_size=%u blob_mem=%u\n",
+           node->name, create_ret, saved_errno(create_ret), blob.bo_handle,
+           blob.res_handle, blob.size, info_ret, saved_errno(info_ret),
+           info.res_handle, info.size, info.blob_mem);
+
+    if (create_ret == 0 && blob.bo_handle != 0) {
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = blob.bo_handle;
         (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
     }
 }
@@ -2547,6 +2584,7 @@ static void probe_node(struct drm_node *node)
     probe_cursor_plane(node);
     probe_virtgpu(node);
     probe_virtgpu_execbuffer_sync(node);
+    probe_virtgpu_blob_create(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
 }
