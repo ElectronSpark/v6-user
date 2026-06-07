@@ -2205,57 +2205,77 @@ static void probe_virtgpu_blob_create(struct drm_node *node)
 
 static void probe_virtgpu_host_visible_blob(struct drm_node *node)
 {
-    struct drm_virtgpu_resource_create_blob_compat blob;
-    struct drm_virtgpu_map_compat map;
-    struct drm_gem_close_compat close_req;
-    volatile uint32 *mapped = (volatile uint32 *)MAP_FAILED;
     uint64 host_visible = 0;
-    uint32 sample = 0;
     int param_ret;
-    int create_ret;
-    int map_ret = -999;
-    int mmap_ok = 0;
+    static const struct {
+        const char *label;
+        uint32 blob_mem;
+        uint64 blob_id;
+    } cases[] = {
+        { "host3d", VIRTGPU_BLOB_MEM_HOST3D, 0 },
+        { "host3d_guest", VIRTGPU_BLOB_MEM_HOST3D_GUEST, 0 },
+    };
 
-    memset(&map, 0, sizeof(map));
     param_ret = virtgpu_getparam_value(node, VIRTGPU_PARAM_HOST_VISIBLE,
                                        &host_visible);
 
-    memset(&blob, 0, sizeof(blob));
-    blob.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
-    blob.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
-    blob.size = 4096;
-    blob.blob_id = 0x5876686f73747631ULL;
-    create_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
-                            &blob);
-
-    if (create_ret == 0 && blob.bo_handle != 0) {
-        map.handle = blob.bo_handle;
-        map_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_MAP, &map);
-        if (map_ret == 0) {
-            mapped = (volatile uint32 *)mmap(0, (int)blob.size,
-                                             PROT_READ | PROT_WRITE,
-                                             MAP_SHARED, node->fd, map.offset);
-            if (mapped != (volatile uint32 *)MAP_FAILED) {
-                mapped[0] = 0xfeed5035U;
-                sample = mapped[0];
-                mmap_ok = sample == 0xfeed5035U;
-                munmap((void *)mapped, (int)blob.size);
-            }
-        }
-
-        memset(&close_req, 0, sizeof(close_req));
-        close_req.handle = blob.bo_handle;
-        (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    if (param_ret != 0 || host_visible == 0) {
+        printf("%s:DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.host_visible: "
+               "param=%d param_errno=%d advertised=%lu skipped=1\n",
+               node->name, param_ret, saved_errno(param_ret), host_visible);
+        return;
     }
 
-    printf("%s:DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.host_visible: "
-           "param=%d param_errno=%d advertised=%lu create=%d "
-           "create_errno=%d bo=%u res=%u size=%lu map=%d map_errno=%d "
-           "offset=0x%lx mmap_ok=%d sample=0x%x\n",
-           node->name, param_ret, saved_errno(param_ret), host_visible,
-           create_ret, saved_errno(create_ret), blob.bo_handle,
-           blob.res_handle, blob.size, map_ret, saved_errno(map_ret),
-           map.offset, mmap_ok, sample);
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        struct drm_virtgpu_resource_create_blob_compat blob;
+        struct drm_virtgpu_map_compat map;
+        struct drm_gem_close_compat close_req;
+        volatile uint32 *mapped = (volatile uint32 *)MAP_FAILED;
+        uint32 sample = 0;
+        int create_ret;
+        int map_ret = -999;
+        int mmap_ok = 0;
+
+        memset(&map, 0, sizeof(map));
+        memset(&blob, 0, sizeof(blob));
+        blob.blob_mem = cases[i].blob_mem;
+        blob.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
+        blob.size = 4096;
+        blob.blob_id = cases[i].blob_id;
+        create_ret = call_ioctl(node->fd,
+                                DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
+                                &blob);
+
+        if (create_ret == 0 && blob.bo_handle != 0) {
+            map.handle = blob.bo_handle;
+            map_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_MAP, &map);
+            if (map_ret == 0) {
+                mapped = (volatile uint32 *)mmap(0, (int)blob.size,
+                                                 PROT_READ | PROT_WRITE,
+                                                 MAP_SHARED, node->fd,
+                                                 map.offset);
+                if (mapped != (volatile uint32 *)MAP_FAILED) {
+                    mapped[0] = 0xfeed5035U;
+                    sample = mapped[0];
+                    mmap_ok = sample == 0xfeed5035U;
+                    munmap((void *)mapped, (int)blob.size);
+                }
+            }
+
+            memset(&close_req, 0, sizeof(close_req));
+            close_req.handle = blob.bo_handle;
+            (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+        }
+
+        printf("%s:DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.host_visible.%s: "
+               "param=%d param_errno=%d advertised=%lu create=%d "
+               "create_errno=%d bo=%u res=%u size=%lu map=%d map_errno=%d "
+               "offset=0x%lx mmap_ok=%d sample=0x%x\n",
+               node->name, cases[i].label, param_ret, saved_errno(param_ret),
+               host_visible, create_ret, saved_errno(create_ret),
+               blob.bo_handle, blob.res_handle, blob.size, map_ret,
+               saved_errno(map_ret), map.offset, mmap_ok, sample);
+    }
 }
 
 static void probe_virtgpu_invalids(struct drm_node *node)
