@@ -1,5 +1,6 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/errno.h"
+#include "kernel/inc/dev/fb.h"
 #include "kernel/inc/syscall.h"
 #include "kernel/inc/uabi/drm.h"
 #include "kernel/inc/uabi/fcntl.h"
@@ -13,6 +14,7 @@
 #define VIRGL_FORMAT_B8G8R8A8_UNORM 1
 #define VIRGL_BIND_RENDER_TARGET (1u << 1)
 #define VIRGL_BIND_SAMPLER_VIEW (1u << 3)
+#define VIRGL_BIND_DISPLAY_TARGET (1u << 7)
 #define PIPE_TEXTURE_2D 2
 
 struct drm_node {
@@ -2167,6 +2169,255 @@ static void probe_virtgpu_invalids(struct drm_node *node)
                          &transfer));
 }
 
+static uint32 get_first_crtc_id(struct drm_node *node)
+{
+    struct drm_mode_card_res_compat res;
+    uint32 crtcs[4];
+    int ret;
+
+    if (node == NULL || node->fd < 0)
+        return 0;
+    memset(&res, 0, sizeof(res));
+    memset(crtcs, 0, sizeof(crtcs));
+    res.crtc_id_ptr = (uint64)crtcs;
+    res.count_crtcs = ARRAY_SIZE(crtcs);
+    ret = call_ioctl(node->fd, DRM_IOCTL_MODE_GETRESOURCES, &res);
+    if (ret != 0 || res.count_crtcs == 0)
+        return 0;
+    return crtcs[0];
+}
+
+static void probe_prime_virtgpu_sample_scanout(void)
+{
+    enum { SAMPLE_W = 128, SAMPLE_H = 128 };
+    struct fb_gpu_scanout_read req;
+    uint32 *sample;
+    uint64 total = 0;
+    uint64 nonzero = 0;
+    uint64 nonblack = 0;
+    uint64 sum_r = 0;
+    uint64 sum_g = 0;
+    uint64 sum_b = 0;
+    uint64 hash = 1469598103934665603UL;
+    uint32 center = 0;
+    uint32 tl = 0;
+    uint32 tr = 0;
+    uint32 bl = 0;
+    uint32 br = 0;
+    int fd;
+    int ret = -1;
+
+    sample = malloc(SAMPLE_W * SAMPLE_H * sizeof(uint32));
+    if (sample == NULL) {
+        printf("cross:DRM_PRIME_VIRTGPU_RESOURCE.sample: ret=-1 "
+               "errno=12\n");
+        return;
+    }
+
+    fd = open("/dev/fb0", O_RDWR);
+    if (fd >= 0) {
+        memset(&req, 0, sizeof(req));
+        req.x = 0;
+        req.y = 0;
+        req.w = SAMPLE_W;
+        req.h = SAMPLE_H;
+        req.pitch = SAMPLE_W * sizeof(uint32);
+        req.pixels = (uint64)sample;
+        ret = ioctl(fd, FB_GPU_SCANOUT_READ, &req);
+        close(fd);
+    }
+
+    if (ret == 0) {
+        for (uint32 row = 0; row < SAMPLE_H; row++) {
+            for (uint32 col = 0; col < SAMPLE_W; col++) {
+                uint32 px = sample[row * SAMPLE_W + col];
+                uint32 rgb = px & 0x00ffffffU;
+
+                total++;
+                if (px != 0)
+                    nonzero++;
+                if (rgb != 0)
+                    nonblack++;
+                sum_r += rgb & 0xffU;
+                sum_g += (rgb >> 8) & 0xffU;
+                sum_b += (rgb >> 16) & 0xffU;
+                hash ^= px;
+                hash *= 1099511628211UL;
+            }
+        }
+        tl = sample[0];
+        tr = sample[SAMPLE_W - 1];
+        bl = sample[(SAMPLE_H - 1) * SAMPLE_W];
+        br = sample[(SAMPLE_H - 1) * SAMPLE_W + SAMPLE_W - 1];
+        center = sample[(SAMPLE_H / 2) * SAMPLE_W + SAMPLE_W / 2];
+        printf("cross:DRM_PRIME_VIRTGPU_RESOURCE.sample: ret=0 "
+               "screen=%ux%u pitch=%u total=%lu nonzero=%lu "
+               "nonblack=%lu avg_rgb=%lu,%lu,%lu hash=0x%lx "
+               "center=0x%x corners=0x%x,0x%x,0x%x,0x%x\n",
+               req.screen_width, req.screen_height, req.screen_pitch,
+               total, nonzero, nonblack,
+               total ? sum_r / total : 0,
+               total ? sum_g / total : 0,
+               total ? sum_b / total : 0,
+               hash, center, tl, tr, bl, br);
+    } else {
+        printf("cross:DRM_PRIME_VIRTGPU_RESOURCE.sample: ret=-1 errno=1\n");
+    }
+
+    free(sample);
+}
+
+static void probe_prime_virtgpu_handoff(struct drm_node *card,
+                                        struct drm_node *render)
+{
+    enum { W = 1280, H = 800 };
+    struct drm_virtgpu_resource_create_compat create;
+    struct drm_virtgpu_map_compat map;
+    struct drm_virtgpu_3d_transfer_compat transfer;
+    struct drm_prime_handle_compat prime;
+    struct drm_prime_handle_compat import_req;
+    struct drm_mode_fb_cmd2_compat addfb2;
+    struct drm_mode_crtc_page_flip_compat flip;
+    struct drm_gem_close_compat close_req;
+    uint32 *pixels = (uint32 *)MAP_FAILED;
+    int create_ret = -999;
+    int map_ret = -999;
+    int transfer_ret = -999;
+    int export_ret = -999;
+    int import_ret = -999;
+    int addfb_ret = -999;
+    int flip_ret = -999;
+    int prime_fd = -1;
+    uint32 card_handle = 0;
+    uint32 fb_id = 0;
+    uint32 crtc_id;
+
+    if (card == NULL || render == NULL || card->fd < 0 || render->fd < 0)
+        return;
+
+    crtc_id = get_first_crtc_id(card);
+
+    memset(&create, 0, sizeof(create));
+    create.target = PIPE_TEXTURE_2D;
+    create.format = VIRGL_FORMAT_B8G8R8A8_UNORM;
+    create.bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW |
+                  VIRGL_BIND_DISPLAY_TARGET;
+    create.width = W;
+    create.height = H;
+    create.depth = 1;
+    create.array_size = 1;
+    create.size = W * H * 4;
+    create_ret = call_ioctl(render->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE,
+                            &create);
+
+    if (create_ret == 0 && create.bo_handle != 0) {
+        memset(&map, 0, sizeof(map));
+        map.handle = create.bo_handle;
+        map_ret = call_ioctl(render->fd, DRM_IOCTL_VIRTGPU_MAP, &map);
+        if (map_ret == 0) {
+            pixels = mmap(0, (int)create.size, PROT_READ | PROT_WRITE,
+                          MAP_SHARED, render->fd, map.offset);
+            if (pixels != (uint32 *)MAP_FAILED) {
+                for (uint32 y = 0; y < H; y++) {
+                    for (uint32 x = 0; x < W; x++) {
+                        uint8 r = (uint8)(0x20 + (x * 0x60) / W);
+                        uint8 g = (uint8)(0x40 + (y * 0x80) / H);
+                        uint8 b = (uint8)(0x90 + ((x + y) & 0x3f));
+
+                        pixels[y * W + x] =
+                            0xff000000U | ((uint32)r << 16) |
+                            ((uint32)g << 8) | b;
+                    }
+                }
+                munmap(pixels, (int)create.size);
+                memset(&transfer, 0, sizeof(transfer));
+                transfer.bo_handle = create.bo_handle;
+                transfer.box.x = 0;
+                transfer.box.y = 0;
+                transfer.box.z = 0;
+                transfer.box.w = W;
+                transfer.box.h = H;
+                transfer.box.d = 1;
+                transfer.level = 0;
+                transfer.offset = 0;
+                transfer.stride = W * sizeof(uint32);
+                transfer.layer_stride = H * W * sizeof(uint32);
+                transfer_ret = call_ioctl(render->fd,
+                                          DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST,
+                                          &transfer);
+            }
+        }
+
+        memset(&prime, 0, sizeof(prime));
+        prime.handle = create.bo_handle;
+        export_ret = call_ioctl(render->fd, DRM_IOCTL_PRIME_HANDLE_TO_FD,
+                                &prime);
+        if (export_ret == 0 && prime.fd >= 0)
+            prime_fd = prime.fd;
+    }
+
+    if (prime_fd >= 0) {
+        memset(&import_req, 0, sizeof(import_req));
+        import_req.fd = prime_fd;
+        import_ret = call_ioctl(card->fd, DRM_IOCTL_PRIME_FD_TO_HANDLE,
+                                &import_req);
+        if (import_ret == 0)
+            card_handle = import_req.handle;
+    }
+
+    if (card_handle != 0) {
+        memset(&addfb2, 0, sizeof(addfb2));
+        addfb2.width = W;
+        addfb2.height = H;
+        addfb2.pixel_format = DRM_FORMAT_XRGB8888;
+        addfb2.handles[0] = card_handle;
+        addfb2.pitches[0] = W * 4;
+        addfb_ret = call_ioctl(card->fd, DRM_IOCTL_MODE_ADDFB2, &addfb2);
+        if (addfb_ret == 0)
+            fb_id = addfb2.fb_id;
+    }
+
+    if (fb_id != 0 && crtc_id != 0) {
+        memset(&flip, 0, sizeof(flip));
+        flip.crtc_id = crtc_id;
+        flip.fb_id = fb_id;
+        flip_ret = call_ioctl(card->fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip);
+        if (flip_ret == 0)
+            probe_prime_virtgpu_sample_scanout();
+    }
+
+    printf("cross:DRM_PRIME_VIRTGPU_RESOURCE.valid: create=%d "
+           "create_errno=%d render_handle=%u map=%d map_errno=%d "
+           "transfer=%d transfer_errno=%d export=%d export_errno=%d "
+           "prime_fd=%d import=%d import_errno=%d card_handle=%u "
+           "addfb=%d addfb_errno=%d fb=%u crtc=%u flip=%d "
+           "flip_errno=%d\n",
+           create_ret, saved_errno(create_ret), create.bo_handle, map_ret,
+           saved_errno(map_ret), transfer_ret, saved_errno(transfer_ret),
+           export_ret, saved_errno(export_ret), prime_fd, import_ret,
+           saved_errno(import_ret), card_handle, addfb_ret,
+           saved_errno(addfb_ret), fb_id, crtc_id, flip_ret,
+           saved_errno(flip_ret));
+
+    if (fb_id != 0) {
+        uint32 rmfb = fb_id;
+
+        (void)call_ioctl(card->fd, DRM_IOCTL_MODE_RMFB, &rmfb);
+    }
+    if (card_handle != 0) {
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = card_handle;
+        (void)call_ioctl(card->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    }
+    if (prime_fd >= 0)
+        close(prime_fd);
+    if (create_ret == 0 && create.bo_handle != 0) {
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = create.bo_handle;
+        (void)call_ioctl(render->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    }
+}
+
 static void probe_safe_invalids(struct drm_node *node)
 {
     struct drm_gem_close_compat gem_close;
@@ -2311,9 +2562,15 @@ int main(int argc, char **argv)
     (void)argv;
 
     printf("drmabitest: begin\n");
-    for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+    for (int i = 0; i < ARRAY_SIZE(nodes); i++)
         nodes[i].fd = open(nodes[i].path, O_RDWR);
+
+    for (int i = 0; i < ARRAY_SIZE(nodes); i++)
         probe_node(&nodes[i]);
+
+    probe_prime_virtgpu_handoff(&nodes[0], &nodes[1]);
+
+    for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
         if (nodes[i].fd >= 0)
             close(nodes[i].fd);
     }
