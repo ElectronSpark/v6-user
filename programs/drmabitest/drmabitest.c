@@ -2179,7 +2179,6 @@ static void probe_virtgpu_blob_create(struct drm_node *node)
     memset(&blob, 0, sizeof(blob));
     blob.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
     blob.size = 4096;
-    blob.blob_id = 0x587636626c6f6231ULL;
     create_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
                             &blob);
     memset(&info, 0, sizeof(info));
