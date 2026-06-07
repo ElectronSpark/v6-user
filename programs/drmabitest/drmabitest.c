@@ -1597,6 +1597,8 @@ static void probe_atomic_fences(struct drm_node *node)
     struct drm_mode_map_dumb_compat map;
     struct drm_mode_fb_cmd2_compat addfb2;
     struct drm_mode_destroy_dumb_compat destroy;
+    struct drm_mode_fb_dirty_cmd_compat dirtyfb;
+    struct drm_clip_rect_compat dirty_clip;
     struct drm_syncobj_create_compat sync_create;
     struct drm_syncobj_handle_compat sync_export;
     struct drm_syncobj_array_compat sync_signal;
@@ -1625,6 +1627,7 @@ static void probe_atomic_fences(struct drm_node *node)
     int atomic_ret = -999;
     int poll_ret = -999;
     int signal_ret = -999;
+    int dirty_ret = -999;
     uint32 rollback_before = 0;
     uint32 rollback_after_test = 0;
     uint32 rollback_after_real = 0;
@@ -1747,6 +1750,17 @@ static void probe_atomic_fences(struct drm_node *node)
             poll_ret = poll_raw(&pfd, 1, 0);
         }
 
+        memset(&dirty_clip, 0, sizeof(dirty_clip));
+        dirty_clip.x1 = 4;
+        dirty_clip.y1 = 4;
+        dirty_clip.x2 = 20;
+        dirty_clip.y2 = 12;
+        memset(&dirtyfb, 0, sizeof(dirtyfb));
+        dirtyfb.fb_id = addfb2.fb_id;
+        dirtyfb.num_clips = 1;
+        dirtyfb.clips_ptr = (uint64)&dirty_clip;
+        dirty_ret = call_ioctl(node->fd, DRM_IOCTL_MODE_DIRTYFB, &dirtyfb);
+
         rollback_query_before =
             get_plane_fb_id(node, plane_id, &rollback_before);
         objs[0] = crtc_id;
@@ -1770,13 +1784,15 @@ static void probe_atomic_fences(struct drm_node *node)
     printf("%s:DRM_IOCTL_MODE_ATOMIC.fences: kms=%d crtc=%u plane=%u "
            "props=%u/%u/%u/%u create=%d addfb=%d fb=%u sync_create=%d "
            "sync_export=%d sync_fd=%d atomic=%d errno=%d out_fence=%d "
-           "poll=%d revents=0x%x child_status=%d\n",
+           "poll=%d revents=0x%x dirty=%d dirty_errno=%d "
+           "child_status=%d\n",
            node->name, crtc_id != 0 && plane_id != 0, crtc_id, plane_id,
            crtc_out_fence_prop, plane_crtc_prop, plane_fb_prop,
            plane_in_fence_prop, create_ret, addfb_ret, addfb2.fb_id,
            sync_create_ret, sync_export_ret, sync_fd, atomic_ret,
            saved_errno(atomic_ret), out_fence, poll_ret,
-           out_fence >= 0 ? pfd.revents : 0, child_status);
+           out_fence >= 0 ? pfd.revents : 0, dirty_ret,
+           saved_errno(dirty_ret), child_status);
     printf("%s:DRM_IOCTL_MODE_ATOMIC.check_rollback: before_q=%d "
            "before=%u test_ret=%d test_errno=%d after_test_q=%d "
            "after_test=%u test_unchanged=%d real_ret=%d real_errno=%d "
@@ -2046,6 +2062,20 @@ static void probe_virtgpu(struct drm_node *node)
     }
 }
 
+static int virtgpu_getparam_value(struct drm_node *node, uint64 param,
+                                  uint64 *value)
+{
+    struct drm_virtgpu_getparam_compat req;
+
+    if (value == NULL)
+        return -EINVAL;
+    *value = 0;
+    memset(&req, 0, sizeof(req));
+    req.param = param;
+    req.value = (uint64)value;
+    return call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GETPARAM, &req);
+}
+
 static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
 {
     struct drm_virtgpu_resource_create_compat create;
@@ -2171,6 +2201,61 @@ static void probe_virtgpu_blob_create(struct drm_node *node)
         close_req.handle = blob.bo_handle;
         (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
     }
+}
+
+static void probe_virtgpu_host_visible_blob(struct drm_node *node)
+{
+    struct drm_virtgpu_resource_create_blob_compat blob;
+    struct drm_virtgpu_map_compat map;
+    struct drm_gem_close_compat close_req;
+    volatile uint32 *mapped = (volatile uint32 *)MAP_FAILED;
+    uint64 host_visible = 0;
+    uint32 sample = 0;
+    int param_ret;
+    int create_ret;
+    int map_ret = -999;
+    int mmap_ok = 0;
+
+    memset(&map, 0, sizeof(map));
+    param_ret = virtgpu_getparam_value(node, VIRTGPU_PARAM_HOST_VISIBLE,
+                                       &host_visible);
+
+    memset(&blob, 0, sizeof(blob));
+    blob.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
+    blob.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
+    blob.size = 4096;
+    blob.blob_id = 0x5876686f73747631ULL;
+    create_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB,
+                            &blob);
+
+    if (create_ret == 0 && blob.bo_handle != 0) {
+        map.handle = blob.bo_handle;
+        map_ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_MAP, &map);
+        if (map_ret == 0) {
+            mapped = (volatile uint32 *)mmap(0, (int)blob.size,
+                                             PROT_READ | PROT_WRITE,
+                                             MAP_SHARED, node->fd, map.offset);
+            if (mapped != (volatile uint32 *)MAP_FAILED) {
+                mapped[0] = 0xfeed5035U;
+                sample = mapped[0];
+                mmap_ok = sample == 0xfeed5035U;
+                munmap((void *)mapped, (int)blob.size);
+            }
+        }
+
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = blob.bo_handle;
+        (void)call_ioctl(node->fd, DRM_IOCTL_GEM_CLOSE, &close_req);
+    }
+
+    printf("%s:DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB.host_visible: "
+           "param=%d param_errno=%d advertised=%lu create=%d "
+           "create_errno=%d bo=%u res=%u size=%lu map=%d map_errno=%d "
+           "offset=0x%lx mmap_ok=%d sample=0x%x\n",
+           node->name, param_ret, saved_errno(param_ret), host_visible,
+           create_ret, saved_errno(create_ret), blob.bo_handle,
+           blob.res_handle, blob.size, map_ret, saved_errno(map_ret),
+           map.offset, mmap_ok, sample);
 }
 
 static void probe_virtgpu_invalids(struct drm_node *node)
@@ -2585,8 +2670,36 @@ static void probe_node(struct drm_node *node)
     probe_virtgpu(node);
     probe_virtgpu_execbuffer_sync(node);
     probe_virtgpu_blob_create(node);
+    probe_virtgpu_host_visible_blob(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
+}
+
+static void probe_fb0_sample(void)
+{
+    uint32 pixels[16];
+    int fd;
+    int n;
+
+    memset(pixels, 0, sizeof(pixels));
+    fd = open("/dev/fb0", O_RDONLY);
+    if (fd < 0) {
+        printf("fb0:sample: open=%d errno=%d\n", fd, saved_errno(fd));
+        return;
+    }
+
+    n = read(fd, pixels, sizeof(pixels));
+    printf("fb0:sample: read=%d errno=%d pixels=", n, saved_errno(n));
+    if (n >= (int)sizeof(uint32)) {
+        int count = n / (int)sizeof(uint32);
+
+        if (count > (int)ARRAY_SIZE(pixels))
+            count = ARRAY_SIZE(pixels);
+        for (int i = 0; i < count; i++)
+            printf("%s%08x", i == 0 ? "" : " ", pixels[i]);
+    }
+    printf("\n");
+    close(fd);
 }
 
 int main(int argc, char **argv)
@@ -2607,6 +2720,7 @@ int main(int argc, char **argv)
         probe_node(&nodes[i]);
 
     probe_prime_virtgpu_handoff(&nodes[0], &nodes[1]);
+    probe_fb0_sample();
 
     for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
         if (nodes[i].fd >= 0)
