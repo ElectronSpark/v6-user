@@ -2708,13 +2708,43 @@ int main(int argc, char **argv)
         { "card0", "/dev/dri/card0", -1 },
         { "renderD128", "/dev/dri/renderD128", -1 },
     };
+    int virtgpu_only = 0;
 
-    (void)argc;
-    (void)argv;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--virtgpu-only") == 0)
+            virtgpu_only = 1;
+    }
 
     printf("drmabitest: begin\n");
     for (int i = 0; i < ARRAY_SIZE(nodes); i++)
         nodes[i].fd = open(nodes[i].path, O_RDWR);
+
+    if (virtgpu_only) {
+        printf("drmabitest: virtgpu-only\n");
+        for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+            struct drm_node *node = &nodes[i];
+
+            if (node->fd < 0) {
+                printf("%s:open(%s): ret=%d errno=%d\n",
+                       node->name, node->path, node->fd,
+                       saved_errno(node->fd));
+                continue;
+            }
+
+            printf("%s:open(%s): ret=%d errno=0\n",
+                   node->name, node->path, node->fd);
+            probe_virtgpu(node);
+            probe_virtgpu_blob_create(node);
+            probe_virtgpu_host_visible_blob(node);
+        }
+        probe_fb0_sample();
+        for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+            if (nodes[i].fd >= 0)
+                close(nodes[i].fd);
+        }
+        printf("drmabitest: end\n");
+        return 0;
+    }
 
     for (int i = 0; i < ARRAY_SIZE(nodes); i++)
         probe_node(&nodes[i]);
