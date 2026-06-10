@@ -493,7 +493,7 @@ static void env_enable_gui_session(void) {
     env_set("XV6_GUI_SESSION", "wayland");
 }
 
-static int parent_is_wlcomp(void) {
+static int parent_is_gui_session(void) {
     char path[64];
     char pidbuf[16];
     char buf[256];
@@ -516,11 +516,12 @@ static int parent_is_wlcomp(void) {
     if (total <= 0)
         return 0;
     buf[total] = 0;
-    return contains_local(buf, "Name:\twlcomp\n");
+    return contains_local(buf, "Name:\tweston-session\n") ||
+           contains_local(buf, "Name:\tweston\n");
 }
 
 static int can_enable_gui_session(void) {
-    return parent_is_wlcomp();
+    return parent_is_gui_session();
 }
 
 static const char *path_basename(const char *path) {
@@ -540,8 +541,8 @@ static int is_gui_only_command(const char *cmd) {
 
     return strcmp(base, "netsurf") == 0 ||
            strcmp(base, "MiniBrowser") == 0 ||
-           strcmp(base, "wlcomp") == 0 ||
-           strcmp(base, "desktop") == 0;
+           strcmp(base, "weston") == 0 ||
+           strcmp(base, "weston-session") == 0;
 }
 
 static int has_gui_session(void) {
@@ -2362,7 +2363,7 @@ int main(int argc, char *argv[]) {
             gui_session_shell = 1;
             env_enable_gui_session();
         } else {
-            errprintf("sh: refusing --gui-session outside wlcomp\n");
+            errprintf("sh: refusing --gui-session outside Weston session\n");
         }
         argi = 2;
     }
