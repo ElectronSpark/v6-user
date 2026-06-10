@@ -5616,15 +5616,18 @@ static void fill_pattern(unsigned char *p, uint len, unsigned char seed)
 
 static void test_wayland_shm_pool_resize_mmap(void)
 {
-    const char *name = "Wayland shm pool mmap resize preserves heap";
+    const char *name = "Wayland shm pool mmap resize preserves contents";
     static const uint sizes[] = {
         4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768,
     };
     int fd = -1;
     char *mapping = MAP_FAILED;
+    char *server_mapping = MAP_FAILED;
     uint mapping_size = 0;
     unsigned char *guard_a;
     unsigned char *guard_b;
+    uint checkpoints[sizeof(sizes) / sizeof(sizes[0])];
+    unsigned char checkpoint_values[sizeof(sizes) / sizeof(sizes[0])];
 
     guard_a = malloc(65536);
     guard_b = malloc(65536);
@@ -5658,13 +5661,46 @@ static void test_wayland_shm_pool_resize_mmap(void)
     mapping_size = sizes[0];
     mapping[0] = 'w';
     mapping[mapping_size - 1] = '0';
+    checkpoints[0] = 0;
+    checkpoint_values[0] = (unsigned char)mapping[0];
+
+    server_mapping = mmap(0, sizes[sizeof(sizes) / sizeof(sizes[0]) - 1],
+                          PROT_READ, MAP_SHARED, fd, 0);
+    if (server_mapping == MAP_FAILED) {
+        munmap(mapping, mapping_size);
+        close(fd);
+        free(guard_a);
+        free(guard_b);
+        fail(name, "server mmap failed");
+        return;
+    }
 
     for (uint i = 1; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
         char *new_mapping;
+        uint previous_tail = sizes[i - 1] - 1;
+
+        checkpoints[i] = previous_tail;
+        checkpoint_values[i] = (unsigned char)('0' + i - 1);
+
+        if ((unsigned char)server_mapping[checkpoints[0]] !=
+                checkpoint_values[0] ||
+            (unsigned char)server_mapping[previous_tail] !=
+                checkpoint_values[i]) {
+            munmap(server_mapping,
+                   sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
+            munmap(mapping, mapping_size);
+            close(fd);
+            free(guard_a);
+            free(guard_b);
+            fail(name, "server mapping lost pre-resize bytes");
+            return;
+        }
 
         new_mapping = mmap(0, sizes[i], PROT_READ | PROT_WRITE,
                            MAP_SHARED, fd, 0);
         if (new_mapping == MAP_FAILED) {
+            munmap(server_mapping,
+                   sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
             munmap(mapping, mapping_size);
             close(fd);
             free(guard_a);
@@ -5675,6 +5711,8 @@ static void test_wayland_shm_pool_resize_mmap(void)
         if (ranges_overlap(new_mapping, sizes[i], guard_a, 65536) ||
             ranges_overlap(new_mapping, sizes[i], guard_b, 65536)) {
             munmap(new_mapping, sizes[i]);
+            munmap(server_mapping,
+                   sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
             munmap(mapping, mapping_size);
             close(fd);
             free(guard_a);
@@ -5682,7 +5720,24 @@ static void test_wayland_shm_pool_resize_mmap(void)
             fail(name, "mmap overlapped live heap allocation");
             return;
         }
+
+        for (uint j = 0; j <= i; j++) {
+            if ((unsigned char)new_mapping[checkpoints[j]] !=
+                checkpoint_values[j]) {
+                munmap(new_mapping, sizes[i]);
+                munmap(server_mapping,
+                       sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
+                munmap(mapping, mapping_size);
+                close(fd);
+                free(guard_a);
+                free(guard_b);
+                fail(name, "remapped client view lost old bytes");
+                return;
+            }
+        }
+
         new_mapping[0] = 'W';
+        checkpoint_values[0] = (unsigned char)'W';
         new_mapping[sizes[i] - 1] = (char)('0' + i);
         munmap(mapping, mapping_size);
         mapping = new_mapping;
@@ -5699,6 +5754,21 @@ static void test_wayland_shm_pool_resize_mmap(void)
         }
     }
 
+    for (uint i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        if ((unsigned char)server_mapping[checkpoints[i]] !=
+            checkpoint_values[i]) {
+            munmap(server_mapping,
+                   sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
+            munmap(mapping, mapping_size);
+            close(fd);
+            free(guard_a);
+            free(guard_b);
+            fail(name, "server mapping lost final bytes");
+            return;
+        }
+    }
+
+    munmap(server_mapping, sizes[sizeof(sizes) / sizeof(sizes[0]) - 1]);
     munmap(mapping, mapping_size);
     close(fd);
     free(guard_a);
@@ -6649,6 +6719,13 @@ int main(int argc, char **argv)
         test_cdev_fcntl_setfl();
         test_oss_epoll_virtual_write_ready();
         test_oss_nonblock_write_backpressure();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "wayland-shm") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_wayland_shm_pool_resize_mmap();
         printf("webkitabitest: %d passed, %d skipped, %d failed\n",
                passed, skipped, failed);
         exit(failed == 0 ? 0 : 1);

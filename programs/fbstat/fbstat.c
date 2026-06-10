@@ -4365,6 +4365,22 @@ int main(int argc, char *argv[])
     printf("virtio_last_fence %lu\n", stats.virtio_last_fence);
     printf("virtio_irq_completions %lu\n", stats.virtio_irq_completions);
     printf("virtio_poll_fallbacks %lu\n", stats.virtio_poll_fallbacks);
+    printf("kms_cursor_uploads %lu\n", stats.kms_cursor_uploads);
+    printf("kms_cursor_upload_failures %lu\n",
+           stats.kms_cursor_upload_failures);
+    printf("kms_cursor_last_size %lux%lu hot=%lu,%lu\n",
+           stats.kms_cursor_last_width,
+           stats.kms_cursor_last_height,
+           stats.kms_cursor_last_hot_x,
+           stats.kms_cursor_last_hot_y);
+    printf("kms_cursor_last_pixels checksum=%lu alpha_nonzero=%lu alpha_zero=%lu alpha_opaque=%lu rgb_nonzero=%lu first=0x%08lx center=0x%08lx\n",
+           stats.kms_cursor_last_checksum,
+           stats.kms_cursor_last_alpha_nonzero,
+           stats.kms_cursor_last_alpha_zero,
+           stats.kms_cursor_last_alpha_opaque,
+           stats.kms_cursor_last_rgb_nonzero,
+           stats.kms_cursor_last_first_pixel,
+           stats.kms_cursor_last_center_pixel);
     printf("virtio_async_posted %lu\n", stats.virtio_async_posted);
     printf("virtio_async_posted_submit_3d %lu\n",
            stats.virtio_async_posted_submit_3d);
