@@ -56,6 +56,33 @@ int main(int argc, char **argv)
     int fd;
     int n;
 
+    if (argc > 1 && strcmp(argv[1], "dblclick") == 0) {
+        int x = parse_coord(argc > 2 ? argv[2] : NULL, 32768);
+        int y = parse_coord(argc > 3 ? argv[3] : NULL, 32768);
+        int gap_us = parse_int(argc > 4 ? argv[4] : NULL, 120000, 0, 1000000);
+
+        fd = open("/dev/mouse", O_RDWR);
+        if (fd < 0) {
+            printf("mouseinject: open /dev/mouse failed\n");
+            return 1;
+        }
+        if (write_event(fd, x, y, 0) < 0 ||
+            write_event(fd, x, y, 1) < 0 ||
+            write_event(fd, x, y, 0) < 0) {
+            close(fd);
+            return 1;
+        }
+        usleep(gap_us);
+        if (write_event(fd, x, y, 1) < 0 ||
+            write_event(fd, x, y, 0) < 0) {
+            close(fd);
+            return 1;
+        }
+        close(fd);
+        printf("mouseinject: dblclick x=%d y=%d gap_us=%d\n", x, y, gap_us);
+        return 0;
+    }
+
     if (argc > 1 && strcmp(argv[1], "drag") == 0) {
         int x0 = parse_coord(argc > 2 ? argv[2] : NULL, 32768);
         int y0 = parse_coord(argc > 3 ? argv[3] : NULL, 32768);
