@@ -1,5 +1,6 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/errno.h"
+#include "kernel/inc/param.h"
 #include "kernel/inc/dev/fb.h"
 #include "kernel/inc/syscall.h"
 #include "kernel/inc/uabi/drm.h"
@@ -16,6 +17,12 @@
 #define VIRGL_BIND_SAMPLER_VIEW (1u << 3)
 #define VIRGL_BIND_DISPLAY_TARGET (1u << 7)
 #define PIPE_TEXTURE_2D 2
+#if defined(__x86_64__)
+#define LINUX_NR_KCMP 312
+#elif defined(__riscv)
+#define LINUX_NR_KCMP 272
+#endif
+#define KCMP_FILE 0
 
 struct drm_node {
     const char *name;
@@ -88,6 +95,21 @@ static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
     asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "memory");
     return a0;
 }
+
+static inline int64 raw_syscall5(int num, int64 a, int64 b, int64 c,
+                                 int64 d, int64 e)
+{
+    register int64 a7 asm("a7") = num;
+    register int64 a0 asm("a0") = a;
+    register int64 a1 asm("a1") = b;
+    register int64 a2 asm("a2") = c;
+    register int64 a3 asm("a3") = d;
+    register int64 a4 asm("a4") = e;
+    asm volatile("ecall" : "+r"(a0)
+                 : "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a7)
+                 : "memory");
+    return a0;
+}
 #elif defined(__x86_64__)
 static inline int64 raw_syscall2(int num, int64 a, int64 b)
 {
@@ -106,6 +128,19 @@ static inline int64 raw_syscall3(int num, int64 a, int64 b, int64 c)
                  : "rcx", "r11", "memory");
     return ret;
 }
+
+static inline int64 raw_syscall5(int num, int64 a, int64 b, int64 c,
+                                 int64 d, int64 e)
+{
+    int64 ret;
+    register int64 r10 asm("r10") = d;
+    register int64 r8 asm("r8") = e;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"((int64)num), "D"(a), "S"(b), "d"(c),
+                   "r"(r10), "r"(r8)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
 #else
 #error "raw_syscall3 is not defined for this architecture"
 #endif
@@ -118,6 +153,11 @@ static int poll_raw(struct pollfd *fds, int nfds, int timeout)
 static int eventfd2_raw(uint32 initval, int flags)
 {
     return (int)raw_syscall2(SYS_eventfd2, initval, flags);
+}
+
+static int kcmp_file_raw(int pid1, int pid2, int fd1, int fd2)
+{
+    return (int)raw_syscall5(LINUX_NR_KCMP, pid1, pid2, KCMP_FILE, fd1, fd2);
 }
 
 static void probe_version(struct drm_node *node)
@@ -2664,6 +2704,37 @@ static void probe_safe_invalids(struct drm_node *node)
               call_ioctl(node->fd, DRM_IOCTL_WAIT_VBLANK, &vblank));
 }
 
+static void probe_kcmp_file(struct drm_node *node)
+{
+    int pid = getpid();
+    int dup_fd = dup(node->fd);
+    int second_fd = open(node->path, O_RDWR);
+    int same_ret = -1;
+    int different_ret = -1;
+    int bad_fd_ret;
+    int bad_type_ret;
+
+    if (dup_fd >= 0)
+        same_ret = kcmp_file_raw(pid, pid, node->fd, dup_fd);
+    if (second_fd >= 0)
+        different_ret = kcmp_file_raw(pid, pid, node->fd, second_fd);
+    bad_fd_ret = kcmp_file_raw(pid, pid, node->fd, NOFILE);
+    bad_type_ret = (int)raw_syscall5(LINUX_NR_KCMP, pid, pid, 0x7fffffff,
+                                     node->fd, node->fd);
+
+    printf("%s:SYS_kcmp.KCMP_FILE: dup_fd=%d second_fd=%d same=%d "
+           "same_errno=%d different=%d different_errno=%d bad_fd=%d "
+           "bad_fd_errno=%d bad_type=%d bad_type_errno=%d\n",
+           node->name, dup_fd, second_fd, same_ret, saved_errno(same_ret),
+           different_ret, saved_errno(different_ret), bad_fd_ret,
+           saved_errno(bad_fd_ret), bad_type_ret, saved_errno(bad_type_ret));
+
+    if (second_fd >= 0)
+        close(second_fd);
+    if (dup_fd >= 0)
+        close(dup_fd);
+}
+
 static void probe_node(struct drm_node *node)
 {
     if (node->fd < 0) {
@@ -2692,6 +2763,7 @@ static void probe_node(struct drm_node *node)
     probe_virtgpu_host_visible_blob(node);
     probe_virtgpu_invalids(node);
     probe_safe_invalids(node);
+    probe_kcmp_file(node);
 }
 
 static void probe_fb0_sample(void)
