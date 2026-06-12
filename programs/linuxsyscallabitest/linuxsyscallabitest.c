@@ -1004,6 +1004,16 @@ static void test_linux_at_fd_native_numbers(void)
         unlink("linuxabi.tmp");
         exit(1);
     }
+    int abs_dir_fd = raw_linux_syscall4(LINUX_NR_OPENAT, fd, (int64)"/",
+                                        O_RDONLY | O_DIRECTORY, 0);
+    if (abs_dir_fd < 0) {
+        printf("linuxsyscallabitest: Linux openat absolute dirfd ignore failed: %d\n",
+               abs_dir_fd);
+        close(fd);
+        unlink("linuxabi.tmp");
+        exit(1);
+    }
+    close(abs_dir_fd);
 
     unlink("linuxabi.link");
     unlink("linuxabi.renamed");
