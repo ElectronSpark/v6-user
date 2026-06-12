@@ -101,6 +101,8 @@ static int key_code(const char *name)
         return 14;
     if (strcmp(name, "delete") == 0)
         return 111;
+    if (strcmp(name, "esc") == 0 || strcmp(name, "escape") == 0)
+        return 1;
     if (strlen(name) == 1) {
         const struct key_map *km = lookup_char(name[0]);
         return km ? km->code : 0;
