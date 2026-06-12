@@ -146,8 +146,16 @@ static inline int64 _syscall5(int num, int64 a, int64 b, int64 c, int64 d, int64
 #define SETALL  17
 
 /* ── prctl constants ── */
+#define PR_GET_DUMPABLE 3
+#define PR_SET_DUMPABLE 4
 #define PR_SET_NAME 15
 #define PR_GET_NAME 16
+#define PR_SET_TIMERSLACK 29
+#define PR_GET_TIMERSLACK 30
+#define PR_SET_NO_NEW_PRIVS 38
+#define PR_GET_NO_NEW_PRIVS 39
+#define PR_SET_VMA 0x53564d41
+#define PR_SET_VMA_ANON_NAME 0
 
 /* ── Error codes ── */
 #define EINVAL   22
@@ -347,6 +355,42 @@ static void test_prctl(void) {
         TEST_FAIL(name, "name mismatch");
         return;
     }
+    TEST_PASS(name);
+}
+
+static void test_prctl_linux_attrs(void) {
+    const char *name = "prctl Linux process attrs";
+    char anon_area[4096];
+
+    int64 ret = _syscall5(SYS_prctl, PR_GET_DUMPABLE, 0, 0, 0, 0);
+    if (ret != 1) { TEST_FAIL(name, "initial dumpable != 1"); return; }
+    ret = _syscall5(SYS_prctl, PR_SET_DUMPABLE, 0, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_DUMPABLE(0) failed"); return; }
+    ret = _syscall5(SYS_prctl, PR_GET_DUMPABLE, 0, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "dumpable did not clear"); return; }
+    ret = _syscall5(SYS_prctl, PR_SET_DUMPABLE, 1, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_DUMPABLE(1) failed"); return; }
+
+    ret = _syscall5(SYS_prctl, PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "initial no_new_privs != 0"); return; }
+    ret = _syscall5(SYS_prctl, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_NO_NEW_PRIVS failed"); return; }
+    ret = _syscall5(SYS_prctl, PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+    if (ret != 1) { TEST_FAIL(name, "no_new_privs did not set"); return; }
+
+    ret = _syscall5(SYS_prctl, PR_SET_TIMERSLACK, 1234567, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_TIMERSLACK failed"); return; }
+    ret = _syscall5(SYS_prctl, PR_GET_TIMERSLACK, 0, 0, 0, 0);
+    if (ret != 1234567) { TEST_FAIL(name, "timerslack mismatch"); return; }
+    ret = _syscall5(SYS_prctl, PR_SET_TIMERSLACK, 0, 0, 0, 0);
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_TIMERSLACK reset failed"); return; }
+    ret = _syscall5(SYS_prctl, PR_GET_TIMERSLACK, 0, 0, 0, 0);
+    if (ret != 50000) { TEST_FAIL(name, "timerslack reset mismatch"); return; }
+
+    ret = _syscall5(SYS_prctl, PR_SET_VMA, PR_SET_VMA_ANON_NAME,
+                    (int64)anon_area, sizeof(anon_area), (int64)"syscalltest");
+    if (ret != 0) { TEST_FAIL(name, "PR_SET_VMA_ANON_NAME failed"); return; }
+
     TEST_PASS(name);
 }
 
@@ -2432,6 +2476,7 @@ int main(int argc, char *argv[]) {
 
     printf("[prctl]\n");
     test_prctl();
+    test_prctl_linux_attrs();
 
     printf("[sysinfo]\n");
     test_sysinfo();

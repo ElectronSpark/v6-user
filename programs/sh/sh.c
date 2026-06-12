@@ -545,6 +545,24 @@ static int is_gui_only_command(const char *cmd) {
            strcmp(base, "weston-session") == 0;
 }
 
+static int is_wayland_client_command(const char *cmd) {
+    if (!cmd || !cmd[0])
+        return 0;
+
+    const char *base = path_basename(cmd);
+
+    return strcmp(base, "weston-terminal") == 0 ||
+           strcmp(base, "filemgr") == 0 ||
+           strcmp(base, "glmaze") == 0 ||
+           strcmp(base, "glsmoke") == 0 ||
+           strcmp(base, "mesaglsmoke") == 0 ||
+           strcmp(base, "mesawlegl") == 0 ||
+           strcmp(base, "mesademo") == 0 ||
+           strcmp(base, "peanutgb") == 0 ||
+           strcmp(base, "netsurf") == 0 ||
+           strcmp(base, "MiniBrowser") == 0;
+}
+
 static int has_gui_session(void) {
     const char *session = env_get("XV6_GUI_SESSION");
     const char *runtime = env_get("XDG_RUNTIME_DIR");
@@ -1777,11 +1795,45 @@ static int shell_fork(void) {
 #endif
 }
 
+static int maybe_add_wayland_client_env(char *cmd, char **assignv, int assignc,
+                                        char **merged, int merged_cap) {
+    static char *gui_defaults[] = {
+        "XDG_RUNTIME_DIR=/tmp",
+        "XDG_CACHE_HOME=/tmp/.cache",
+        "WAYLAND_DISPLAY=wayland-0",
+        "GDK_BACKEND=wayland",
+        "GDK_GL=gles",
+        "EGL_PLATFORM=wayland",
+        "XCURSOR_PATH=/share/icons",
+        "XCURSOR_THEME=Adwaita",
+        "SSL_CERT_FILE=/share/netsurf/ca-bundle",
+        "XV6_GUI_SESSION=wayland",
+    };
+    int out = 0;
+
+    if (is_wayland_client_command(cmd) && !has_gui_session()) {
+        int count = sizeof(gui_defaults) / sizeof(gui_defaults[0]);
+        for (int i = 0; i < count && out < merged_cap; i++)
+            merged[out++] = gui_defaults[i];
+    }
+
+    for (int i = 0; i < assignc && out < merged_cap; i++)
+        merged[out++] = assignv[i];
+
+    return out;
+}
+
 // =====================================================================
 // PATH-based exec
 // =====================================================================
 
 static void exec_with_path_env(char *cmd, char **argv, char **assignv, int assignc) {
+    char *merged_assignv[MAX_ENV_VARS];
+    int merged_assignc = maybe_add_wayland_client_env(
+        cmd, assignv, assignc, merged_assignv, MAX_ENV_VARS);
+    assignv = merged_assignv;
+    assignc = merged_assignc;
+
     // If contains '/', use directly
     for (char *p = cmd; *p; p++) {
         if (*p == '/') {

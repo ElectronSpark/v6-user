@@ -707,6 +707,38 @@ void test_mmap_fixed_noreplace(void) {
 }
 
 /*
+ * test_mmap_anonymous_ignores_fd - Linux ignores fd for MAP_ANONYMOUS.
+ * Chromium's GWP-ASan allocator remaps guard pages with fd=0.
+ */
+void test_mmap_anonymous_ignores_fd(void) {
+    printf("test_mmap_anonymous_ignores_fd: ");
+
+    char *p = mmap(0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("FAIL - initial mmap\n");
+        exit(1);
+    }
+    p[0] = 'A';
+
+    char *q = mmap(p, 4096, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, 0, 0);
+    if (q != p) {
+        printf("FAIL - fixed anonymous mmap with fd=0\n");
+        exit(1);
+    }
+
+    if (mprotect(p, 4096, PROT_READ | PROT_WRITE) != 0) {
+        printf("FAIL - mprotect after PROT_NONE remap\n");
+        exit(1);
+    }
+    p[0] = 'B';
+
+    munmap(p, 4096);
+    printf("OK\n");
+}
+
+/*
  * test_unaligned_range_rounding - xv6 accepts unaligned mprotect/munmap
  * addresses.  The rounded kernel range must cover the original byte range,
  * including the tail page.
@@ -1438,6 +1470,7 @@ int main(int argc, char *argv[]) {
     test_mmap_exec_rw_to_rx();
     test_mmap_exec_rwx();
     test_mmap_fixed_noreplace();
+    test_mmap_anonymous_ignores_fd();
     test_unaligned_range_rounding();
     test_mmap_after_unaligned_brk();
     test_mremap_grow();
