@@ -2665,6 +2665,18 @@ static int validate_ttm_resv_matrix(void)
                         "missing_fields=");
     require_output_token("ttm_move_path_matrix", output,
                          "status=PASS");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "ttm_sg_table_matrix");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "sg_nents=");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "total_len=");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "first_dma=");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "last_dma=");
+    require_output_token("ttm_sg_table_matrix", output,
+                         "status=PASS");
     require_output_token("ttm_matrix", output, "ttmtest: ok");
 
     if (failures != before)
@@ -2677,6 +2689,7 @@ static int validate_ttm_resv_matrix(void)
            "pinned_evict_rejected=1 native_accel_credit_delta=0 "
            "ttm_dma_resv_ww_mutex_matrix=PASS "
            "ttm_move_path_matrix=PASS "
+           "ttm_sg_table_matrix=PASS "
            "status=PASS\n");
     printf("gpu_core_c_validator ttm_real_move_backend_matrix "
            "real_move_backend=cpu_copy hw_backend=fail_closed "

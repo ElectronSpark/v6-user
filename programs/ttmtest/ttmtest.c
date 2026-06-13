@@ -300,6 +300,38 @@ static int ttm_no_native_credit(const struct fb_gpu_ttm_validate *ttm)
     return ttm->native_accel_credit == 0;
 }
 
+static uint32 ttm_expected_sg_nents(uint64 size)
+{
+    return (uint32)((size + 4095) / 4096);
+}
+
+static int ttm_sg_table_valid(const struct fb_gpu_ttm_validate *ttm,
+                              uint64 size)
+{
+    if (ttm->sg_nents != ttm_expected_sg_nents(size)) {
+        printf("ttmtest: ttm_sg_table_invalid sg_nents=%u expected=%u\n",
+               ttm->sg_nents, ttm_expected_sg_nents(size));
+        return 0;
+    }
+    if (ttm->sg_total_len != size) {
+        printf("ttmtest: ttm_sg_table_invalid total_len=%lu expected=%lu\n",
+               ttm->sg_total_len, size);
+        return 0;
+    }
+    if (ttm->dma_addr_base == 0 ||
+        ttm->sg_dma_addr_first != ttm->dma_addr_base) {
+        printf("ttmtest: ttm_sg_table_invalid first_dma=0x%lx "
+               "base_dma=0x%lx\n",
+               ttm->sg_dma_addr_first, ttm->dma_addr_base);
+        return 0;
+    }
+    if (ttm->sg_dma_addr_last == 0) {
+        printf("ttmtest: ttm_sg_table_invalid last_dma=0\n");
+        return 0;
+    }
+    return 1;
+}
+
 static int set_ttm_check_content(int fd, uint32 handle, uint32 placement,
                                  uint32 mem_type, uint64 addr, uint64 size,
                                  struct fb_gpu_ttm_validate *ttm)
@@ -358,6 +390,11 @@ int main(int argc, char **argv)
     uint64 metadata_noop_checks = 0;
     uint64 hardware_copy_unsupported = 0;
     uint64 real_copy_path_moves = 0;
+    uint32 sg_proof_nents = 0;
+    uint64 sg_proof_total_len = 0;
+    uint64 sg_proof_first_dma = 0;
+    uint64 sg_proof_base_dma = 0;
+    uint64 sg_proof_last_dma = 0;
     int fd;
     int fd2 = -1;
     int bo_cap_fd = -1;
@@ -378,7 +415,8 @@ int main(int argc, char **argv)
         goto out_fail_create2;
     if (query_ttm(fd, bo1.handle, &ttm) < 0)
         goto out_fail;
-    if (ttm.mem_type != 0 || !ttm_no_native_credit(&ttm))
+    if (ttm.mem_type != 0 || !ttm_no_native_credit(&ttm) ||
+        !ttm_sg_table_valid(&ttm, bo1.size))
         goto out_fail;
     write_ttm_pattern(bo1.addr, bo1.size);
     if (check_ttm_pattern(bo1.addr, bo1.size) < 0)
@@ -400,13 +438,19 @@ int main(int argc, char **argv)
     content_migrations++;
     cpu_copy_fallback_compatible++;
     if (ttm.mem_type != 1 || ttm.tt_populated == 0 ||
-        ttm.sg_nents == 0 || ttm.dma_addr_base == 0 ||
+        !ttm_sg_table_valid(&ttm, bo1.size) ||
         ttm.manager_bytes[1] < bo1.size ||
         ttm.metadata_only_moves <= metadata_moves ||
         ttm.native_accel_credit != 0 ||
         ttm.move_bytes < move_bytes + bo1.size ||
         ttm.manager_moves[1] <= tt_manager_moves)
         goto out_fail;
+    sg_proof_nents = ttm.sg_nents;
+    sg_proof_total_len = ttm.sg_total_len;
+    sg_proof_first_dma = ttm.sg_dma_addr_first;
+    sg_proof_base_dma = ttm.dma_addr_base;
+    sg_proof_last_dma = ttm.sg_dma_addr_last;
+    printf("ttmtest: checkpoint initial_sg_move=PASS\n");
     metadata_moves = ttm.metadata_only_moves;
     move_bytes = ttm.move_bytes;
     tt_manager_moves = ttm.manager_moves[1];
@@ -415,31 +459,57 @@ int main(int argc, char **argv)
 
     if (read_ttm_resv_stats(fd, &resv_before) < 0)
         goto out_fail;
+    printf("ttmtest: checkpoint resv_stats_before=PASS\n");
 
     memset(&export_fd, 0, sizeof(export_fd));
     export_fd.handle = bo1.handle;
-    if (ioctl(fd, FB_GPU_BO_EXPORT_FD, &export_fd) < 0 || export_fd.fd < 0)
+    if (ioctl(fd, FB_GPU_BO_EXPORT_FD, &export_fd) < 0 || export_fd.fd < 0) {
+        printf("ttmtest: checkpoint export_fd=FAIL fd=%d\n", export_fd.fd);
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint export_fd=PASS fd=%d\n", export_fd.fd);
     bo_cap_fd = export_fd.fd;
     fd2 = open("/dev/gpu0", O_RDWR);
-    if (fd2 < 0)
+    if (fd2 < 0) {
+        printf("ttmtest: checkpoint open_second_gpu=FAIL\n");
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint open_second_gpu=PASS fd=%d\n", fd2);
     memset(&import_fd, 0, sizeof(import_fd));
     import_fd.fd = bo_cap_fd;
     if (ioctl(fd2, FB_GPU_BO_IMPORT_FD, &import_fd) < 0 ||
-        import_fd.handle == 0)
+        import_fd.handle == 0) {
+        printf("ttmtest: checkpoint import_fd=FAIL handle=%u\n",
+               import_fd.handle);
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint import_fd=PASS handle=%u size=%lu\n",
+           import_fd.handle, import_fd.size);
 
     if (reserve_ttm(fd, bo1.handle, &ttm) < 0 ||
-        ttm.resv_count == 0 || ttm.resv_exclusive_fence == 0)
+        ttm.resv_count == 0 || ttm.resv_exclusive_fence == 0) {
+        printf("ttmtest: checkpoint reserve_owner=FAIL count=%lu fence=%lu\n",
+               ttm.resv_count, ttm.resv_exclusive_fence);
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint reserve_owner=PASS count=%lu fence=%lu\n",
+           ttm.resv_count, ttm.resv_exclusive_fence);
     resv_fence = ttm.resv_exclusive_fence;
-    if (reserve_ttm(fd2, import_fd.handle, &ttm2) >= 0)
+    if (reserve_ttm(fd2, import_fd.handle, &ttm2) >= 0) {
+        printf("ttmtest: checkpoint reserve_import_conflict=FAIL accepted\n");
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint reserve_import_conflict=PASS\n");
     if (query_ttm(fd, bo1.handle, &ttm) < 0 ||
         ttm.resv_conflicts <= resv_conflicts ||
-        ttm.resv_exclusive_fence != resv_fence)
+        ttm.resv_exclusive_fence != resv_fence) {
+        printf("ttmtest: checkpoint owner_conflict_query=FAIL "
+               "conflicts=%lu before=%lu fence=%lu expected=%lu\n",
+               ttm.resv_conflicts, resv_conflicts,
+               ttm.resv_exclusive_fence, resv_fence);
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint owner_conflict_query=PASS\n");
     resv_conflicts = ttm.resv_conflicts;
     if (set_ttm(fd2, import_fd.handle, FB_GPU_TTM_PL_TT, &ttm2) >= 0)
         goto out_fail;
@@ -476,8 +546,30 @@ int main(int argc, char **argv)
             resv_before.attach_dmabuf_export + 1 ||
         resv_after.attach_dmabuf_import <
             resv_before.attach_dmabuf_import + 1 ||
-        resv_after.native_accel_credit != resv_before.native_accel_credit)
+        resv_after.native_accel_credit != resv_before.native_accel_credit) {
+        printf("ttmtest: checkpoint dmabuf_resv=FAIL "
+               "acq=%lu/%lu rel=%lu/%lu waits=%lu/%lu "
+               "conflicts=%lu/%lu excl=%lu/%lu shared_slots=%lu "
+               "shared_used=%lu shared_fences=%lu/%lu "
+               "export_attach=%lu/%lu import_attach=%lu/%lu "
+               "native=%lu/%lu\n",
+               resv_after.acquires, resv_before.acquires + 2,
+               resv_after.releases, resv_before.releases + 2,
+               resv_after.waits, resv_before.waits + 2,
+               resv_after.conflicts, resv_before.conflicts + 2,
+               resv_after.exclusive_fences,
+               resv_before.exclusive_fences + 2,
+               resv_after.shared_slots, resv_after.shared_used,
+               resv_after.shared_fences, resv_before.shared_fences + 2,
+               resv_after.attach_dmabuf_export,
+               resv_before.attach_dmabuf_export + 1,
+               resv_after.attach_dmabuf_import,
+               resv_before.attach_dmabuf_import + 1,
+               resv_after.native_accel_credit,
+               resv_before.native_accel_credit);
         goto out_fail;
+    }
+    printf("ttmtest: checkpoint dmabuf_resv=PASS\n");
     resv_acquires_delta = resv_after.acquires - resv_before.acquires;
     resv_releases_delta = resv_after.releases - resv_before.releases;
     resv_waits_delta = resv_after.waits - resv_before.waits;
@@ -506,6 +598,7 @@ int main(int argc, char **argv)
         ww_after.ww_validate_failures != ww_before.ww_validate_failures ||
         ww_after.native_accel_credit != ww_before.native_accel_credit)
         goto out_fail;
+    printf("ttmtest: checkpoint ww_validate=PASS\n");
     ww_contexts_delta = ww_after.ww_contexts - ww_before.ww_contexts;
     ww_ordered_acquires_delta =
         ww_after.ww_ordered_acquires - ww_before.ww_ordered_acquires;
@@ -553,6 +646,7 @@ int main(int argc, char **argv)
         ttm.move_bytes < move_bytes + bo1.size ||
         ttm.manager_moves[1] <= tt_manager_moves)
         goto out_fail;
+    printf("ttmtest: checkpoint tt_remigrate=PASS\n");
     metadata_moves = ttm.metadata_only_moves;
     move_bytes = ttm.move_bytes;
     tt_manager_moves = ttm.manager_moves[1];
@@ -585,6 +679,7 @@ int main(int argc, char **argv)
         ttm.move_bytes < move_bytes + bo1.size ||
         ttm.manager_moves[2] <= vram_manager_moves)
         goto out_fail;
+    printf("ttmtest: checkpoint vram_move=PASS\n");
     metadata_moves = ttm.metadata_only_moves;
     move_bytes = ttm.move_bytes;
     vram_manager_moves = ttm.manager_moves[2];
@@ -601,6 +696,7 @@ int main(int argc, char **argv)
         ttm.move_bytes != move_bytes ||
         ttm.native_accel_credit != 0)
         goto out_fail;
+    printf("ttmtest: checkpoint metadata_noop=PASS\n");
 
     capture_ttm_move_path(&ttm, &move_before);
     if (set_ttm_check_content(fd, bo1.handle, FB_GPU_TTM_PL_STOLEN, 3,
@@ -630,6 +726,7 @@ int main(int argc, char **argv)
         ttm.move_bytes < move_bytes + bo1.size ||
         ttm.manager_moves[0] <= system_manager_moves)
         goto out_fail;
+    printf("ttmtest: checkpoint stolen_to_system=PASS\n");
     metadata_moves = ttm.metadata_only_moves;
     move_bytes = ttm.move_bytes;
     system_manager_moves = ttm.manager_moves[0];
@@ -684,6 +781,7 @@ int main(int argc, char **argv)
             resv_before.evict_busy_rejects + 1 ||
         resv_after.pinned_bytes != resv_before.pinned_bytes)
         goto out_fail;
+    printf("ttmtest: checkpoint eviction_negative=PASS\n");
     resv_validate_failures_delta =
         resv_after.validate_failures - resv_before.validate_failures;
     resv_evict_pinned_rejects_delta =
@@ -792,6 +890,12 @@ int main(int argc, char **argv)
            resv_pinned_before_evict, resv_validate_failures_delta,
            resv_evict_pinned_rejects_delta,
            resv_evict_busy_rejects_delta);
+    printf("ttmtest: ttm_sg_table_matrix "
+           "sg_nents=%u expected=%u total_len=%lu first_dma=0x%lx "
+           "base_dma=0x%lx last_dma=0x%lx status=PASS\n",
+           sg_proof_nents, ttm_expected_sg_nents(bo1.size),
+           sg_proof_total_len, sg_proof_first_dma,
+           sg_proof_base_dma, sg_proof_last_dma);
     printf("ttmtest: ok tt_bytes=%lu vram_bytes=%lu evictions=%lu "
            "metadata_moves=%lu real_copy_moves=%lu native_accel_credit=%lu "
            "resv_conflicts=%lu content_migrations=%lu\n",
