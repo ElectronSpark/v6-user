@@ -255,19 +255,22 @@ struct ipc_perm {
     uint32 cgid;
     uint32 mode;
     uint16 seq;
-    uint16 __pad;
+    uint16 __pad2;
+    uint64 __unused1;
+    uint64 __unused2;
 };
 
 struct shmid_ds {
     struct ipc_perm shm_perm;
     uint64 shm_segsz;
-    uint64 shm_atime;
-    uint64 shm_dtime;
-    uint64 shm_ctime;
+    int64  shm_atime;
+    int64  shm_dtime;
+    int64  shm_ctime;
     int32  shm_cpid;
     int32  shm_lpid;
-    uint32 shm_nattch;
-    uint32 __pad;
+    uint64 shm_nattch;
+    uint64 __unused4;
+    uint64 __unused5;
 };
 
 struct semid_ds {
@@ -1250,9 +1253,9 @@ rm:
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- * 29. SHM IPC_RMID while attached → -EBUSY
+ * 29. SHM IPC_RMID while attached marks segment for removal
  * ══════════════════════════════════════════════════════════════════════ */
-static void test_shm_rmid_busy(void) {
+static void test_shm_rmid_marked(void) {
     const char *name = "shm IPC_RMID while attached";
 
     int64 id = _syscall3(SYS_shmget, IPC_PRIVATE, 4096, IPC_CREAT | 0600);
@@ -1261,13 +1264,24 @@ static void test_shm_rmid_busy(void) {
     int64 addr = _syscall3(SYS_shmat, id, 0, 0);
     if (addr <= 0) { TEST_FAIL(name, "shmat failed"); _syscall3(SYS_shmctl, id, IPC_RMID, 0); return; }
 
-    /* Try IPC_RMID while attached → should fail */
     int64 ret = _syscall3(SYS_shmctl, id, IPC_RMID, 0);
-    if (ret != -EBUSY) { TEST_FAIL(name, "expected -EBUSY"); }
-    else { TEST_PASS(name); }
+    if (ret != 0) { TEST_FAIL(name, "IPC_RMID while attached failed"); _syscall1(SYS_shmdt, addr); return; }
 
-    _syscall1(SYS_shmdt, addr);
-    _syscall3(SYS_shmctl, id, IPC_RMID, 0);
+    struct shmid_ds ds;
+    ret = _syscall3(SYS_shmctl, id, IPC_STAT, (int64)&ds);
+    if (ret != 0) { TEST_FAIL(name, "removed id rejected IPC_STAT"); _syscall1(SYS_shmdt, addr); return; }
+
+    int64 addr2 = _syscall3(SYS_shmat, id, 0, 0);
+    if (addr2 <= 0) { TEST_FAIL(name, "removed id rejected shmat"); _syscall1(SYS_shmdt, addr); return; }
+    ret = _syscall1(SYS_shmdt, addr2);
+    if (ret != 0) { TEST_FAIL(name, "second shmdt after removal failed"); _syscall1(SYS_shmdt, addr); return; }
+
+    ret = _syscall1(SYS_shmdt, addr);
+    if (ret != 0) { TEST_FAIL(name, "shmdt after removal failed"); return; }
+
+    ret = _syscall3(SYS_shmctl, id, IPC_RMID, 0);
+    if (ret != -EINVAL) { TEST_FAIL(name, "removed id survived final detach"); return; }
+    TEST_PASS(name);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2554,7 +2568,7 @@ int main(int argc, char *argv[]) {
     test_shm_ipc_set();
 
     printf("[shm IPC_RMID busy]\n");
-    test_shm_rmid_busy();
+    test_shm_rmid_marked();
 
     printf("[sem errors]\n");
     test_sem_errors();
