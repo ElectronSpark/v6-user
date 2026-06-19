@@ -12,7 +12,6 @@
  * starting from the second iteration.
  */
 #include "kernel/inc/types.h"
-#include "kernel/inc/kstats.h"
 #include "user/user.h"
 
 /* ------------------------------------------------------------------ */
@@ -71,6 +70,8 @@ static int parse_u64_field(const char *line, const char *key, uint64 *val)
 /* ------------------------------------------------------------------ */
 
 #define MAX_PROCS 128
+#define MAX_CPUS 64
+#define USER_HZ 100
 
 struct proc_snap {
 	int    pid;
@@ -79,8 +80,28 @@ struct proc_snap {
 	char   name[17];
 	char   state[8];
 	uint64 vm_kb;
-	uint64 cputime_raw;      /* from /proc/<pid>/status CpuTime (raw ticks) */
+	uint64 cputime_ticks;    /* USER_HZ ticks from /proc/<pid>/stat */
 	/* from /proc/<pid>/resources */
+	uint64 fs_bytes_read;
+	uint64 fs_bytes_written;
+	uint64 net_bytes_sent;
+	uint64 net_bytes_recv;
+	uint64 bio_reads;
+	uint64 bio_writes;
+};
+
+struct cpu_snap {
+	uint64 busy_ticks;
+	uint64 total_ticks;
+};
+
+struct sys_snap {
+	uint64 uptime_ms;
+	uint64 load_avg_5s_x100;
+	uint64 cpu_busy;
+	uint64 cpu_total;
+	int ncpus;
+	struct cpu_snap cpu[MAX_CPUS];
 	uint64 fs_bytes_read;
 	uint64 fs_bytes_written;
 	uint64 net_bytes_sent;
@@ -119,7 +140,7 @@ static int parse_status(int pid, struct proc_snap *ps)
 	ps->name[0] = '\0';
 	ps->state[0] = '\0';
 	ps->vm_kb = 0;
-	ps->cputime_raw = 0;
+	ps->cputime_ticks = 0;
 
 	char *p = buf;
 	while (*p) {
@@ -147,8 +168,6 @@ static int parse_status(int pid, struct proc_snap *ps)
 			ps->uid = (int)tmp;
 		} else if (parse_u64_field(p, "VmSize", &tmp)) {
 			ps->vm_kb = tmp;
-		} else if (parse_u64_field(p, "CpuTime", &tmp)) {
-			ps->cputime_raw = tmp;
 		}
 		if (nl)
 			p = nl + 1;
@@ -156,6 +175,49 @@ static int parse_status(int pid, struct proc_snap *ps)
 			break;
 	}
 	return 0;
+}
+
+static uint64 parse_u64_token(const char *s)
+{
+	uint64 v = 0;
+	while (*s >= '0' && *s <= '9')
+		v = v * 10 + (*s++ - '0');
+	return v;
+}
+
+static void parse_pid_stat(int pid, struct proc_snap *ps)
+{
+	char path[64], buf[512];
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+	if (read_file_into(path, buf, sizeof(buf)) <= 0)
+		return;
+
+	char *rp = 0;
+	for (char *q = buf; *q; q++)
+		if (*q == ')')
+			rp = q;
+	if (rp == 0)
+		return;
+	char *p = rp + 1;
+	while (*p == ' ')
+		p++;
+
+	uint64 utime = 0;
+	uint64 stime = 0;
+	int field = 3; /* first token after "(comm)" is state */
+	while (*p && field <= 15) {
+		while (*p == ' ')
+			p++;
+		char *start = p;
+		while (*p && *p != ' ')
+			p++;
+		if (field == 14)
+			utime = parse_u64_token(start);
+		else if (field == 15)
+			stime = parse_u64_token(start);
+		field++;
+	}
+	ps->cputime_ticks = utime + stime;
 }
 
 static void parse_resources(int pid, struct proc_snap *ps)
@@ -205,6 +267,7 @@ static void scan_procs(int slot)
 					struct proc_snap *ps = &snap[slot][count];
 					memset(ps, 0, sizeof(*ps));
 					if (parse_status(pid, ps) == 0) {
+						parse_pid_stat(pid, ps);
 						parse_resources(pid, ps);
 						count++;
 					}
@@ -215,6 +278,25 @@ static void scan_procs(int slot)
 	}
 	close(fd);
 	snap_count[slot] = count;
+}
+
+static void fill_io_totals(int slot, struct sys_snap *ss)
+{
+	ss->fs_bytes_read = 0;
+	ss->fs_bytes_written = 0;
+	ss->net_bytes_sent = 0;
+	ss->net_bytes_recv = 0;
+	ss->bio_reads = 0;
+	ss->bio_writes = 0;
+
+	for (int i = 0; i < snap_count[slot]; i++) {
+		ss->fs_bytes_read += snap[slot][i].fs_bytes_read;
+		ss->fs_bytes_written += snap[slot][i].fs_bytes_written;
+		ss->net_bytes_sent += snap[slot][i].net_bytes_sent;
+		ss->net_bytes_recv += snap[slot][i].net_bytes_recv;
+		ss->bio_reads += snap[slot][i].bio_reads;
+		ss->bio_writes += snap[slot][i].bio_writes;
+	}
 }
 
 /* Find a process by PID in the given snapshot slot. Returns NULL if gone. */
@@ -287,6 +369,118 @@ static const char *uid_to_name(int uid)
 }
 
 /* ------------------------------------------------------------------ */
+/*  System snapshot from Linux-shaped procfs files                    */
+/* ------------------------------------------------------------------ */
+
+static uint64 parse_decimal_x100(const char *s)
+{
+	uint64 whole = 0;
+	uint64 frac = 0;
+	int frac_digits = 0;
+
+	while (*s >= '0' && *s <= '9')
+		whole = whole * 10 + (*s++ - '0');
+	if (*s == '.') {
+		s++;
+		while (*s >= '0' && *s <= '9' && frac_digits < 2) {
+			frac = frac * 10 + (*s++ - '0');
+			frac_digits++;
+		}
+	}
+	while (frac_digits++ < 2)
+		frac *= 10;
+	return whole * 100 + frac;
+}
+
+static void parse_cpu_line(const char *line, uint64 *busy, uint64 *total)
+{
+	uint64 vals[10];
+	int n = 0;
+
+	while (*line && *line != ' ')
+		line++;
+	while (*line == ' ')
+		line++;
+	while (*line && n < (int)(sizeof(vals) / sizeof(vals[0]))) {
+		vals[n++] = parse_u64_token(line);
+		while (*line && *line != ' ')
+			line++;
+		while (*line == ' ')
+			line++;
+	}
+
+	uint64 sum = 0;
+	for (int i = 0; i < n; i++)
+		sum += vals[i];
+	uint64 idle = 0;
+	if (n > 3)
+		idle += vals[3];
+	if (n > 4)
+		idle += vals[4];
+	*total = sum;
+	*busy = sum > idle ? sum - idle : 0;
+}
+
+static void read_proc_uptime(struct sys_snap *ss)
+{
+	char buf[128];
+	if (read_file_into("/proc/uptime", buf, sizeof(buf)) <= 0)
+		return;
+	ss->uptime_ms = parse_decimal_x100(buf) * 10;
+}
+
+static void read_proc_loadavg(struct sys_snap *ss)
+{
+	char buf[128];
+	if (read_file_into("/proc/loadavg", buf, sizeof(buf)) <= 0)
+		return;
+
+	char *p = buf;
+	while (*p && *p != ' ')
+		p++;
+	while (*p == ' ')
+		p++;
+	ss->load_avg_5s_x100 = parse_decimal_x100(p);
+}
+
+static void read_proc_stat(struct sys_snap *ss)
+{
+	char buf[2048];
+	if (read_file_into("/proc/stat", buf, sizeof(buf)) <= 0)
+		return;
+
+	char *p = buf;
+	while (*p) {
+		char *line = p;
+		char *nl = strchr(p, '\n');
+		if (nl)
+			*nl = '\0';
+
+		if (strncmp_local(line, "cpu ", 4) == 0) {
+			parse_cpu_line(line, &ss->cpu_busy, &ss->cpu_total);
+		} else if (strncmp_local(line, "cpu", 3) == 0 &&
+		           line[3] >= '0' && line[3] <= '9' &&
+		           ss->ncpus < MAX_CPUS) {
+			parse_cpu_line(line, &ss->cpu[ss->ncpus].busy_ticks,
+			               &ss->cpu[ss->ncpus].total_ticks);
+			ss->ncpus++;
+		}
+
+		if (!nl)
+			break;
+		p = nl + 1;
+	}
+}
+
+static void read_system_snapshot(struct sys_snap *ss)
+{
+	memset(ss, 0, sizeof(*ss));
+	read_proc_uptime(ss);
+	read_proc_loadavg(ss);
+	read_proc_stat(ss);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Formatting helpers                                                */
 /* ------------------------------------------------------------------ */
 
@@ -328,45 +522,44 @@ static void fmt_rate(char *buf, int bufsz, uint64 delta_bytes, int secs)
 /*  Display                                                           */
 /* ------------------------------------------------------------------ */
 
-static void print_header(struct kstats *cur, struct kstats *prev,
+static void print_header(struct sys_snap *cur, struct sys_snap *prev,
                          int interval_secs)
 {
 	uint64 up_s = cur->uptime_ms / 1000;
-	/* Load average 5s (FSHIFT=11 fixed-point → integer.fraction) */
-	int load_int  = (int)(cur->load_avg_5s >> 11);
-	int load_frac = (int)((cur->load_avg_5s & 0x7ff) * 100 / 2048);
+	int load_int  = (int)(cur->load_avg_5s_x100 / 100);
+	int load_frac = (int)(cur->load_avg_5s_x100 % 100);
 
 	printf("Uptime: %d:%02d:%02d   CPUs: %d   Load(5s): %d.%02d\n",
 	       (int)(up_s / 3600), (int)((up_s / 60) % 60),
 	       (int)(up_s % 60), cur->ncpus, load_int, load_frac);
 
-	/* Per-CPU line with 1s EWMA utilization from kernel. */
 	printf("CPU  ");
-	int total_run = 0;
-	for (int i = 0; i < cur->ncpus && i < KSTATS_MAX_CPUS; i++) {
-		struct cpu_stat *cs = &cur->cpu[i];
-		total_run += cs->nr_running;
-		/* util_1s is FSHIFT=11 fixed-point where FIXED_1=100% */
-		int util_pct = (int)(cs->util_1s * 100 / 2048);
-		if (util_pct > 100) util_pct = 100;
-		printf(" [%d:%s r=%d u=%d%%]", i,
-		       cs->idle ? "idle" : "busy", (int)cs->nr_running,
-		       util_pct);
+	for (int i = 0; i < cur->ncpus && i < MAX_CPUS; i++) {
+		uint64 busy = cur->cpu[i].busy_ticks;
+		uint64 total = cur->cpu[i].total_ticks;
+		if (prev && i < prev->ncpus) {
+			busy -= prev->cpu[i].busy_ticks;
+			total -= prev->cpu[i].total_ticks;
+		}
+		int util_pct = total > 0 ? (int)(busy * 100 / total) : 0;
+		if (util_pct > 100)
+			util_pct = 100;
+		printf(" [%d:u=%d%%]", i, util_pct);
 	}
-	printf("  runnable=%d\n", total_run);
+	printf("\n");
 
 	/* Disk */
 	char rbuf[32], wbuf[32];
 	if (prev) {
 		fmt_rate(rbuf, sizeof(rbuf),
-		         cur->bio_read_bytes - prev->bio_read_bytes,
+		         cur->fs_bytes_read - prev->fs_bytes_read,
 		         interval_secs);
 		fmt_rate(wbuf, sizeof(wbuf),
-		         cur->bio_write_bytes - prev->bio_write_bytes,
+		         cur->fs_bytes_written - prev->fs_bytes_written,
 		         interval_secs);
 	} else {
-		fmt_bytes(rbuf, sizeof(rbuf), cur->bio_read_bytes);
-		fmt_bytes(wbuf, sizeof(wbuf), cur->bio_write_bytes);
+		fmt_bytes(rbuf, sizeof(rbuf), cur->fs_bytes_read);
+		fmt_bytes(wbuf, sizeof(wbuf), cur->fs_bytes_written);
 	}
 	printf("Disk   rd=%d wr=%d  %s / %s\n",
 	       (int)cur->bio_reads, (int)cur->bio_writes, rbuf, wbuf);
@@ -375,18 +568,16 @@ static void print_header(struct kstats *cur, struct kstats *prev,
 	char txb[32], rxb[32];
 	if (prev) {
 		fmt_rate(txb, sizeof(txb),
-		         cur->net_tx_bytes - prev->net_tx_bytes,
+		         cur->net_bytes_sent - prev->net_bytes_sent,
 		         interval_secs);
 		fmt_rate(rxb, sizeof(rxb),
-		         cur->net_rx_bytes - prev->net_rx_bytes,
+		         cur->net_bytes_recv - prev->net_bytes_recv,
 		         interval_secs);
 	} else {
-		fmt_bytes(txb, sizeof(txb), cur->net_tx_bytes);
-		fmt_bytes(rxb, sizeof(rxb), cur->net_rx_bytes);
+		fmt_bytes(txb, sizeof(txb), cur->net_bytes_sent);
+		fmt_bytes(rxb, sizeof(rxb), cur->net_bytes_recv);
 	}
-	printf("Net    tx=%d rx=%d  %s / %s\n",
-	       (int)cur->net_tx_packets, (int)cur->net_rx_packets,
-	       txb, rxb);
+	printf("Net    tx/rx  %s / %s\n", txb, rxb);
 }
 
 /**
@@ -398,8 +589,7 @@ static void print_header(struct kstats *cur, struct kstats *prev,
  * @param interval_ms  milliseconds between snapshots (for rate calc)
  */
 static void print_procs(int cur_slot, int prev_slot, int show_all,
-                        uint64 interval_ms, uint64 interval_raw,
-                        uint64 timebase_freq)
+                        uint64 interval_ms, uint64 interval_ticks)
 {
 	int n = snap_count[cur_slot];
 	int user_count = 0, kern_count = 0;
@@ -430,26 +620,23 @@ static void print_procs(int cur_slot, int prev_slot, int show_all,
 		if (!show_all && cur->vm_kb == 0)
 			continue;
 
-		/* CPU% = delta(cputime_raw) / interval_raw * 100
-		 * Both numerator and denominator use r_time() ticks,
-		 * avoiding drift between r_time() and jiffies clocks.
+		/* CPU% = delta(cputime_ticks) / interval_ticks * 100.
+		 * Both numerator and denominator use Linux USER_HZ ticks.
 		 * pct_x10 = tenths of percent (1000 = 100.0%). */
 		int cpu_pct_x10 = 0;
-		if (have_prev && interval_raw > 0) {
+		if (have_prev && interval_ticks > 0) {
 			struct proc_snap *old = find_by_pid(prev_slot,
 			                                    cur->pid);
 			if (old) {
-				uint64 dt_raw = cur->cputime_raw -
-				               old->cputime_raw;
-				cpu_pct_x10 = (int)(dt_raw * 1000 /
-				              interval_raw);
+				uint64 dt_ticks = cur->cputime_ticks -
+				                  old->cputime_ticks;
+				cpu_pct_x10 = (int)(dt_ticks * 1000 /
+				              interval_ticks);
 			}
 		}
 
 		/* Convert raw ticks to ms for display */
-		uint64 cputime_ms = 0;
-		if (timebase_freq > 0)
-			cputime_ms = cur->cputime_raw * 1000 / timebase_freq;
+		uint64 cputime_ms = cur->cputime_ticks * 1000 / USER_HZ;
 
 		/* Resolve username */
 		const char *uname = uid_to_name(cur->uid);
@@ -552,7 +739,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	struct kstats ks[2]; /* two kstats buffers for delta */
+	struct sys_snap ks[2]; /* two system snapshot buffers for delta */
 	int cur = 0;         /* current slot index (alternates 0/1) */
 
 	load_passwd();
@@ -564,28 +751,22 @@ int main(int argc, char *argv[])
 			/* First iteration: take two snapshots with a 1s
 			 * sleep to compute meaningful CPU% deltas
 			 * (Linux approach). */
-			if (kstats(&ks[0]) < 0) {
-				printf("top: kstats failed\n");
-				return 1;
-			}
+			read_system_snapshot(&ks[0]);
 			scan_procs(0);
+			fill_io_totals(0, &ks[0]);
 			sleep(1000); /* 1 second baseline */
-			if (kstats(&ks[1]) < 0) {
-				printf("top: kstats failed\n");
-				return 1;
-			}
+			read_system_snapshot(&ks[1]);
 			scan_procs(1);
+			fill_io_totals(1, &ks[1]);
 			prev = 0;
 			cur = 1;
 		} else {
 			/* Subsequent: we already have the previous in cur */
 			prev = cur;
 			cur = 1 - cur; /* flip to other slot */
-			if (kstats(&ks[cur]) < 0) {
-				printf("top: kstats failed\n");
-				return 1;
-			}
+			read_system_snapshot(&ks[cur]);
 			scan_procs(cur);
+			fill_io_totals(cur, &ks[cur]);
 		}
 
 		if (iter > 0)
@@ -593,21 +774,20 @@ int main(int argc, char *argv[])
 			       iterations);
 
 		uint64 interval_ms = 0;
-		uint64 interval_raw = 0;
+		uint64 interval_ticks = 0;
 		if (prev >= 0) {
 			interval_ms = ks[cur].uptime_ms - ks[prev].uptime_ms;
-			interval_raw = ks[cur].timestamp - ks[prev].timestamp;
+			interval_ticks = ks[cur].cpu_total - ks[prev].cpu_total;
 		} else {
 			interval_ms = ks[cur].uptime_ms;
-			interval_raw = ks[cur].timestamp;
+			interval_ticks = ks[cur].cpu_total;
 		}
 
 		print_header(&ks[cur],
 		             (prev >= 0) ? &ks[prev] : 0,
 		             (int)(interval_ms / 1000));
 		printf("\n");
-		print_procs(cur, prev, show_all, interval_ms, interval_raw,
-		            ks[cur].timebase_freq);
+		print_procs(cur, prev, show_all, interval_ms, interval_ticks);
 
 		if (iter + 1 < iterations)
 			sleep(delay_secs * 1000); /* sleep(ms) */

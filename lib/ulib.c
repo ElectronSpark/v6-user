@@ -1,4 +1,5 @@
 #include "kernel/inc/types.h"
+#include "kernel/inc/syscall.h"
 #include "kernel/inc/vfs/stat.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "user/user.h"
@@ -53,6 +54,30 @@ int fork(void) {
         .ptid = 0,
     };
     return clone(&args);
+}
+
+int execve(const char *path, char **argv, char **envp) {
+#if defined(CONFIG_ARCH_X86_64)
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "a"((long)SYS_exec), "D"(path), "S"(argv), "d"(envp)
+                     : "rcx", "r11", "memory");
+    return (int)ret;
+#elif defined(CONFIG_ARCH_RISCV)
+    register uint64 arg0 asm("a0") = (uint64)path;
+    register uint64 arg1 asm("a1") = (uint64)argv;
+    register uint64 arg2 asm("a2") = (uint64)envp;
+    register uint64 syscall_num asm("a7") = SYS_exec;
+    asm volatile("ecall"
+                 : "+r"(arg0)
+                 : "r"(arg1), "r"(arg2), "r"(syscall_num)
+                 : "memory");
+    return (int)arg0;
+#else
+    (void)envp;
+    return exec(path, argv);
+#endif
 }
 
 // vfork() is now a direct syscall (SYS_vfork) with a pure assembly stub

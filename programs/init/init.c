@@ -4,11 +4,9 @@
 #include "kernel/inc/vfs/stat.h"
 #include "kernel/inc/lock/spinlock.h"
 #include "kernel/inc/lock/mutex_types.h"
-#include "kernel/inc/vfs/xv6fs/ondisk.h"
 #include "user/user.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/dev/netconf.h"
-#include "kernel/inc/syscall.h"
 
 #ifndef TIOCSCTTY
 #define TIOCSCTTY 0x540E
@@ -182,12 +180,7 @@ static void configure_network(void)
     /* Apply configuration via /dev/netconf device (created by devtmpfs) */
     int nfd = open("/dev/netconf", O_WRONLY);
     if (nfd < 0) {
-        /* Fall back to netconf() syscall if device not yet available */
-        if (netconf(&req) < 0)
-            printf("init: netconf() failed\n");
-        else
-            printf("init: network configured via syscall (%s)\n",
-                   req.mode == NETCONF_MODE_DHCP ? "dhcp" : "static");
+        printf("init: /dev/netconf unavailable\n");
         return;
     }
 
@@ -210,33 +203,6 @@ static int is_env_assignment(const char *s)
     while (*p && *p != '=')
         p++;
     return *p == '=';
-}
-
-static int exec_with_env(const char *path, char **argv, char **envp)
-{
-#ifdef HOST_LIBC_PROGRAM
-    return execve(path, argv, envp);
-#elif defined(__x86_64__)
-    long ret;
-    __asm__ volatile("syscall"
-                     : "=a"(ret)
-                     : "a"((long)SYS_exec), "D"(path), "S"(argv), "d"(envp)
-                     : "rcx", "r11", "memory");
-    return (int)ret;
-#elif defined(__riscv)
-    register uint64 arg0 asm("a0") = (uint64)path;
-    register uint64 arg1 asm("a1") = (uint64)argv;
-    register uint64 arg2 asm("a2") = (uint64)envp;
-    register uint64 syscall_num asm("a7") = SYS_exec;
-    asm volatile("ecall"
-                 : "+r"(arg0)
-                 : "r"(arg1), "r"(arg2), "r"(syscall_num)
-                 : "memory");
-    return (int)arg0;
-#else
-    (void)envp;
-    return exec(path, argv);
-#endif
 }
 
 int main(void) {
@@ -276,7 +242,7 @@ int main(void) {
     // The ext4 rootfs already contains /usr with Python stdlib.
     // No separate disk mount needed.
 
-    // Configure network (reads /etc/network.conf, calls netconf syscall)
+    // Configure network through /dev/netconf.
     configure_network();
 
     // Launch background services listed in /etc/startup. Each non-empty,
@@ -335,7 +301,7 @@ int main(void) {
                         int dpid = fork();
                         if (dpid == 0) {
                             if (envc > 0)
-                                exec_with_env(sargv[0], sargv, senv);
+                                execve(sargv[0], sargv, senv);
                             else
                                 exec(sargv[0], sargv);
                             printf("init: exec %s failed\n", sargv[0]);

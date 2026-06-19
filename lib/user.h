@@ -112,6 +112,7 @@ int pwritev2(int fd, const struct iovec *iov, int iovcnt, int64 offset, int flag
 int close(int);
 int kill(int, int);
 int exec(const char *, char **);
+int execve(const char *, char **, char **);
 int open(const char *, int);
 int mknod(const char *, int mode, int major, int minor);
 int unlink(const char *);

@@ -48,7 +48,6 @@ static inline void waitgdb_stopentry(void) {
 }
 #else
 #include "user.h"
-#include "kernel/inc/syscall.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/vfs/stat.h"
 #include "kernel/inc/tty/termios.h"
@@ -62,27 +61,6 @@ static int setenv(const char *name, const char *value, int overwrite) {
 static int unsetenv(const char *name) {
     (void)name;
     return 0;
-}
-
-static int exec_with_env(const char *path, char **argv, char **envp) {
-#if defined(__x86_64__)
-    long ret;
-    __asm__ volatile("syscall"
-                 : "=a"(ret)
-                 : "a"((long)SYS_exec), "D"(path), "S"(argv), "d"(envp)
-                 : "rcx", "r11", "memory");
-    return (int)ret;
-#elif defined(__riscv)
-    register uint64 arg0 asm("a0") = (uint64)path;
-    register uint64 arg1 asm("a1") = (uint64)argv;
-    register uint64 arg2 asm("a2") = (uint64)envp;
-    register uint64 syscall_num asm("a7") = SYS_exec;
-    asm volatile("ecall"
-                 : "+r"(arg0)
-                 : "r"(arg1), "r"(arg2), "r"(syscall_num)
-                 : "memory");
-    return (int)arg0;
-#endif
 }
 #endif
 
@@ -1765,20 +1743,12 @@ static char **build_exec_envp(void) {
 }
 
 static int shell_exec(char *path, char **argv) {
-#ifdef USE_NCURSES_SHELL
     return execve(path, argv, build_exec_envp());
-#else
-    return exec_with_env(path, argv, build_exec_envp());
-#endif
 }
 
 static int shell_exec_with_assignments(char *path, char **argv,
                                        char **assignv, int assignc) {
-#ifdef USE_NCURSES_SHELL
     return execve(path, argv, build_exec_envp_with_assignments(assignv, assignc));
-#else
-    return exec_with_env(path, argv, build_exec_envp_with_assignments(assignv, assignc));
-#endif
 }
 
 static int shell_exec_env(char *path, char **argv, char **assignv, int assignc) {
