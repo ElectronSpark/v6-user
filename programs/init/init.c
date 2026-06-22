@@ -205,6 +205,18 @@ static int is_env_assignment(const char *s)
     return *p == '=';
 }
 
+static void redirect_startup_stdin_to_null(void)
+{
+    int nfd = open("/dev/null", O_RDONLY);
+
+    if (nfd < 0)
+        return;
+    if (nfd != 0) {
+        dup2(nfd, 0);
+        close(nfd);
+    }
+}
+
 int main(void) {
     int pid, wpid;
 
@@ -248,8 +260,9 @@ int main(void) {
     // Launch background services listed in /etc/startup. Each non-empty,
     // non-comment line is forked as a separate process. Tokens are split
     // on spaces/tabs (no quoting). Leading NAME=value tokens become the
-    // exec environment. The launched program inherits init's controlling tty
-    // so its output appears on the console.
+    // exec environment. Services run in their own sessions and keep
+    // stdout/stderr on the console for logs, but stdin comes from /dev/null so
+    // daemons cannot consume shell input or take foreground terminal control.
     {
         int sfd = open("/etc/startup", O_RDONLY);
         if (sfd >= 0) {
@@ -300,6 +313,9 @@ int main(void) {
 
                         int dpid = fork();
                         if (dpid == 0) {
+                            if (setsid() < 0)
+                                (void)setpgid(0, 0);
+                            redirect_startup_stdin_to_null();
                             if (envc > 0)
                                 execve(sargv[0], sargv, senv);
                             else

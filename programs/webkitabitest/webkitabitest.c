@@ -772,43 +772,29 @@ static void test_socket_nonblock_connect(void)
     }
 
     rc = connect_unix_raw(client, &sa);
-    if (rc != -EINPROGRESS) {
-        fail(name, "nonblocking connect did not return EINPROGRESS");
+    if (rc != 0) {
+        fail(name, "nonblocking AF_UNIX connect did not complete immediately");
         goto out;
     }
 
     pfd.fd = client;
     pfd.events = POLLIN | POLLOUT;
     pfd.revents = 0;
-    if (poll_raw(&pfd, 1, 0) < 0 || (pfd.revents & (POLLIN | POLLOUT))) {
-        fail(name, "pending connect reported data or write readiness");
+    if (poll_raw(&pfd, 1, 0) <= 0 || !(pfd.revents & POLLOUT)) {
+        fail(name, "connected AF_UNIX socket was not immediately writable");
         goto out;
     }
 
     len = sizeof(val);
     if (getsockopt_raw(client, SOL_SOCKET, SO_ERROR, &val, &len) < 0 ||
-        len != sizeof(val) || val != EINPROGRESS) {
-        fail(name, "pending SO_ERROR was not EINPROGRESS");
+        len != sizeof(val) || val != 0) {
+        fail(name, "connected AF_UNIX SO_ERROR was not zero");
         goto out;
     }
 
     server = accept4_raw(listener, SOCK_CLOEXEC);
     if (server < 0) {
         fail(name, "accept4 failed");
-        goto out;
-    }
-
-    pfd.revents = 0;
-    if (poll_raw(&pfd, 1, 1000) <= 0 || !(pfd.revents & POLLOUT)) {
-        fail(name, "accepted connect did not become writable");
-        goto out;
-    }
-
-    len = sizeof(val);
-    val = -1;
-    if (getsockopt_raw(client, SOL_SOCKET, SO_ERROR, &val, &len) < 0 ||
-        len != sizeof(val) || val != 0) {
-        fail(name, "accepted SO_ERROR was not zero");
         goto out;
     }
 
@@ -861,27 +847,21 @@ static void test_socket_nonblock_connect_epoll(void)
     }
 
     rc = connect_unix_raw(client, &sa);
-    if (rc != -EINPROGRESS) {
-        fail(name, "nonblocking connect did not return EINPROGRESS");
+    if (rc != 0) {
+        fail(name, "nonblocking AF_UNIX connect did not complete immediately");
         goto out;
     }
 
     memset(&out, 0, sizeof(out));
-    if (epoll_pwait_raw(epfd, &out, 1, 0) != 0) {
-        fail(name, "pending connect reported epoll readiness");
+    rc = epoll_pwait_raw(epfd, &out, 1, 0);
+    if (rc <= 0 || !(out.events & EPOLLOUT) || out.data != ev.data) {
+        fail(name, "connected AF_UNIX socket did not report epoll writable");
         goto out;
     }
 
     server = accept4_raw(listener, SOCK_CLOEXEC);
     if (server < 0) {
         fail(name, "accept4 failed");
-        goto out;
-    }
-
-    memset(&out, 0, sizeof(out));
-    rc = epoll_pwait_raw(epfd, &out, 1, 1000);
-    if (rc <= 0 || !(out.events & EPOLLOUT) || out.data != ev.data) {
-        fail(name, "accepted connect did not wake epoll writable");
         goto out;
     }
 

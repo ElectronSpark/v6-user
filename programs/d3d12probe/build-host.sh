@@ -2,7 +2,7 @@
 #
 # build-host.sh - compile d3d12probe natively on the WSL/Hyper-V host to sanity
 # check the staged GPU-PV runtime independently of xv6. Produces
-# user/programs/d3d12probe/d3d12probe-host.
+# build-x86_64/d3d12probe-host/d3d12probe-host by default.
 #
 set -euo pipefail
 
@@ -22,8 +22,10 @@ if [[ ! -e "${RUNTIME}/libd3d12.so" || ! -e "${RUNTIME}/libdxcore.so" ]]; then
     exit 1
 fi
 
-OUT="${SCRIPT_DIR}/d3d12probe-host"
+OUT_DIR="${D3D12PROBE_HOST_BUILD_DIR:-${REPO_ROOT}/build-x86_64/d3d12probe-host}"
+OUT="${OUT_DIR}/d3d12probe-host"
 DXGUIDS="${REPO_ROOT}/ports/mesa/src/subprojects/DirectX-Headers-1.0/src/dxguids.cpp"
+mkdir -p "${OUT_DIR}"
 set -x
 g++ -std=c++17 -O2 -Wall \
     -I"${DXH}" -I"${DXH}/wsl/stubs" \

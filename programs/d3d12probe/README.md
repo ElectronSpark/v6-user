@@ -32,7 +32,7 @@ This validates the staged runtime itself, independent of xv6:
 ```sh
 scripts/stage-gpup-umd.sh            # stage libd3d12/libdxcore/UMD into overlay
 user/programs/d3d12probe/build-host.sh
-LD_LIBRARY_PATH=/usr/lib/wsl/lib user/programs/d3d12probe/d3d12probe-host
+LD_LIBRARY_PATH=/usr/lib/wsl/lib build-x86_64/d3d12probe-host/d3d12probe-host
 ```
 
 ## Running inside the xv6 GPU-P guest

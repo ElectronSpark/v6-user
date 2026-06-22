@@ -318,7 +318,7 @@ static void env_init(void) {
     for (int i = 0; i < MAX_ENV_VARS; i++)
         env_vars[i].used = 0;
     env_set("PATH", "/:/bin");
-    env_set("HOME", "/");
+    env_set("HOME", "/root");
     env_set("TERM", "xterm");
     env_set("LANG", "C.UTF-8");
     env_set("LC_ALL", "C.UTF-8");
@@ -2350,6 +2350,26 @@ static int run_script(const char *path) {
     return 0;
 }
 
+static int shell_option_cluster_is_supported(const char *arg) {
+    if (arg == 0 || arg[0] != '-' || arg[1] == 0)
+        return 0;
+    for (const char *p = arg + 1; *p; p++) {
+        if (*p != 'c' && *p != 'l')
+            return 0;
+    }
+    return 1;
+}
+
+static int shell_option_has(const char *arg, char opt) {
+    if (!shell_option_cluster_is_supported(arg))
+        return 0;
+    for (const char *p = arg + 1; *p; p++) {
+        if (*p == opt)
+            return 1;
+    }
+    return 0;
+}
+
 // =====================================================================
 // =====================================================================
 // main
@@ -2399,8 +2419,12 @@ int main(int argc, char *argv[]) {
         setenv("TERM", "xterm", 1);
 #endif
 
-    // ---- sh -c "command" ----
-    if (argc >= argi + 2 && strcmp(argv[argi], "-c") == 0) {
+    while (argi < argc && strcmp(argv[argi], "-l") == 0)
+        argi++;
+
+    // ---- sh -c "command" / sh -lc "command" ----
+    if (argc >= argi + 2 &&
+        (strcmp(argv[argi], "-c") == 0 || shell_option_has(argv[argi], 'c'))) {
         // glibc system() may invoke "sh -c -- command" so that command
         // strings beginning with '-' are not parsed as shell options.
         int cmd_argi = argi + 1;
