@@ -46,9 +46,15 @@
 #define RATE_HZ 48000U
 #define CHANNELS 2U
 #define FRAME_BYTES 4U
-#define PERIOD_FRAMES 512U
-#define BUFFER_FRAMES (PERIOD_FRAMES * 4U)
+#define DEFAULT_PERIOD_FRAMES 512U
+#define PIPEWIRE_PERIOD_FRAMES 1200U
+#define MAX_PERIOD_FRAMES PIPEWIRE_PERIOD_FRAMES
+#define SUSTAIN_SECONDS 6U
+#define SUSTAIN_MIN_PERCENT 90U
 #define ALSA_BOUNDARY 0x40000000ULL
+#define START_THRESHOLD_BUFFER 0U
+#define START_THRESHOLD_PERIOD ((uint)-1)
+#define EAGAIN_VALUE 11
 
 typedef struct alsa_mask {
     uint bits[8];
@@ -253,8 +259,10 @@ static uint interval_min(const alsa_pcm_hw_params_t *params, uint hw)
     return params->intervals[hw - SNDRV_PCM_HW_PARAM_SAMPLE_BITS].min;
 }
 
-static void fill_hw_params(alsa_pcm_hw_params_t *params)
+static void fill_hw_params(alsa_pcm_hw_params_t *params, uint period_frames)
 {
+    uint buffer_frames = period_frames * 4U;
+
     memset(params, 0, sizeof(*params));
     set_mask(params, SNDRV_PCM_HW_PARAM_ACCESS,
              SNDRV_PCM_ACCESS_RW_INTERLEAVED);
@@ -264,14 +272,14 @@ static void fill_hw_params(alsa_pcm_hw_params_t *params)
     set_interval(params, SNDRV_PCM_HW_PARAM_FRAME_BITS, 32);
     set_interval(params, SNDRV_PCM_HW_PARAM_CHANNELS, CHANNELS);
     set_interval(params, SNDRV_PCM_HW_PARAM_RATE, RATE_HZ);
-    set_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, PERIOD_FRAMES);
+    set_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, period_frames);
     set_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
-                 PERIOD_FRAMES * FRAME_BYTES);
+                 period_frames * FRAME_BYTES);
     set_interval(params, SNDRV_PCM_HW_PARAM_PERIODS,
-                 BUFFER_FRAMES / PERIOD_FRAMES);
-    set_interval(params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE, BUFFER_FRAMES);
+                 buffer_frames / period_frames);
+    set_interval(params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE, buffer_frames);
     set_interval(params, SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-                 BUFFER_FRAMES * FRAME_BYTES);
+                 buffer_frames * FRAME_BYTES);
     set_interval(params, SNDRV_PCM_HW_PARAM_TICK_TIME, 0);
 }
 
@@ -333,13 +341,47 @@ static int pcm_poll(int fd, const char *label)
     return ret;
 }
 
-static void snapshot(int fd, const char *label, alsa_pcm_status_t *status)
+static int pcm_poll_wait(int fd, const char *label, int timeout,
+                         short *revents)
+{
+    struct pollfd pfd;
+    int ret;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLOUT | POLLERR | POLLHUP;
+    ret = poll_raw(&pfd, 1, timeout);
+    if (revents)
+        *revents = pfd.revents;
+    printf("ALSAPCMPOLL: POLL %s ret=%d errno=%d timeout=%d events=%d "
+           "revents=%d names=",
+           label, ret, raw_errno(ret), timeout, pfd.events, pfd.revents);
+    print_revent_names(pfd.revents);
+    printf("\n");
+    return ret;
+}
+
+static int snapshot(int fd, const char *label, alsa_pcm_status_t *status)
 {
     int64 delay;
+    int ret;
 
-    (void)pcm_status(fd, label, status);
+    ret = pcm_status(fd, label, status);
     (void)pcm_delay(fd, label, &delay);
     (void)pcm_poll(fd, label);
+    return ret;
+}
+
+static int sustain_snapshot(int fd, const char *label,
+                            alsa_pcm_status_t *status, uint64 submitted)
+{
+    int ret = snapshot(fd, label, status);
+
+    if (ret < 0)
+        printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=status_invalid label=%s "
+               "ret=%d submitted_frames=%lu\n",
+               label, ret, submitted);
+    return ret;
 }
 
 static void fill_audio(unsigned char *buf, uint frames)
@@ -373,77 +415,112 @@ static void check_row(const char *name, int pass, const char *detail,
            appl_ptr, hw_ptr);
 }
 
-int main(int argc, char **argv)
+static int pcm_failed_state(int state)
 {
-    (void)argc;
-    (void)argv;
+    return state == SNDRV_PCM_STATE_XRUN ||
+           state == SNDRV_PCM_STATE_SUSPENDED ||
+           state == SNDRV_PCM_STATE_DISCONNECTED;
+}
 
+static int configure_pcm(int fd, uint requested_period_frames,
+                         const char *mode_label, uint *period_frames_out,
+                         uint *buffer_frames_out, uint start_threshold)
+{
     alsa_pcm_hw_params_t hw;
     alsa_pcm_hw_params_t refine;
     alsa_pcm_sw_params_t sw;
-    alsa_pcm_status_t status;
-    unsigned char audio[PERIOD_FRAMES * FRAME_BYTES];
     uint period_frames;
     uint buffer_frames;
     int version = 0;
-    int fd;
     int ret;
 
-    fill_audio(audio, PERIOD_FRAMES);
-
-    fd = open("/dev/snd/pcmC0D0p", O_WRONLY | O_NONBLOCK);
-    printf("ALSAPCMPOLL: OPEN path=/dev/snd/pcmC0D0p flags=O_WRONLY|O_NONBLOCK "
-           "ret=%d errno=%d\n", fd, saved_errno(fd));
-    if (fd < 0)
-        exit(1);
-
     ret = ioctl(fd, SNDRV_PCM_IOCTL_PVERSION, &version);
-    printf("ALSAPCMPOLL: PVERSION ret=%d errno=%d version=0x%x\n",
-           ret, saved_errno(ret), version);
+    printf("ALSAPCMPOLL: PVERSION mode=%s ret=%d errno=%d version=0x%x\n",
+           mode_label, ret, saved_errno(ret), version);
 
-    fill_hw_params(&refine);
+    fill_hw_params(&refine, requested_period_frames);
     ret = ioctl(fd, SNDRV_PCM_IOCTL_HW_REFINE, &refine);
     print_ret("HW_REFINE", ret);
     print_hw_params("HW_REFINE_PARAMS", &refine);
 
-    fill_hw_params(&hw);
+    fill_hw_params(&hw, requested_period_frames);
     ret = ioctl(fd, SNDRV_PCM_IOCTL_HW_PARAMS, &hw);
     print_ret("HW_PARAMS", ret);
     print_hw_params("HW_PARAMS_ACTUAL", &hw);
-    if (ret < 0) {
-        close(fd);
-        exit(1);
-    }
+    if (ret < 0)
+        return -1;
 
     period_frames = interval_min(&hw, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
     buffer_frames = interval_min(&hw, SNDRV_PCM_HW_PARAM_BUFFER_SIZE);
-    if (period_frames == 0 || period_frames > PERIOD_FRAMES)
-        period_frames = PERIOD_FRAMES;
+    if (period_frames == 0 || period_frames > requested_period_frames)
+        period_frames = requested_period_frames;
     if (buffer_frames == 0)
-        buffer_frames = BUFFER_FRAMES;
+        buffer_frames = period_frames * 4U;
+    if (start_threshold == 0)
+        start_threshold = buffer_frames;
+    else if (start_threshold == START_THRESHOLD_PERIOD)
+        start_threshold = period_frames;
 
     memset(&sw, 0, sizeof(sw));
     sw.period_step = 1;
     sw.avail_min = period_frames;
     sw.xfer_align = 1;
-    sw.start_threshold = buffer_frames;
+    sw.start_threshold = start_threshold;
     sw.stop_threshold = ALSA_BOUNDARY;
     sw.boundary = ALSA_BOUNDARY;
     ret = ioctl(fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sw);
-    printf("ALSAPCMPOLL: SW_PARAMS ret=%d errno=%d avail_min=%lu "
+    printf("ALSAPCMPOLL: SW_PARAMS mode=%s ret=%d errno=%d avail_min=%lu "
            "start_threshold=%lu stop_threshold=%lu boundary=%lu\n",
-           ret, saved_errno(ret), sw.avail_min, sw.start_threshold,
-           sw.stop_threshold, sw.boundary);
-    if (ret < 0) {
+           mode_label, ret, saved_errno(ret), sw.avail_min,
+           sw.start_threshold, sw.stop_threshold, sw.boundary);
+    if (ret < 0)
+        return -1;
+
+    *period_frames_out = period_frames;
+    *buffer_frames_out = buffer_frames;
+    return 0;
+}
+
+static int open_pcm(void)
+{
+    const char *path = "/dev/snd/pcmC0D0p";
+    int flags = O_WRONLY | O_NONBLOCK;
+    int fd;
+
+    printf("ALSAPCMPOLL_OPEN_BEGIN path=%s flags=%d\n", path, flags);
+    fd = open(path, flags);
+    printf("ALSAPCMPOLL_OPEN_DONE path=%s flags=%d ret=%d errno=%d\n",
+           path, flags, fd, saved_errno(fd));
+    return fd;
+}
+
+static int run_default_mode(void)
+{
+    alsa_pcm_status_t status;
+    unsigned char audio[DEFAULT_PERIOD_FRAMES * FRAME_BYTES];
+    uint period_frames;
+    uint buffer_frames;
+    int fd;
+    int ret;
+
+    fill_audio(audio, DEFAULT_PERIOD_FRAMES);
+
+    fd = open_pcm();
+    if (fd < 0)
+        return 1;
+
+    if (configure_pcm(fd, DEFAULT_PERIOD_FRAMES, "default", &period_frames,
+                      &buffer_frames, START_THRESHOLD_BUFFER) < 0) {
         close(fd);
-        exit(1);
+        return 1;
     }
+    (void)buffer_frames;
 
     ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
     print_ret("PREPARE initial", ret);
     if (ret < 0) {
         close(fd);
-        exit(1);
+        return 1;
     }
 
     (void)write_frames(fd, "initial_less_than_start_threshold", audio,
@@ -467,7 +544,7 @@ int main(int argc, char **argv)
     print_ret("PREPARE before_drain", ret);
     if (ret < 0) {
         close(fd);
-        exit(1);
+        return 1;
     }
     (void)write_frames(fd, "before_drain_less_than_start_threshold", audio,
                        period_frames);
@@ -482,7 +559,330 @@ int main(int argc, char **argv)
               status.state, status.appl_ptr, status.hw_ptr);
     snapshot(fd, "after_drain_write", &status);
 
-    close(fd);
+    ret = close(fd);
+    printf("ALSAPCMPOLL: CLOSE default ret=%d errno=%d\n", ret,
+           saved_errno(ret));
     printf("ALSAPCMPOLL: DONE ret=0 errno=0\n");
-    exit(0);
+    return 0;
+}
+
+static int run_sustain_mode(uint requested_period_frames)
+{
+    alsa_pcm_status_t status;
+    unsigned char audio[MAX_PERIOD_FRAMES * FRAME_BYTES];
+    uint period_frames;
+    uint buffer_frames;
+    uint64 target_frames = (uint64)RATE_HZ * SUSTAIN_SECONDS;
+    uint64 min_frames = target_frames * SUSTAIN_MIN_PERCENT / 100U;
+    uint64 submitted = 0;
+    uint64 writes = 0;
+    uint64 short_writes = 0;
+    uint64 eagain_count = 0;
+    uint64 poll_count = 0;
+    uint64 pollerr_count = 0;
+    uint64 no_progress_polls = 0;
+    int status_ok = 1;
+    int state_ok = 1;
+    int cleanup_ok = 1;
+    int fail = 0;
+    int fd;
+    int ret;
+
+    printf("ALSAPCMPOLL_SUSTAIN_ENTER requested_period=%u\n",
+           requested_period_frames);
+
+    if (requested_period_frames == 0 ||
+        requested_period_frames > MAX_PERIOD_FRAMES) {
+        printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u target_frames=%lu "
+               "submitted_frames=0 result=FAIL reason=bad_period\n",
+               requested_period_frames, target_frames);
+        return 1;
+    }
+
+    fill_audio(audio, requested_period_frames);
+
+    fd = open_pcm();
+    if (fd < 0)
+        return 1;
+
+    if (configure_pcm(fd, requested_period_frames, "sustain",
+                      &period_frames, &buffer_frames,
+                      START_THRESHOLD_PERIOD) < 0) {
+        close(fd);
+        printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u target_frames=%lu "
+               "submitted_frames=0 result=FAIL reason=config\n",
+               requested_period_frames, target_frames);
+        return 1;
+    }
+
+    printf("ALSAPCMPOLL_SUSTAIN_BEGIN period=%u write_frames=%u "
+           "rate=%u channels=%u format=S16_LE target_seconds=%u "
+           "target_frames=%lu min_frames=%lu buffer_frames=%u\n",
+           period_frames, period_frames, RATE_HZ, CHANNELS, SUSTAIN_SECONDS,
+           target_frames, min_frames, buffer_frames);
+
+    ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
+    print_ret("PREPARE sustain", ret);
+    if (ret < 0) {
+        close(fd);
+        printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u target_frames=%lu "
+               "submitted_frames=0 result=FAIL reason=prepare\n",
+               period_frames, target_frames);
+        return 1;
+    }
+    if (sustain_snapshot(fd, "sustain_after_prepare", &status, submitted) < 0) {
+        status_ok = 0;
+        fail = 1;
+    }
+
+    while (!fail && submitted < target_frames) {
+        short revents = 0;
+        int status_ret;
+        uint64 remaining = target_frames - submitted;
+        uint frames = period_frames;
+
+        if (remaining < frames)
+            frames = (uint)remaining;
+
+        ret = pcm_poll_wait(fd, "sustain_wait", 200, &revents);
+        poll_count++;
+        status_ret = sustain_snapshot(fd, "sustain_after_poll", &status,
+                                      submitted);
+        if (status_ret < 0) {
+            status_ok = 0;
+            fail = 1;
+        }
+        printf("ALSAPCMPOLL_SUSTAIN_PROGRESS phase=after_poll "
+               "submitted_frames=%lu target_frames=%lu polls=%lu "
+               "state=%d(%s) appl_ptr=%lu hw_ptr=%lu avail=%lu delay=%ld "
+               "revents=%d status_valid=%s\n",
+               submitted, target_frames, poll_count, status.state,
+               state_name(status.state), status.appl_ptr, status.hw_ptr,
+               status.avail, status.delay, revents,
+               status_ret == 0 ? "PASS" : "FAIL");
+        if (status_ret < 0)
+            break;
+
+        if (ret < 0) {
+            fail = 1;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=poll_error ret=%d "
+                   "errno=%d submitted_frames=%lu\n",
+                   ret, raw_errno(ret), submitted);
+            break;
+        }
+        if (revents & (POLLERR | POLLHUP)) {
+            pollerr_count++;
+            fail = 1;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=poll_bad_revents "
+                   "revents=%d submitted_frames=%lu\n",
+                   revents, submitted);
+            break;
+        }
+        if (pcm_failed_state(status.state)) {
+            state_ok = 0;
+            fail = 1;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=bad_state "
+                   "state=%d(%s) submitted_frames=%lu\n",
+                   status.state, state_name(status.state), submitted);
+            break;
+        }
+        if ((revents & (POLLOUT | POLLWRNORM | POLLWRBAND)) == 0) {
+            no_progress_polls++;
+            if (no_progress_polls > 60) {
+                fail = 1;
+                printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=no_progress "
+                       "submitted_frames=%lu polls_without_write=%lu\n",
+                       submitted, no_progress_polls);
+                break;
+            }
+            continue;
+        }
+
+        ret = write_frames(fd, "sustain_period", audio, frames);
+        writes++;
+        if (ret < 0 && saved_errno(ret) == EAGAIN_VALUE) {
+            eagain_count++;
+            no_progress_polls++;
+            status_ret = sustain_snapshot(fd, "sustain_after_eagain", &status,
+                                          submitted);
+            if (status_ret < 0) {
+                status_ok = 0;
+                fail = 1;
+            }
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=EAGAIN "
+                   "submitted_frames=%lu eagain=%lu "
+                   "polls_without_write=%lu state=%d(%s) appl_ptr=%lu "
+                   "hw_ptr=%lu avail=%lu delay=%ld status_valid=%s\n",
+                   submitted, eagain_count, no_progress_polls,
+                   status.state, state_name(status.state), status.appl_ptr,
+                   status.hw_ptr, status.avail, status.delay,
+                   status_ret == 0 ? "PASS" : "FAIL");
+            if (status_ret < 0)
+                break;
+            if (no_progress_polls > 60) {
+                fail = 1;
+                printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=no_progress "
+                       "submitted_frames=%lu polls_without_write=%lu\n",
+                       submitted, no_progress_polls);
+                break;
+            }
+            continue;
+        }
+        if (ret < 0) {
+            fail = 1;
+            status_ret = sustain_snapshot(fd, "sustain_after_write_error",
+                                          &status, submitted);
+            if (status_ret < 0)
+                status_ok = 0;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=write_error ret=%d "
+                   "errno=%d submitted_frames=%lu state=%d(%s) "
+                   "appl_ptr=%lu hw_ptr=%lu avail=%lu delay=%ld "
+                   "status_valid=%s\n",
+                   ret, saved_errno(ret), submitted, status.state,
+                   state_name(status.state), status.appl_ptr, status.hw_ptr,
+                   status.avail, status.delay,
+                   status_ret == 0 ? "PASS" : "FAIL");
+            break;
+        }
+        if (ret == 0 || ret < (int)FRAME_BYTES ||
+            (ret % (int)FRAME_BYTES) != 0) {
+            const char *reason = "partial_frame";
+
+            if (ret == 0)
+                reason = "zero";
+            else if (ret < (int)FRAME_BYTES)
+                reason = "sub_frame";
+            short_writes++;
+            fail = 1;
+            status_ret = sustain_snapshot(fd, "sustain_after_bad_write",
+                                          &status, submitted);
+            if (status_ret < 0)
+                status_ok = 0;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=bad_write_progress "
+                   "reason=%s ret=%d requested_bytes=%u "
+                   "requested_frames=%u submitted_before=%lu "
+                   "short_writes=%lu status_valid=%s\n",
+                   reason, ret, frames * FRAME_BYTES, frames, submitted,
+                   short_writes, status_ret == 0 ? "PASS" : "FAIL");
+            break;
+        }
+        if (ret != (int)(frames * FRAME_BYTES)) {
+            short_writes++;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=short_write ret=%d "
+                   "requested_bytes=%u requested_frames=%u "
+                   "submitted_before=%lu short_writes=%lu\n",
+                   ret, frames * FRAME_BYTES, frames, submitted,
+                   short_writes);
+        }
+        submitted += (uint64)(ret / FRAME_BYTES);
+        no_progress_polls = 0;
+        status_ret = sustain_snapshot(fd, "sustain_after_write", &status,
+                                      submitted);
+        if (status_ret < 0) {
+            status_ok = 0;
+            fail = 1;
+        }
+        printf("ALSAPCMPOLL_SUSTAIN_PROGRESS phase=after_write "
+               "submitted_frames=%lu target_frames=%lu writes=%lu "
+               "short_writes=%lu eagain=%lu state=%d(%s) appl_ptr=%lu "
+               "hw_ptr=%lu avail=%lu delay=%ld status_valid=%s\n",
+               submitted, target_frames, writes, short_writes, eagain_count,
+               status.state, state_name(status.state), status.appl_ptr,
+               status.hw_ptr, status.avail, status.delay,
+               status_ret == 0 ? "PASS" : "FAIL");
+        if (status_ret < 0)
+            break;
+
+        if (pcm_failed_state(status.state)) {
+            state_ok = 0;
+            fail = 1;
+            printf("ALSAPCMPOLL_SUSTAIN_EVENT kind=bad_state_after_write "
+                   "state=%d(%s) submitted_frames=%lu\n",
+                   status.state, state_name(status.state), submitted);
+            break;
+        }
+    }
+
+    if (sustain_snapshot(fd, "sustain_before_drain", &status, submitted) < 0) {
+        status_ok = 0;
+        fail = 1;
+    }
+    ret = ioctl(fd, SNDRV_PCM_IOCTL_DRAIN, 0);
+    printf("ALSAPCMPOLL: FINAL_DRAIN sustain ret=%d errno=%d "
+           "submitted_frames=%lu\n",
+           ret, saved_errno(ret), submitted);
+    if (ret < 0) {
+        cleanup_ok = 0;
+        fail = 1;
+    }
+    ret = sustain_snapshot(fd, "sustain_after_drain", &status, submitted);
+    if (ret < 0) {
+        status_ok = 0;
+        fail = 1;
+    } else if (pcm_failed_state(status.state)) {
+        state_ok = 0;
+        fail = 1;
+    }
+
+    ret = ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+    printf("ALSAPCMPOLL: FINAL_DROP sustain ret=%d errno=%d "
+           "submitted_frames=%lu\n",
+           ret, saved_errno(ret), submitted);
+    if (ret < 0) {
+        cleanup_ok = 0;
+        fail = 1;
+    }
+    if (sustain_snapshot(fd, "sustain_after_drop", &status, submitted) < 0) {
+        status_ok = 0;
+        fail = 1;
+    }
+
+    ret = close(fd);
+    printf("ALSAPCMPOLL: FINAL_CLOSE sustain ret=%d errno=%d "
+           "submitted_frames=%lu\n",
+           ret, saved_errno(ret), submitted);
+    if (ret < 0) {
+        cleanup_ok = 0;
+        fail = 1;
+    }
+
+    if (submitted < min_frames)
+        fail = 1;
+
+    printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u write_frames=%u "
+           "target_seconds=%u target_frames=%lu min_frames=%lu "
+           "submitted_frames=%lu writes=%lu short_writes=%lu eagain=%lu "
+           "polls=%lu poll_bad_revents=%lu final_state=%d(%s) "
+           "submitted_ok=%s status_ok=%s state_ok=%s cleanup_ok=%s "
+           "result=%s\n",
+           period_frames, period_frames, SUSTAIN_SECONDS, target_frames,
+           min_frames, submitted, writes, short_writes, eagain_count,
+           poll_count, pollerr_count, status.state, state_name(status.state),
+           submitted >= min_frames ? "PASS" : "FAIL",
+           status_ok ? "PASS" : "FAIL", state_ok ? "PASS" : "FAIL",
+           cleanup_ok ? "PASS" : "FAIL",
+           fail ? "FAIL" : "PASS");
+
+    return fail ? 1 : 0;
+}
+
+int main(int argc, char **argv)
+{
+    printf("ALSAPCMPOLL_MAIN argc=%d\n", argc);
+    for (int i = 0; i < argc; i++)
+        printf("ALSAPCMPOLL_ARG index=%d value=%s\n", i,
+               argv[i] ? argv[i] : "(null)");
+
+    if (argc > 1) {
+        if (strcmp(argv[1], "sustain") == 0 ||
+            strcmp(argv[1], "sustain512") == 0)
+            exit(run_sustain_mode(DEFAULT_PERIOD_FRAMES));
+        if (strcmp(argv[1], "sustain1200") == 0 ||
+            strcmp(argv[1], "pipewire") == 0)
+            exit(run_sustain_mode(PIPEWIRE_PERIOD_FRAMES));
+        if (strcmp(argv[1], "sustain-period") == 0 && argc > 2)
+            exit(run_sustain_mode((uint)atoi(argv[2])));
+    }
+
+    exit(run_default_mode());
 }
