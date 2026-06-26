@@ -71,9 +71,44 @@ static void print_ret_u32(const char *node, const char *name, int ret,
            node, name, ret, saved_errno(ret), value);
 }
 
+static void print_syncobj_eventfd_validation(const char *node,
+                                             const char *name, uint32 handle,
+                                             int fd, int ret,
+                                             int linux_errno, int skip)
+{
+    int err = saved_errno(ret);
+    const char *status;
+
+    if (skip)
+        status = "SKIP";
+    else if (linux_errno == 0)
+        status = (ret == 0 && err == 0) ? "PASS" : "FAIL";
+    else
+        status = (ret < 0 && err == linux_errno) ? "PASS" : "FAIL";
+
+    printf("%s:DRM_IOCTL_SYNCOBJ_EVENTFD.validation_%s: handle=%u fd=%d "
+           "ret=%d errno=%d linux_errno=%d status=%s\n",
+           node, name, handle, fd, ret, err, linux_errno, status);
+}
+
 static int call_ioctl(int fd, uint64 request, void *arg)
 {
     return ioctl(fd, (int)request, arg);
+}
+
+static int call_ioctl_linux_errno(int fd, uint64 request, void *arg)
+{
+#ifdef HOST_LIBC_PROGRAM
+    int ret;
+
+    errno = 0;
+    ret = ioctl(fd, (int)request, arg);
+    if (ret < 0 && errno > 0)
+        return -errno;
+    return ret;
+#else
+    return call_ioctl(fd, request, arg);
+#endif
 }
 
 #if defined(__riscv)
@@ -867,6 +902,135 @@ static void probe_prop_blobs(struct drm_node *node)
            saved_errno(after_destroy_ret));
 }
 
+static void probe_syncobj_eventfd_validation(struct drm_node *node)
+{
+    struct drm_syncobj_create_compat matrix_create;
+    struct drm_syncobj_eventfd_compat matrix_req;
+    struct drm_syncobj_destroy_compat matrix_destroy;
+    uint32 invalid_handle = 0;
+    int matrix_create_ret;
+    int matrix_event_fd;
+    int null_fd;
+    int setup_ret;
+    int ret;
+
+    memset(&matrix_create, 0, sizeof(matrix_create));
+    matrix_create.flags = DRM_SYNCOBJ_CREATE_SIGNALED;
+    matrix_create_ret = call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_CREATE,
+                                   &matrix_create);
+    matrix_event_fd = eventfd2_raw(0, 0);
+    null_fd = open("/dev/null", O_RDONLY);
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = invalid_handle;
+    matrix_req.fd = -1;
+    ret = call_ioctl_linux_errno(node->fd, DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                 &matrix_req);
+    print_syncobj_eventfd_validation(node->name,
+                                     "invalid_handle_fd_minus1",
+                                     matrix_req.handle, matrix_req.fd,
+                                     ret, ENOENT, 0);
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = invalid_handle;
+    matrix_req.fd = 0;
+    ret = call_ioctl_linux_errno(node->fd, DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                 &matrix_req);
+    print_syncobj_eventfd_validation(node->name, "invalid_handle_fd0",
+                                     matrix_req.handle, matrix_req.fd,
+                                     ret, ENOENT, 0);
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = invalid_handle;
+    matrix_req.fd = matrix_event_fd;
+    if (matrix_event_fd >= 0) {
+        ret = call_ioctl_linux_errno(node->fd,
+                                     DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                     &matrix_req);
+        print_syncobj_eventfd_validation(node->name,
+                                         "invalid_handle_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         ret, ENOENT, 0);
+    } else {
+        print_syncobj_eventfd_validation(node->name,
+                                         "invalid_handle_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         matrix_event_fd, ENOENT, 1);
+    }
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = matrix_create.handle;
+    matrix_req.fd = -1;
+    if (matrix_create_ret == 0 && matrix_create.handle != 0) {
+        ret = call_ioctl_linux_errno(node->fd,
+                                     DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                     &matrix_req);
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_fd_minus1",
+                                         matrix_req.handle, matrix_req.fd,
+                                         ret, EBADF, 0);
+    } else {
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_fd_minus1",
+                                         matrix_req.handle, matrix_req.fd,
+                                         matrix_create_ret, EBADF, 1);
+    }
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = matrix_create.handle;
+    matrix_req.fd = null_fd;
+    if (matrix_create_ret == 0 && matrix_create.handle != 0 &&
+        null_fd >= 0) {
+        ret = call_ioctl_linux_errno(node->fd,
+                                     DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                     &matrix_req);
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_non_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         ret, EINVAL, 0);
+    } else {
+        setup_ret = matrix_create_ret != 0 ? matrix_create_ret : null_fd;
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_non_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         setup_ret, EINVAL, 1);
+    }
+
+    memset(&matrix_req, 0, sizeof(matrix_req));
+    matrix_req.handle = matrix_create.handle;
+    matrix_req.fd = matrix_event_fd;
+    if (matrix_create_ret == 0 && matrix_create.handle != 0 &&
+        matrix_event_fd >= 0) {
+        ret = call_ioctl_linux_errno(node->fd,
+                                     DRM_IOCTL_SYNCOBJ_EVENTFD,
+                                     &matrix_req);
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         ret, 0, 0);
+    } else {
+        setup_ret = matrix_create_ret != 0 ?
+                    matrix_create_ret : matrix_event_fd;
+        print_syncobj_eventfd_validation(node->name,
+                                         "valid_handle_eventfd",
+                                         matrix_req.handle, matrix_req.fd,
+                                         setup_ret, 0, 1);
+    }
+
+    if (null_fd >= 0)
+        close(null_fd);
+    if (matrix_event_fd >= 0)
+        close(matrix_event_fd);
+    if (matrix_create_ret == 0 && matrix_create.handle != 0) {
+        memset(&matrix_destroy, 0, sizeof(matrix_destroy));
+        matrix_destroy.handle = matrix_create.handle;
+        print_ret(node->name,
+                  "DRM_IOCTL_SYNCOBJ_DESTROY.eventfd_validation",
+                  call_ioctl(node->fd, DRM_IOCTL_SYNCOBJ_DESTROY,
+                             &matrix_destroy));
+    }
+}
+
 static void probe_syncobj(struct drm_node *node)
 {
     struct drm_syncobj_create_compat create;
@@ -1241,6 +1405,8 @@ static void probe_syncobj(struct drm_node *node)
                                  &ev_destroy));
         }
     }
+
+    probe_syncobj_eventfd_validation(node);
 
     memset(&eventfd, 0, sizeof(eventfd));
     eventfd.handle = create.handle;
@@ -2800,15 +2966,42 @@ int main(int argc, char **argv)
         { "renderD128", "/dev/dri/renderD128", -1 },
     };
     int virtgpu_only = 0;
+    int syncobj_eventfd_validation = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--virtgpu-only") == 0)
             virtgpu_only = 1;
+        if (strcmp(argv[i], "--syncobj-eventfd-validation") == 0)
+            syncobj_eventfd_validation = 1;
     }
 
     printf("drmabitest: begin\n");
     for (int i = 0; i < ARRAY_SIZE(nodes); i++)
         nodes[i].fd = open(nodes[i].path, O_RDWR);
+
+    if (syncobj_eventfd_validation) {
+        printf("drmabitest: syncobj-eventfd-validation\n");
+        for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+            struct drm_node *node = &nodes[i];
+
+            if (node->fd < 0) {
+                printf("%s:open(%s): ret=%d errno=%d\n",
+                       node->name, node->path, node->fd,
+                       saved_errno(node->fd));
+                continue;
+            }
+
+            printf("%s:open(%s): ret=%d errno=0\n",
+                   node->name, node->path, node->fd);
+            probe_syncobj_eventfd_validation(node);
+        }
+        for (int i = 0; i < ARRAY_SIZE(nodes); i++) {
+            if (nodes[i].fd >= 0)
+                close(nodes[i].fd);
+        }
+        printf("drmabitest: end\n");
+        return 0;
+    }
 
     if (virtgpu_only) {
         printf("drmabitest: virtgpu-only\n");
