@@ -24,6 +24,7 @@
 #define SCM_RIGHTS 1
 #define SCM_CREDENTIALS 2
 #define MSG_PEEK 0x02
+#define MSG_CTRUNC 0x08
 #define MSG_DONTWAIT 0x40
 #define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
@@ -2633,6 +2634,67 @@ static int send_one_fd_payload(int sock, int fd, const void *payload, uint len)
     return sendmsg_raw(sock, &msg, MSG_DONTWAIT);
 }
 
+static int send_plain_payload(int sock, const void *payload, uint len)
+{
+    struct iovec iov;
+    struct msghdr msg;
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = (void *)payload;
+    iov.iov_len = len;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    return sendmsg_raw(sock, &msg, MSG_DONTWAIT);
+}
+
+static int recv_seqpacket_control(int sock, void *buf, uint cap, int *outfd,
+                                  struct ucred *outcred, int *hascred)
+{
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    char control[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int))];
+    uint off;
+    int n;
+
+    *outfd = -1;
+    *hascred = 0;
+    memset(outcred, 0, sizeof(*outcred));
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = buf;
+    iov.iov_len = cap;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    n = recvmsg_raw(sock, &msg, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+    if (n <= 0)
+        return n;
+    if (msg.msg_flags & MSG_CTRUNC)
+        return -EMSGSIZE;
+
+    for (off = 0; off + CMSG_LEN(0) <= msg.msg_controllen;) {
+        cmsg = (struct cmsghdr *)(control + off);
+        if (cmsg->cmsg_len < CMSG_LEN(0) ||
+            off + cmsg->cmsg_len > msg.msg_controllen)
+            break;
+        if (cmsg->cmsg_level == SOL_SOCKET &&
+            cmsg->cmsg_type == SCM_RIGHTS &&
+            cmsg->cmsg_len >= CMSG_LEN(sizeof(int))) {
+            memcpy(outfd, CMSG_DATA(cmsg), sizeof(*outfd));
+        } else if (cmsg->cmsg_level == SOL_SOCKET &&
+                   cmsg->cmsg_type == SCM_CREDENTIALS &&
+                   cmsg->cmsg_len >= CMSG_LEN(sizeof(struct ucred))) {
+            memcpy(outcred, CMSG_DATA(cmsg), sizeof(*outcred));
+            *hascred = 1;
+        }
+        off += CMSG_ALIGN(cmsg->cmsg_len);
+    }
+    return n;
+}
+
 static int recv_chromium_ipc_chunk(int sock, char *buf, uint cap, int *outfd)
 {
     struct iovec iov;
@@ -2690,6 +2752,306 @@ static int check_received_ipc_fd(const char *name, int fd, const char *expect)
         return -1;
     }
     return 0;
+}
+
+static int chromium_seqpacket_fork_child(int sock, int parent_pid)
+{
+    const char *name = "Chromium-shaped forked seqpacket control";
+    const char ping[] = "CHILD_PING";
+    const char ack[] = "CHILD_ACK";
+    const char eof_ack[] = "CHILD_EOF";
+    const char launch[] = "RENDERER_BOOTSTRAP";
+    int epfd = -1;
+    int gotfd = -1;
+    int val = 1;
+    int optlen;
+    int hascred = 0;
+    int n;
+    struct ucred peer;
+    struct ucred cred;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char got[64];
+
+    if (setsockopt_raw(sock, SOL_SOCKET, SO_PASSCRED, &val, sizeof(val)) < 0)
+        return 11;
+
+    optlen = sizeof(peer);
+    if (getsockopt_raw(sock, SOL_SOCKET, SO_PEERCRED, &peer, &optlen) < 0 ||
+        optlen != sizeof(peer) || peer.pid != parent_pid ||
+        peer.uid != (uint32)getuid())
+        return 12;
+
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0)
+        return 13;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLHUP | EPOLLONESHOT;
+    ev.data = 0x46514c41554e4348ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sock, &ev) < 0) {
+        close(epfd);
+        return 14;
+    }
+
+    if (send_plain_payload(sock, ping, sizeof(ping)) != (int)sizeof(ping)) {
+        close(epfd);
+        return 15;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        close(epfd);
+        return 16;
+    }
+
+    memset(got, 0, sizeof(got));
+    n = recv_seqpacket_control(sock, got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != (int)sizeof(launch) ||
+        memcmp(got, launch, sizeof(launch)) != 0 ||
+        !hascred || cred.pid != parent_pid ||
+        cred.uid != (uint32)getuid() || gotfd < 0) {
+        if (gotfd >= 0)
+            close(gotfd);
+        close(epfd);
+        return 17;
+    }
+    if (check_received_ipc_fd(name, gotfd, "forked-seqpacket-ipc") < 0) {
+        close(gotfd);
+        close(epfd);
+        return 18;
+    }
+    close(gotfd);
+    gotfd = -1;
+
+    ev.data = 0x4651454f46524541ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sock, &ev) < 0) {
+        close(epfd);
+        return 19;
+    }
+    if (send_plain_payload(sock, ack, sizeof(ack)) != (int)sizeof(ack)) {
+        close(epfd);
+        return 20;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        close(epfd);
+        return 21;
+    }
+    memset(got, 0, sizeof(got));
+    n = recv_seqpacket_control(sock, got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != 0 || gotfd >= 0 || hascred) {
+        if (gotfd >= 0)
+            close(gotfd);
+        close(epfd);
+        return 22;
+    }
+
+    ev.data = 0x4651434c4f534544ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sock, &ev) < 0) {
+        close(epfd);
+        return 24;
+    }
+    if (send_plain_payload(sock, eof_ack, sizeof(eof_ack)) !=
+        (int)sizeof(eof_ack)) {
+        close(epfd);
+        return 23;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & (EPOLLIN | EPOLLHUP)) || out.data != ev.data) {
+        close(epfd);
+        return 25;
+    }
+    n = recv_seqpacket_control(sock, got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != 0 || gotfd >= 0 || hascred) {
+        if (gotfd >= 0)
+            close(gotfd);
+        close(epfd);
+        return 26;
+    }
+
+    close(epfd);
+    return 0;
+}
+
+static void test_chromium_forked_seqpacket_control(void)
+{
+    const char *name = "Chromium-shaped forked seqpacket control";
+    const char ping[] = "CHILD_PING";
+    const char ack[] = "CHILD_ACK";
+    const char eof_ack[] = "CHILD_EOF";
+    const char launch[] = "RENDERER_BOOTSTRAP";
+    int sv[2] = {-1, -1};
+    int epfd = -1;
+    int fd = -1;
+    int gotfd = -1;
+    int pid = -1;
+    int status = 0;
+    int val = 1;
+    int hascred = 0;
+    int n;
+    struct ucred cred;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char got[64];
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    if (setsockopt_raw(sv[0], SOL_SOCKET, SO_PASSCRED, &val, sizeof(val)) < 0) {
+        fail(name, "parent SO_PASSCRED failed");
+        goto out;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    fd = memfd_create_raw("chromium-forked-seqpacket", MFD_CLOEXEC);
+    if (epfd < 0 || fd < 0) {
+        fail(name, "epoll or memfd setup failed");
+        goto out;
+    }
+    if (write(fd, "forked-seqpacket-ipc", 20) != 20) {
+        fail(name, "memfd write failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLHUP | EPOLLONESHOT;
+    ev.data = 0x465150494e475245ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[0], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+    fflush(stdout);
+
+    pid = fork();
+    if (pid < 0) {
+        fail(name, "fork failed");
+        goto out;
+    }
+    if (pid == 0) {
+        close(epfd);
+        close(fd);
+        close(sv[0]);
+        n = chromium_seqpacket_fork_child(sv[1], getppid());
+        close(sv[1]);
+        exit(n);
+    }
+    close(sv[1]);
+    sv[1] = -1;
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "child ping EPOLLIN event mismatch");
+        goto out;
+    }
+    memset(got, 0, sizeof(got));
+    n = recv_seqpacket_control(sv[0], got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != (int)sizeof(ping) || memcmp(got, ping, sizeof(ping)) != 0 ||
+        !hascred || cred.pid != pid || cred.uid != (uint32)getuid() ||
+        gotfd >= 0) {
+        if (gotfd >= 0)
+            close(gotfd);
+        fail(name, "child ping credential mismatch");
+        goto out;
+    }
+
+    ev.data = 0x465141434b524541ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[0], &ev) < 0) {
+        fail(name, "epoll_ctl MOD for child ack failed");
+        goto out;
+    }
+    if (send_one_fd_payload(sv[0], fd, launch, sizeof(launch)) !=
+        (int)sizeof(launch)) {
+        fail(name, "bootstrap sendmsg failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "child ack EPOLLIN event mismatch");
+        goto out;
+    }
+    memset(got, 0, sizeof(got));
+    n = recv_seqpacket_control(sv[0], got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != (int)sizeof(ack) || memcmp(got, ack, sizeof(ack)) != 0 ||
+        !hascred || cred.pid != pid || gotfd >= 0) {
+        if (gotfd >= 0)
+            close(gotfd);
+        fail(name, "child ack credential mismatch");
+        goto out;
+    }
+
+    ev.data = 0x4651454f4641434bULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[0], &ev) < 0) {
+        fail(name, "epoll_ctl MOD for EOF ack failed");
+        goto out;
+    }
+    if (shutdown_raw(sv[0], SHUT_WR) < 0) {
+        fail(name, "parent shutdown(SHUT_WR) failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & (EPOLLIN | EPOLLHUP)) ||
+        out.data != ev.data) {
+        fail(name, "child EOF ack EPOLLIN event mismatch");
+        goto out;
+    }
+    memset(got, 0, sizeof(got));
+    n = recv_seqpacket_control(sv[0], got, sizeof(got), &gotfd, &cred,
+                               &hascred);
+    if (n != (int)sizeof(eof_ack) ||
+        memcmp(got, eof_ack, sizeof(eof_ack)) != 0 ||
+        !hascred || cred.pid != pid || gotfd >= 0) {
+        if (gotfd >= 0)
+            close(gotfd);
+        fail(name, "child EOF ack credential mismatch");
+        goto out;
+    }
+
+    close(sv[0]);
+    sv[0] = -1;
+    if (waitpid(pid, &status, 0) != pid ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        char why[96];
+        snprintf(why, sizeof(why), "child status mismatch status=%d exit=%d",
+                 status, WEXITSTATUS(status));
+        pid = -1;
+        fail(name, why);
+        goto out;
+    }
+    pid = -1;
+
+    pass(name);
+
+out:
+    if (pid > 0)
+        waitpid(pid, &status, 0);
+    if (gotfd >= 0)
+        close(gotfd);
+    if (fd >= 0)
+        close(fd);
+    if (epfd >= 0)
+        close(epfd);
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
 }
 
 static void test_chromium_stream_scm_oneshot_rearm(void)
@@ -7298,8 +7660,16 @@ int main(int argc, char **argv)
                passed, skipped, failed);
         exit(failed == 0 ? 0 : 1);
     }
+    if (argc == 2 && strcmp(argv[1], "chromium-forked-ipc") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_chromium_forked_seqpacket_control();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
     if (argc == 2 && strcmp(argv[1], "chromium-ipc") == 0) {
         printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_chromium_forked_seqpacket_control();
         test_chromium_stream_scm_oneshot_rearm();
         test_chromium_seqpacket_bootstrap_eof();
         test_chromium_seqpacket_passcred_bootstrap();
@@ -7367,6 +7737,7 @@ int main(int argc, char **argv)
     test_scm_rights_stream_barriers();
     test_wayland_stream_wrapped_iov_batch();
     test_wayland_stream_scm_batch();
+    test_chromium_forked_seqpacket_control();
     test_chromium_stream_scm_oneshot_rearm();
     test_chromium_seqpacket_bootstrap_eof();
     test_chromium_seqpacket_passcred_bootstrap();
