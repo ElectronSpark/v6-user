@@ -114,6 +114,7 @@ entry("sync");
 entry("fadvise64");
 
 entry("kstats");
+entry("kstats2");
 entry("kstatsctl");
 
 # kqueue syscalls

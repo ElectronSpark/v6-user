@@ -15,6 +15,11 @@ static void print_tick_delta_ms(const char *name, uint64 after, uint64 before,
     printf("%-28s %lu\n", name, (unsigned long)ms);
 }
 
+static int read_kstats(struct kstats *ks)
+{
+    return kstats2(ks, sizeof(*ks));
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
@@ -30,7 +35,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    if (kstats(&before) < 0) {
+    if (read_kstats(&before) < 0) {
         printf("kprofile: kstats(before) failed\n");
         kstatsctl(0);
         exit(1);
@@ -52,7 +57,7 @@ int main(int argc, char *argv[])
     int status = 0;
     waitpid(pid, &status, 0);
 
-    if (kstats(&after) < 0) {
+    if (read_kstats(&after) < 0) {
         printf("kprofile: kstats(after) failed\n");
         kstatsctl(0);
         exit(1);
