@@ -213,6 +213,7 @@ int fadvise64(int fd, int64 offset, int64 len, int advice);
 // System-wide statistics
 struct kstats; // forward declaration
 int kstats(struct kstats *ks);
+int kstatsctl(int enabled);
 
 // kqueue
 struct kevent; // forward declaration

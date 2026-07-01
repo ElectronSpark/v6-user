@@ -25,14 +25,21 @@ int main(int argc, char *argv[])
     struct kstats before;
     struct kstats after;
 
+    if (kstatsctl(1) < 0) {
+        printf("kprofile: kstatsctl(enable) failed\n");
+        exit(1);
+    }
+
     if (kstats(&before) < 0) {
         printf("kprofile: kstats(before) failed\n");
+        kstatsctl(0);
         exit(1);
     }
 
     int pid = fork();
     if (pid < 0) {
         printf("kprofile: fork failed\n");
+        kstatsctl(0);
         exit(1);
     }
 
@@ -47,8 +54,10 @@ int main(int argc, char *argv[])
 
     if (kstats(&after) < 0) {
         printf("kprofile: kstats(after) failed\n");
+        kstatsctl(0);
         exit(1);
     }
+    kstatsctl(0);
 
     printf("elapsed_ms                  %lu\n",
            (unsigned long)(after.uptime_ms - before.uptime_ms));
@@ -66,6 +75,45 @@ int main(int argc, char *argv[])
                         after.vfs_lookup_driver_ticks,
                         before.vfs_lookup_driver_ticks,
                         after.timebase_freq);
+    print_delta("vfs_dentry_inode_calls", after.vfs_dentry_inode_calls,
+                before.vfs_dentry_inode_calls);
+    print_delta("vfs_dentry_inode_self_hits",
+                after.vfs_dentry_inode_self_hits,
+                before.vfs_dentry_inode_self_hits);
+    print_delta("vfs_dentry_inode_rlock_calls",
+                after.vfs_dentry_inode_rlock_calls,
+                before.vfs_dentry_inode_rlock_calls);
+    print_tick_delta_ms("vfs_dentry_inode_rlock_ms",
+                        after.vfs_dentry_inode_rlock_ticks,
+                        before.vfs_dentry_inode_rlock_ticks,
+                        after.timebase_freq);
+    print_delta("vfs_dentry_inode_upgrade_calls",
+                after.vfs_dentry_inode_upgrade_calls,
+                before.vfs_dentry_inode_upgrade_calls);
+    print_tick_delta_ms("vfs_dentry_inode_upgrade_ms",
+                        after.vfs_dentry_inode_upgrade_ticks,
+                        before.vfs_dentry_inode_upgrade_ticks,
+                        after.timebase_freq);
+    print_delta("vfs_inode_cache_calls", after.vfs_inode_cache_calls,
+                before.vfs_inode_cache_calls);
+    print_delta("vfs_inode_cache_hits", after.vfs_inode_cache_hits,
+                before.vfs_inode_cache_hits);
+    print_delta("vfs_inode_cache_misses", after.vfs_inode_cache_misses,
+                before.vfs_inode_cache_misses);
+    print_delta("vfs_inode_cache_eagain", after.vfs_inode_cache_eagain,
+                before.vfs_inode_cache_eagain);
+    print_tick_delta_ms("vfs_inode_cache_ms",
+                        after.vfs_inode_cache_ticks,
+                        before.vfs_inode_cache_ticks,
+                        after.timebase_freq);
+    print_delta("vfs_inode_load_calls", after.vfs_inode_load_calls,
+                before.vfs_inode_load_calls);
+    print_delta("vfs_inode_load_success", after.vfs_inode_load_success,
+                before.vfs_inode_load_success);
+    print_tick_delta_ms("vfs_inode_load_ms",
+                        after.vfs_inode_load_ticks,
+                        before.vfs_inode_load_ticks,
+                        after.timebase_freq);
     print_delta("vm_copyin_calls", after.vm_copyin_calls,
                 before.vm_copyin_calls);
     print_delta("vm_copyout_calls", after.vm_copyout_calls,
@@ -74,6 +122,26 @@ int main(int argc, char *argv[])
                 before.vm_copyin_bytes);
     print_delta("vm_copyout_bytes", after.vm_copyout_bytes,
                 before.vm_copyout_bytes);
+    print_delta("vm_copyout_fast_hits", after.vm_copyout_fast_hits,
+                before.vm_copyout_fast_hits);
+    print_delta("vm_copyout_fast_bytes", after.vm_copyout_fast_bytes,
+                before.vm_copyout_fast_bytes);
+    print_delta("vm_copyin_fast_hits", after.vm_copyin_fast_hits,
+                before.vm_copyin_fast_hits);
+    print_delta("vm_copyin_fast_bytes", after.vm_copyin_fast_bytes,
+                before.vm_copyin_fast_bytes);
+    print_delta("vm_copyout_present_skip_hits",
+                after.vm_copyout_present_skip_hits,
+                before.vm_copyout_present_skip_hits);
+    print_delta("vm_copyout_present_skip_bytes",
+                after.vm_copyout_present_skip_bytes,
+                before.vm_copyout_present_skip_bytes);
+    print_delta("vm_copyin_present_skip_hits",
+                after.vm_copyin_present_skip_hits,
+                before.vm_copyin_present_skip_hits);
+    print_delta("vm_copyin_present_skip_bytes",
+                after.vm_copyin_present_skip_bytes,
+                before.vm_copyin_present_skip_bytes);
     print_delta("vm_vma_validate_calls", after.vm_vma_validate_calls,
                 before.vm_vma_validate_calls);
     print_tick_delta_ms("vm_vma_validate_ms",
@@ -143,6 +211,39 @@ int main(int argc, char *argv[])
                 before.sys_openat_calls);
     print_tick_delta_ms("sys_openat_ms", after.sys_openat_ticks,
                         before.sys_openat_ticks, after.timebase_freq);
+    print_delta("sys_openat_path_copy_calls",
+                after.sys_openat_path_copy_calls,
+                before.sys_openat_path_copy_calls);
+    print_tick_delta_ms("sys_openat_path_copy_ms",
+                        after.sys_openat_path_copy_ticks,
+                        before.sys_openat_path_copy_ticks,
+                        after.timebase_freq);
+    print_delta("sys_openat_dirfd_calls", after.sys_openat_dirfd_calls,
+                before.sys_openat_dirfd_calls);
+    print_tick_delta_ms("sys_openat_dirfd_ms",
+                        after.sys_openat_dirfd_ticks,
+                        before.sys_openat_dirfd_ticks,
+                        after.timebase_freq);
+    print_delta("sys_openat_lookup_calls", after.sys_openat_lookup_calls,
+                before.sys_openat_lookup_calls);
+    print_tick_delta_ms("sys_openat_lookup_ms",
+                        after.sys_openat_lookup_ticks,
+                        before.sys_openat_lookup_ticks,
+                        after.timebase_freq);
+    print_delta("sys_openat_fileopen_calls",
+                after.sys_openat_fileopen_calls,
+                before.sys_openat_fileopen_calls);
+    print_tick_delta_ms("sys_openat_fileopen_ms",
+                        after.sys_openat_fileopen_ticks,
+                        before.sys_openat_fileopen_ticks,
+                        after.timebase_freq);
+    print_delta("sys_openat_fdalloc_calls",
+                after.sys_openat_fdalloc_calls,
+                before.sys_openat_fdalloc_calls);
+    print_tick_delta_ms("sys_openat_fdalloc_ms",
+                        after.sys_openat_fdalloc_ticks,
+                        before.sys_openat_fdalloc_ticks,
+                        after.timebase_freq);
     print_delta("sys_fstatat_calls", after.sys_fstatat_calls,
                 before.sys_fstatat_calls);
     print_tick_delta_ms("sys_fstatat_ms", after.sys_fstatat_ticks,
@@ -200,6 +301,48 @@ int main(int argc, char *argv[])
     print_tick_delta_ms("sys_clock_gettime_ms",
                         after.sys_clock_gettime_ticks,
                         before.sys_clock_gettime_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_monotonic_calls",
+                after.sys_clock_gettime_monotonic_calls,
+                before.sys_clock_gettime_monotonic_calls);
+    print_tick_delta_ms("sys_clock_gettime_monotonic_ms",
+                        after.sys_clock_gettime_monotonic_ticks,
+                        before.sys_clock_gettime_monotonic_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_monotonic_coarse_calls",
+                after.sys_clock_gettime_monotonic_coarse_calls,
+                before.sys_clock_gettime_monotonic_coarse_calls);
+    print_tick_delta_ms("sys_clock_gettime_monotonic_coarse_ms",
+                        after.sys_clock_gettime_monotonic_coarse_ticks,
+                        before.sys_clock_gettime_monotonic_coarse_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_realtime_calls",
+                after.sys_clock_gettime_realtime_calls,
+                before.sys_clock_gettime_realtime_calls);
+    print_tick_delta_ms("sys_clock_gettime_realtime_ms",
+                        after.sys_clock_gettime_realtime_ticks,
+                        before.sys_clock_gettime_realtime_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_process_calls",
+                after.sys_clock_gettime_process_calls,
+                before.sys_clock_gettime_process_calls);
+    print_tick_delta_ms("sys_clock_gettime_process_ms",
+                        after.sys_clock_gettime_process_ticks,
+                        before.sys_clock_gettime_process_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_thread_calls",
+                after.sys_clock_gettime_thread_calls,
+                before.sys_clock_gettime_thread_calls);
+    print_tick_delta_ms("sys_clock_gettime_thread_ms",
+                        after.sys_clock_gettime_thread_ticks,
+                        before.sys_clock_gettime_thread_ticks,
+                        after.timebase_freq);
+    print_delta("sys_clock_gettime_other_calls",
+                after.sys_clock_gettime_other_calls,
+                before.sys_clock_gettime_other_calls);
+    print_tick_delta_ms("sys_clock_gettime_other_ms",
+                        after.sys_clock_gettime_other_ticks,
+                        before.sys_clock_gettime_other_ticks,
                         after.timebase_freq);
     print_delta("sys_gettimeofday_calls", after.sys_gettimeofday_calls,
                 before.sys_gettimeofday_calls);

@@ -53,6 +53,10 @@ struct netconf_req;
 #define XV6_SYS_kstats 1360
 #endif
 
+#ifndef XV6_SYS_kstatsctl
+#define XV6_SYS_kstatsctl 1367
+#endif
+
 #ifndef XV6_SYS_netconf
 #define XV6_SYS_netconf 1361
 #endif
@@ -233,6 +237,13 @@ static inline int losetup(int cmd, int loop_num, const char *path) {
 
 static inline int kstats(struct kstats *ks) {
     return host_compat_errno_ret(syscall(XV6_SYS_kstats, ks));
+}
+
+static inline int kstatsctl(int enabled) {
+    long ret = syscall(XV6_SYS_kstatsctl, enabled);
+    if (ret < 0 && errno == ENOSYS)
+        return 0;
+    return host_compat_errno_ret(ret);
 }
 
 static inline int netconf(const struct netconf_req *req) {

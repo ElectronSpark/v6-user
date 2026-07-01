@@ -2631,6 +2631,34 @@ static void assert_file_text(char *s, const char *path, const char *data) {
     }
 }
 
+void appendredir(char *s) {
+    const char *path = "appendredir-file";
+
+    unlink(path);
+    write_text_file(path, "A\n");
+
+    int fd = open(path, O_WRONLY | O_APPEND);
+    if (fd < 0) {
+        printf("%s: cannot open O_APPEND file\n", s);
+        exit(1);
+    }
+    if (write(fd, "B\n", 2) != 2) {
+        printf("%s: O_APPEND write failed\n", s);
+        close(fd);
+        exit(1);
+    }
+    close(fd);
+    assert_file_text(s, path, "A\nB\n");
+
+    char *argv[] = {"/bin/sh", "-c", "echo C >> appendredir-file", 0};
+    if (run_cmd("/bin/sh", argv) != 0) {
+        printf("%s: shell append redirection failed\n", s);
+        exit(1);
+    }
+    assert_file_text(s, path, "A\nB\nC\n");
+    unlink(path);
+}
+
 void fscopymove(char *s) {
     const char *long_src = "cp-long-component";
     const char *long_dst = "/tmp/cp-long-component";
@@ -2750,6 +2778,7 @@ struct test {
     {iputtest, "iput"},
     {opentest, "opentest"},
     {writetest, "writetest"},
+    {appendredir, "appendredir"},
     {writebig, "writebig"},
     {createtest, "createtest"},
     {dirtest, "dirtest"},

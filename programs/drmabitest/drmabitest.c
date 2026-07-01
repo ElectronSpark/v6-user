@@ -2282,6 +2282,56 @@ static int virtgpu_getparam_value(struct drm_node *node, uint64 param,
     return call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GETPARAM, &req);
 }
 
+static void probe_virtgpu_get_caps_case(struct drm_node *node,
+                                        const char *label, uint32 capset_id,
+                                        uint32 capset_ver, uint32 size)
+{
+    struct drm_virtgpu_get_caps_compat req;
+    uint8 buf[1600];
+    int skipped = 0;
+    int ret;
+
+    if (size > sizeof(buf)) {
+        printf("%s:DRM_IOCTL_VIRTGPU_GET_CAPS.%s: request_id=%u "
+               "request_ver=%u request_size=%u skipped=1 reason=size_gt_buf "
+               "buf_size=%lu\n",
+               node->name, label, capset_id, capset_ver, size,
+               (uint64)sizeof(buf));
+        return;
+    }
+
+    memset(buf, 0xa5, sizeof(buf));
+    memset(&req, 0, sizeof(req));
+    req.cap_set_id = capset_id;
+    req.cap_set_ver = capset_ver;
+    req.addr = (uint64)buf;
+    req.size = size;
+    ret = call_ioctl(node->fd, DRM_IOCTL_VIRTGPU_GET_CAPS, &req);
+    printf("%s:DRM_IOCTL_VIRTGPU_GET_CAPS.%s: request_id=%u "
+           "request_ver=%u request_size=%u ret=%d errno=%d out_id=%u "
+           "out_ver=%u out_size=%u skipped=%d first=%02x %02x %02x %02x\n",
+           node->name, label, capset_id, capset_ver, size, ret,
+           saved_errno(ret), req.cap_set_id, req.cap_set_ver, req.size,
+           skipped, buf[0], buf[1], buf[2], buf[3]);
+}
+
+static void probe_virtgpu_get_caps(struct drm_node *node)
+{
+    uint64 supported_ids = 0;
+    int ids_ret;
+
+    ids_ret = virtgpu_getparam_value(node, VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs,
+                                     &supported_ids);
+    printf("%s:DRM_IOCTL_VIRTGPU_GET_CAPS.supported_ids: ret=%d errno=%d "
+           "value=0x%lx\n",
+           node->name, ids_ret, saved_errno(ids_ret), supported_ids);
+
+    probe_virtgpu_get_caps_case(node, "default_160", 0, 0, 160);
+    probe_virtgpu_get_caps_case(node, "virgl_160", 1, 0, 160);
+    probe_virtgpu_get_caps_case(node, "virgl2_160", 2, 0, 160);
+    probe_virtgpu_get_caps_case(node, "venus_160_chrome_shape", 6, 0, 160);
+}
+
 static void probe_virtgpu_execbuffer_sync(struct drm_node *node)
 {
     struct drm_virtgpu_resource_create_compat create;
@@ -3018,6 +3068,7 @@ int main(int argc, char **argv)
             printf("%s:open(%s): ret=%d errno=0\n",
                    node->name, node->path, node->fd);
             probe_virtgpu(node);
+            probe_virtgpu_get_caps(node);
             probe_virtgpu_blob_create(node);
             probe_virtgpu_host_visible_blob(node);
         }

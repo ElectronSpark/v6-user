@@ -45,7 +45,24 @@
 #define DISK1_MINOR 2
 #endif
 
-char *argv[] = {"sh", 0};
+char *bash_argv[] = {"bash", "-i", 0};
+char *sh_argv[] = {"sh", 0};
+char *console_env[] = {
+    "HOME=/root",
+    "USER=root",
+    "LOGNAME=root",
+    "SHELL=/bin/bash",
+    "PATH=/usr/local/bin:/usr/bin:/bin:/",
+    "TERM=xterm-256color",
+    "LANG=C",
+    "LC_ALL=C",
+    "PYTHONUTF8=1",
+    "PYTHONIOENCODING=utf-8",
+    "PYTHONHOME=/",
+    "PYTHONPATH=/lib/python3.12:/lib/python3.12/site-packages",
+    "PYTHONDONTWRITEBYTECODE=1",
+    0,
+};
 
 /* --------------------------------------------------------------------------
  * Network configuration from /etc/network.conf
@@ -351,14 +368,16 @@ next_startup_line:
     // }
 
     for (;;) {
-        printf("init: starting sh\n");
+        printf("init: starting bash\n");
         pid = fork(); // Use fork instead of vfork to debug OrangePi hang
         if (pid < 0) {
             printf("init: fork failed\n");
             exit(1);
         }
         if (pid == 0) {
-            exec("/bin/sh", argv);
+            execve("/bin/bash", bash_argv, console_env);
+            printf("init: exec bash failed, falling back to sh\n");
+            execve("/bin/sh", sh_argv, console_env);
             printf("init: exec sh failed\n");
             exit(1);
         }

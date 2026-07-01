@@ -22,10 +22,13 @@
 #define SO_PROTOCOL 38
 #define SO_DOMAIN 39
 #define SCM_RIGHTS 1
+#define SCM_CREDENTIALS 2
 #define MSG_PEEK 0x02
 #define MSG_DONTWAIT 0x40
 #define MSG_TRUNC 0x20
 #define MSG_CMSG_CLOEXEC 0x40000000
+#define SHUT_RD 0
+#define SHUT_WR 1
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001
 #endif
@@ -93,6 +96,9 @@
 #define IPC_STRESS_MAGIC 0x574b4950u
 #define WEBKIT_IPC_DATA_CHUNK 2048u
 #define SCM_BARRIER_FDS 24
+#ifndef SYS_recvmmsg
+#define SYS_recvmmsg SYS_recvmmsg_time64
+#endif
 #if defined(__x86_64__)
 #define SYS_memfd_create_native 319
 #else
@@ -372,6 +378,11 @@ static int sendmsg_raw(int fd, struct msghdr *msg, int flags)
 static int recvmsg_raw(int fd, struct msghdr *msg, int flags)
 {
     return (int)raw_syscall3(SYS_recvmsg, fd, (int64)msg, flags);
+}
+
+static int shutdown_raw(int fd, int how)
+{
+    return (int)raw_syscall2(SYS_shutdown, fd, how);
 }
 
 static int write_raw(int fd, const void *buf, int count)
@@ -2574,6 +2585,613 @@ static void test_wayland_stream_scm_batch(void)
     close(sv[0]);
     close(sv[1]);
     pass(name);
+}
+
+static int send_one_fd_message(int sock, int fd, const char *payload)
+{
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    char control[CMSG_SPACE(sizeof(int))];
+
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = (void *)payload;
+    iov.iov_len = strlen(payload);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    return sendmsg_raw(sock, &msg, MSG_DONTWAIT);
+}
+
+static int send_one_fd_payload(int sock, int fd, const void *payload, uint len)
+{
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    char control[CMSG_SPACE(sizeof(int))];
+
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = (void *)payload;
+    iov.iov_len = len;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    cmsg = (struct cmsghdr *)control;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    return sendmsg_raw(sock, &msg, MSG_DONTWAIT);
+}
+
+static int recv_chromium_ipc_chunk(int sock, char *buf, uint cap, int *outfd)
+{
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    char control[CMSG_SPACE(sizeof(int))];
+    int n;
+
+    *outfd = -1;
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = buf;
+    iov.iov_len = cap;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    n = recvmsg_raw(sock, &msg, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+    if (n <= 0)
+        return n;
+    if (msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+        cmsg = (struct cmsghdr *)control;
+        if (cmsg->cmsg_level == SOL_SOCKET &&
+            cmsg->cmsg_type == SCM_RIGHTS)
+            memcpy(outfd, CMSG_DATA(cmsg), sizeof(*outfd));
+    }
+    return n;
+}
+
+static int check_received_ipc_fd(const char *name, int fd, const char *expect)
+{
+    struct stat st;
+    char buf[32];
+    int flags;
+    int n;
+
+    flags = fcntl(fd, F_GETFD, 0);
+    if (flags < 0 || !(flags & FD_CLOEXEC)) {
+        fail(name, "received fd missing FD_CLOEXEC");
+        return -1;
+    }
+    if (fstat(fd, &st) < 0 || st.st_size < (uint64)strlen(expect)) {
+        fail(name, "received fd fstat failed");
+        return -1;
+    }
+    if (lseek(fd, 0, SEEK_SET) != 0) {
+        fail(name, "received fd lseek failed");
+        return -1;
+    }
+    memset(buf, 0, sizeof(buf));
+    n = read(fd, buf, strlen(expect));
+    if (n != (int)strlen(expect) || memcmp(buf, expect, strlen(expect)) != 0) {
+        fail(name, "received fd content mismatch");
+        return -1;
+    }
+    return 0;
+}
+
+static void test_chromium_stream_scm_oneshot_rearm(void)
+{
+    const char *name = "Chromium-shaped stream SCM_RIGHTS epoll oneshot";
+    int sv[2] = {-1, -1};
+    int epfd = -1;
+    int fd1 = -1;
+    int fd2 = -1;
+    int gotfd1 = -1;
+    int gotfd2 = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char buf[32];
+    int n;
+
+    if (socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    fd1 = memfd_create_raw("chromium-ipc-a", MFD_CLOEXEC);
+    fd2 = memfd_create_raw("chromium-ipc-b", MFD_CLOEXEC);
+    if (epfd < 0 || fd1 < 0 || fd2 < 0) {
+        fail(name, "epoll or memfd setup failed");
+        goto out;
+    }
+    if (write(fd1, "alpha-ipc", 9) != 9 || write(fd2, "beta-ipc", 8) != 8) {
+        fail(name, "memfd write failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLONESHOT;
+    ev.data = 0x4348524f4d454950ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+
+    if (send_one_fd_message(sv[0], fd1, "A") != 1 ||
+        send_one_fd_message(sv[0], fd2, "B") != 1 ||
+        write(sv[0], "CD", 2) != 2) {
+        fail(name, "sendmsg/write sequence failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "first oneshot event missing");
+        goto out;
+    }
+
+    memset(buf, 0, sizeof(buf));
+    n = recv_chromium_ipc_chunk(sv[1], buf, 1, &gotfd1);
+    if (n != 1 || buf[0] != 'A' || gotfd1 < 0) {
+        fail(name, "first recvmsg did not deliver payload and fd");
+        goto out;
+    }
+    if (check_received_ipc_fd(name, gotfd1, "alpha-ipc") < 0)
+        goto out;
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 0) != 0) {
+        fail(name, "oneshot socket stayed enabled before rearm");
+        goto out;
+    }
+
+    ev.data = 0x524541524d495043ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl MOD rearm failed");
+        goto out;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || out.data != ev.data) {
+        fail(name, "rearmed event missing");
+        goto out;
+    }
+
+    memset(buf, 0, sizeof(buf));
+    n = recv_chromium_ipc_chunk(sv[1], buf, sizeof(buf), &gotfd2);
+    if (n != 1 || buf[0] != 'B' || gotfd2 < 0) {
+        fail(name, "second recvmsg did not deliver payload and fd");
+        goto out;
+    }
+    if (check_received_ipc_fd(name, gotfd2, "beta-ipc") < 0)
+        goto out;
+
+    memset(buf, 0, sizeof(buf));
+    n = recv_chromium_ipc_chunk(sv[1], buf, sizeof(buf), &gotfd2);
+    if (n != 2 || memcmp(buf, "CD", 2) != 0 || gotfd2 >= 0) {
+        fail(name, "plain stream tail after SCM barrier changed");
+        goto out;
+    }
+
+    n = recv_chromium_ipc_chunk(sv[1], buf, sizeof(buf), &gotfd2);
+    if (n != -EAGAIN) {
+        fail(name, "drained nonblocking recvmsg did not return EAGAIN");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (gotfd1 >= 0)
+        close(gotfd1);
+    if (gotfd2 >= 0)
+        close(gotfd2);
+    if (fd1 >= 0)
+        close(fd1);
+    if (fd2 >= 0)
+        close(fd2);
+    if (epfd >= 0)
+        close(epfd);
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
+}
+
+static void test_chromium_seqpacket_bootstrap_eof(void)
+{
+    const char *name = "Chromium-shaped seqpacket SCM_RIGHTS bootstrap EOF";
+    int sv[2] = {-1, -1};
+    int epfd = -1;
+    int fd = -1;
+    int gotfd = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char payload[52];
+    char got[64];
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    struct iovec iov;
+    struct msghdr msg;
+    int n;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    fd = memfd_create_raw("chromium-seqpacket-ipc", MFD_CLOEXEC);
+    if (epfd < 0 || fd < 0) {
+        fail(name, "epoll or memfd setup failed");
+        goto out;
+    }
+    if (write(fd, "seqpacket-ipc", 13) != 13) {
+        fail(name, "memfd write failed");
+        goto out;
+    }
+    for (uint i = 0; i < sizeof(payload); i++)
+        payload[i] = (char)('a' + (i % 26));
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLHUP | EPOLLONESHOT;
+    ev.data = 0x5351504b54495043ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+    if (send_one_fd_payload(sv[0], fd, payload, sizeof(payload)) !=
+        (int)sizeof(payload)) {
+        fail(name, "sendmsg bootstrap packet failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "bootstrap EPOLLIN event mismatch");
+        goto out;
+    }
+
+    memset(got, 0, sizeof(got));
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    n = recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC);
+    if (n != (int)sizeof(payload) || memcmp(got, payload, sizeof(payload)) != 0 ||
+        (msg.msg_flags & MSG_TRUNC)) {
+        fail(name, "bootstrap recvmsg payload mismatch");
+        goto out;
+    }
+    cmsg = (struct cmsghdr *)control;
+    if (msg.msg_controllen < CMSG_LEN(sizeof(int)) ||
+        cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+        fail(name, "bootstrap recvmsg missing SCM_RIGHTS");
+        goto out;
+    }
+    memcpy(&gotfd, CMSG_DATA(cmsg), sizeof(gotfd));
+    if (gotfd < 0 || check_received_ipc_fd(name, gotfd, "seqpacket-ipc") < 0)
+        goto out;
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = recvmsg_raw(sv[1], &msg, MSG_DONTWAIT);
+    if (n != -EAGAIN) {
+        fail(name, "drained seqpacket recvmsg did not return EAGAIN");
+        goto out;
+    }
+
+    ev.data = 0x5351504b454f4653ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl MOD for shutdown EOF failed");
+        goto out;
+    }
+    if (shutdown_raw(sv[0], SHUT_WR) < 0) {
+        fail(name, "peer shutdown(SHUT_WR) failed");
+        goto out;
+    }
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "shutdown EOF epoll event mismatch");
+        goto out;
+    }
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = recvmsg_raw(sv[1], &msg, MSG_DONTWAIT);
+    if (n != 0) {
+        fail(name, "shutdown EOF recvmsg did not return 0");
+        goto out;
+    }
+
+    ev.data = 0x5351504b454f4643ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl MOD for close EOF failed");
+        goto out;
+    }
+    close(sv[0]);
+    sv[0] = -1;
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || !(out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "close EOF epoll event mismatch");
+        goto out;
+    }
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = recvmsg_raw(sv[1], &msg, MSG_DONTWAIT);
+    if (n != 0) {
+        fail(name, "close EOF recvmsg did not return 0");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (gotfd >= 0)
+        close(gotfd);
+    if (fd >= 0)
+        close(fd);
+    if (epfd >= 0)
+        close(epfd);
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
+}
+
+static void test_chromium_seqpacket_passcred_bootstrap(void)
+{
+    const char *name = "Chromium-shaped seqpacket PASSCRED bootstrap";
+    int sv[2] = {-1, -1};
+    int epfd = -1;
+    int val = 1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char payload[11] = "hello-cred";
+    char got[32];
+    char control[CMSG_SPACE(sizeof(struct ucred))];
+    struct cmsghdr *cmsg;
+    struct ucred cred;
+    struct iovec iov;
+    struct msghdr msg;
+    int n;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    if (setsockopt_raw(sv[1], SOL_SOCKET, SO_PASSCRED, &val, sizeof(val)) < 0) {
+        fail(name, "setsockopt SO_PASSCRED failed");
+        goto out;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    if (epfd < 0) {
+        fail(name, "epoll setup failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLHUP | EPOLLONESHOT;
+    ev.data = 0x5351435245444954ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = payload;
+    iov.iov_len = sizeof(payload);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = sendmsg_raw(sv[0], &msg, MSG_DONTWAIT);
+    if (n != (int)sizeof(payload)) {
+        fail(name, "credential ping sendmsg failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "credential ping EPOLLIN event mismatch");
+        goto out;
+    }
+
+    memset(got, 0, sizeof(got));
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    n = recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC | MSG_DONTWAIT);
+    if (n != (int)sizeof(payload) ||
+        memcmp(got, payload, sizeof(payload)) != 0 ||
+        (msg.msg_flags & MSG_TRUNC)) {
+        fail(name, "credential ping recvmsg payload mismatch");
+        goto out;
+    }
+
+    cmsg = (struct cmsghdr *)control;
+    if (msg.msg_controllen < CMSG_LEN(sizeof(struct ucred)) ||
+        cmsg->cmsg_level != SOL_SOCKET ||
+        cmsg->cmsg_type != SCM_CREDENTIALS ||
+        cmsg->cmsg_len < CMSG_LEN(sizeof(struct ucred))) {
+        fail(name, "credential ping missing SCM_CREDENTIALS");
+        goto out;
+    }
+    memcpy(&cred, CMSG_DATA(cmsg), sizeof(cred));
+    if (cred.pid != getpid() || cred.uid != (uint32)getuid() || cred.gid != 0) {
+        fail(name, "credential ping ucred mismatch");
+        goto out;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    n = recvmsg_raw(sv[1], &msg, MSG_DONTWAIT);
+    if (n != -EAGAIN) {
+        fail(name, "drained passcred recvmsg did not return EAGAIN");
+        goto out;
+    }
+
+    ev.data = 0x535143524544454fULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_MOD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl MOD for close EOF failed");
+        goto out;
+    }
+    close(sv[0]);
+    sv[0] = -1;
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || !(out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "close EOF epoll event mismatch");
+        goto out;
+    }
+
+    pass(name);
+
+out:
+    if (epfd >= 0)
+        close(epfd);
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
+}
+
+static void test_chromium_seqpacket_halfclose_scm(void)
+{
+    const char *name = "Chromium-shaped seqpacket half-close SCM_RIGHTS";
+    int sv[2] = {-1, -1};
+    int epfd = -1;
+    int fd = -1;
+    int gotfd = -1;
+    struct epoll_event_abi ev;
+    struct epoll_event_abi out;
+    char got = 0;
+    char control[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    struct iovec iov;
+    struct msghdr msg;
+    int n;
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, sv) < 0) {
+        fail(name, "socketpair failed");
+        return;
+    }
+    epfd = epoll_create1_raw(EPOLL_CLOEXEC);
+    fd = memfd_create_raw("chromium-halfclose-scm", MFD_CLOEXEC);
+    if (epfd < 0 || fd < 0) {
+        fail(name, "epoll or memfd setup failed");
+        goto out;
+    }
+    if (write(fd, "halfclose-ipc", 13) != 13) {
+        fail(name, "memfd write failed");
+        goto out;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLHUP | EPOLLONESHOT;
+    ev.data = 0x48434c53434d4950ULL;
+    if (epoll_ctl_raw(epfd, EPOLL_CTL_ADD, sv[1], &ev) < 0) {
+        fail(name, "epoll_ctl ADD failed");
+        goto out;
+    }
+    if (shutdown_raw(sv[0], SHUT_RD) < 0) {
+        fail(name, "sender shutdown(SHUT_RD) failed");
+        goto out;
+    }
+    if (shutdown_raw(sv[1], SHUT_WR) < 0) {
+        fail(name, "receiver shutdown(SHUT_WR) failed");
+        goto out;
+    }
+    if (send_one_fd_message(sv[0], fd, "H") != 1) {
+        fail(name, "sendmsg after half-close failed");
+        goto out;
+    }
+
+    memset(&out, 0, sizeof(out));
+    if (epoll_pwait_raw(epfd, &out, 1, 1000) != 1 ||
+        !(out.events & EPOLLIN) || (out.events & EPOLLHUP) ||
+        out.data != ev.data) {
+        fail(name, "half-close epoll event mismatch");
+        goto out;
+    }
+
+    memset(control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &got;
+    iov.iov_len = sizeof(got);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    n = recvmsg_raw(sv[1], &msg, MSG_CMSG_CLOEXEC | MSG_DONTWAIT);
+    if (n != 1 || got != 'H' || (msg.msg_flags & MSG_TRUNC)) {
+        fail(name, "half-close recvmsg payload mismatch");
+        goto out;
+    }
+    cmsg = (struct cmsghdr *)control;
+    if (msg.msg_controllen < CMSG_LEN(sizeof(int)) ||
+        cmsg->cmsg_level != SOL_SOCKET ||
+        cmsg->cmsg_type != SCM_RIGHTS) {
+        fail(name, "half-close recvmsg missing SCM_RIGHTS");
+        goto out;
+    }
+    memcpy(&gotfd, CMSG_DATA(cmsg), sizeof(gotfd));
+    if (gotfd < 0 || check_received_ipc_fd(name, gotfd, "halfclose-ipc") < 0)
+        goto out;
+
+    pass(name);
+
+out:
+    if (gotfd >= 0)
+        close(gotfd);
+    if (fd >= 0)
+        close(fd);
+    if (epfd >= 0)
+        close(epfd);
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
 }
 
 static void test_unix_stream_short_read_stops_iov(void)
@@ -6680,6 +7298,16 @@ int main(int argc, char **argv)
                passed, skipped, failed);
         exit(failed == 0 ? 0 : 1);
     }
+    if (argc == 2 && strcmp(argv[1], "chromium-ipc") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_chromium_stream_scm_oneshot_rearm();
+        test_chromium_seqpacket_bootstrap_eof();
+        test_chromium_seqpacket_passcred_bootstrap();
+        test_chromium_seqpacket_halfclose_scm();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
     if (argc == 2 && strcmp(argv[1], "fpu") == 0) {
         printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
         test_fpu_signal_exit_owner_save();
@@ -6739,6 +7367,10 @@ int main(int argc, char **argv)
     test_scm_rights_stream_barriers();
     test_wayland_stream_wrapped_iov_batch();
     test_wayland_stream_scm_batch();
+    test_chromium_stream_scm_oneshot_rearm();
+    test_chromium_seqpacket_bootstrap_eof();
+    test_chromium_seqpacket_passcred_bootstrap();
+    test_chromium_seqpacket_halfclose_scm();
     test_unix_stream_short_read_stops_iov();
     test_ipc_stream_stress();
     test_ipc_seqpacket_stress();

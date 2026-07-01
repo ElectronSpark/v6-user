@@ -1,14 +1,19 @@
 #ifdef HOST_LIBC_PROGRAM
+#include <dlfcn.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 typedef uint64_t uint64;
 typedef int64_t int64;
+#ifndef AT_SYSINFO_EHDR
+#define AT_SYSINFO_EHDR 33
+#endif
 #else
 #include "kernel/inc/kstats.h"
 #include "kernel/inc/syscall.h"
@@ -17,6 +22,8 @@ typedef int64_t int64;
 #endif
 
 #define CLOCK_MONOTONIC_ID 1
+
+static uint64 ns_from_ts(const struct timespec *ts);
 
 #ifdef HOST_LIBC_PROGRAM
 static int64
@@ -111,6 +118,20 @@ bench_clock_gettime(struct timespec *ts)
 #endif
 }
 
+#ifdef HOST_LIBC_PROGRAM
+static int64
+bench_libc_clock_gettime(struct timespec *ts)
+{
+    return clock_gettime(CLOCK_MONOTONIC, ts);
+}
+
+static int64
+bench_libc_clock_getres(struct timespec *ts)
+{
+    return clock_getres(CLOCK_MONOTONIC, ts);
+}
+#endif
+
 static int64
 bench_clock_getres(struct timespec *ts)
 {
@@ -120,6 +141,59 @@ bench_clock_getres(struct timespec *ts)
     return raw_syscall2(SYS_clock_getres, CLOCK_MONOTONIC_ID, (int64)ts);
 #endif
 }
+
+#ifdef HOST_LIBC_PROGRAM
+typedef int (*vdso_clock_gettime_fn)(int, struct timespec *);
+
+static int
+check_vdso_clock(void)
+{
+    unsigned long ehdr = getauxval(AT_SYSINFO_EHDR);
+    printf("clockbench vdso auxv AT_SYSINFO_EHDR=0x%lx\n", ehdr);
+    if (ehdr == 0) {
+        printf("clockbench RESULT fail mode=vdso reason=no-auxv\n");
+        return 1;
+    }
+
+    void *handle = dlopen("linux-vdso.so.1", RTLD_LAZY | RTLD_LOCAL);
+    if (handle == NULL) {
+        printf("clockbench RESULT fail mode=vdso reason=dlopen error=%s\n",
+               dlerror());
+        return 1;
+    }
+
+    dlerror();
+    vdso_clock_gettime_fn fn =
+        (vdso_clock_gettime_fn)dlvsym(handle, "__vdso_clock_gettime",
+                                      "LINUX_2.6");
+    const char *err = dlerror();
+    if (fn == NULL || err != NULL) {
+        printf("clockbench RESULT fail mode=vdso reason=dlvsym error=%s\n",
+               err ? err : "null");
+        return 1;
+    }
+
+    struct timespec a;
+    struct timespec b;
+    if (fn(CLOCK_MONOTONIC, &a) != 0 || fn(CLOCK_MONOTONIC, &b) != 0) {
+        printf("clockbench RESULT fail mode=vdso reason=direct-call\n");
+        return 1;
+    }
+    uint64 ans = ns_from_ts(&a);
+    uint64 bns = ns_from_ts(&b);
+    if (bns < ans) {
+        printf("clockbench RESULT fail mode=vdso reason=went-backwards "
+               "a_ns=%lu b_ns=%lu\n",
+               ans, bns);
+        return 1;
+    }
+
+    printf("clockbench RESULT pass mode=vdso ehdr=0x%lx fn=%p "
+           "a_ns=%lu b_ns=%lu\n",
+           ehdr, (void *)fn, ans, bns);
+    return 0;
+}
+#endif
 
 static int64
 bench_getpid(void)
@@ -198,6 +272,11 @@ main(int argc, char **argv)
     volatile uint64 sink = 0;
     uint64 start = now_ns();
 
+#ifdef HOST_LIBC_PROGRAM
+    if (strcmp(mode, "vdso") == 0)
+        return check_vdso_clock();
+#endif
+
     for (int i = 0; i < loops; i++) {
         if (strcmp(mode, "clock") == 0) {
             if (bench_clock_gettime(&ts) < 0) {
@@ -205,6 +284,24 @@ main(int argc, char **argv)
                 return 1;
             }
             sink += (uint64)ts.tv_nsec;
+#ifdef HOST_LIBC_PROGRAM
+        } else if (strcmp(mode, "libcclock") == 0) {
+            if (bench_libc_clock_gettime(&ts) < 0) {
+                printf("clockbench RESULT fail mode=libcclock iter=%d "
+                       "errno=%d\n",
+                       i, errno);
+                return 1;
+            }
+            sink += (uint64)ts.tv_nsec;
+        } else if (strcmp(mode, "libcclockres") == 0) {
+            if (bench_libc_clock_getres(&ts) < 0) {
+                printf("clockbench RESULT fail mode=libcclockres iter=%d "
+                       "errno=%d\n",
+                       i, errno);
+                return 1;
+            }
+            sink += (uint64)ts.tv_nsec;
+#endif
         } else if (strcmp(mode, "getpid") == 0) {
             int64 pid = bench_getpid();
             if (pid < 0) {
@@ -220,7 +317,11 @@ main(int argc, char **argv)
             }
             sink += (uint64)ts.tv_nsec;
         } else {
-            printf("usage: clockbench [clock|getpid|clockres] [loops]\n");
+            printf("usage: clockbench [clock|getpid|clockres"
+#ifdef HOST_LIBC_PROGRAM
+                   "|libcclock|libcclockres|vdso"
+#endif
+                   "] [loops]\n");
             return 1;
         }
     }

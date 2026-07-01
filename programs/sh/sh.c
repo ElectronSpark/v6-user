@@ -317,11 +317,12 @@ static int env_set_assignment(const char *assignment) {
 static void env_init(void) {
     for (int i = 0; i < MAX_ENV_VARS; i++)
         env_vars[i].used = 0;
-    env_set("PATH", "/:/bin");
+    env_set("PATH", "/usr/local/bin:/usr/bin:/bin:/");
     env_set("HOME", "/root");
     env_set("TERM", "xterm");
-    env_set("LANG", "C.UTF-8");
-    env_set("LC_ALL", "C.UTF-8");
+    env_set("SHELL", "/bin/bash");
+    env_set("LANG", "C");
+    env_set("LC_ALL", "C");
     env_set("PYTHONUTF8", "1");
     env_set("PYTHONIOENCODING", "utf-8");
     env_set("PYTHONHOME", "/");
@@ -449,7 +450,7 @@ static void env_enable_gpu_defaults(void) {
 
 static void env_enable_gui_session(void) {
     env_set("HOME", "/root");
-    env_set("PATH", "/bin:/usr/bin");
+    env_set("PATH", "/usr/local/bin:/usr/bin:/bin:/");
     env_set("TERM", "dumb");
     env_set("PS1", "\\w# ");
     env_set("XDG_RUNTIME_DIR", "/tmp");
@@ -2691,7 +2692,7 @@ struct cmd *parseredirs(struct cmd *cmd, char **ps, char *es) {
             cmd = redircmd(cmd, q, eq, O_WRONLY | O_CREAT | O_TRUNC, 1);
             break;
         case '+':
-            cmd = redircmd(cmd, q, eq, O_WRONLY | O_CREAT, 1);
+            cmd = redircmd(cmd, q, eq, O_WRONLY | O_CREAT | O_APPEND, 1);
             break;
         }
     }

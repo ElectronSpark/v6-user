@@ -4415,6 +4415,66 @@ int main(int argc, char *argv[])
            stats.virtio_async_make_room_last_wait_us);
     printf("virtio_async_make_room_max_wait_us %lu\n",
            stats.virtio_async_make_room_max_wait_us);
+    printf("virtio_present_copy_calls %lu\n",
+           stats.virtio_present_copy_calls);
+    printf("virtio_present_copy_drain_calls %lu\n",
+           stats.virtio_present_copy_drain_calls);
+    printf("virtio_present_copy_src_fence_drains %lu\n",
+           stats.virtio_present_copy_src_fence_drains);
+    printf("virtio_present_copy_blanket_drains %lu\n",
+           stats.virtio_present_copy_blanket_drains);
+    printf("virtio_present_copy_src_fence_only_drains %lu\n",
+           stats.virtio_present_copy_src_fence_only_drains);
+    printf("virtio_present_copy_blanket_only_drains %lu\n",
+           stats.virtio_present_copy_blanket_only_drains);
+    printf("virtio_present_copy_src_fence_blanket_drains %lu\n",
+           stats.virtio_present_copy_src_fence_blanket_drains);
+    printf("virtio_present_copy_no_drain_skips %lu\n",
+           stats.virtio_present_copy_no_drain_skips);
+    printf("virtio_present_copy_minimal_skips %lu\n",
+           stats.virtio_present_copy_minimal_skips);
+    printf("virtio_present_copy_drain_failures %lu\n",
+           stats.virtio_present_copy_drain_failures);
+    printf("virtio_present_copy_drain_ticks %lu\n",
+           stats.virtio_present_copy_drain_ticks);
+    printf("virtio_present_copy_drain_last_us %lu\n",
+           stats.virtio_present_copy_drain_last_us);
+    printf("virtio_present_copy_drain_max_us %lu\n",
+           stats.virtio_present_copy_drain_max_us);
+    printf("virtio_hot_shape_owners %lu\n",
+           stats.virtio_hot_shape_owners);
+    printf("virtio_hot_shape_owner_drops %lu\n",
+           stats.virtio_hot_shape_owner_drops);
+    printf("virtio_hot_shape_submit_calls %lu\n",
+           stats.virtio_hot_shape_submit_calls);
+    printf("virtio_hot_shape_make_room_calls %lu\n",
+           stats.virtio_hot_shape_make_room_calls);
+    printf("virtio_hot_shape_make_room_stalls %lu\n",
+           stats.virtio_hot_shape_make_room_stalls);
+    printf("virtio_hot_shape_make_room_wait_us %lu\n",
+           stats.virtio_hot_shape_make_room_wait_us);
+    printf("virtio_hot_shape_make_room_max_wait_us %lu\n",
+           stats.virtio_hot_shape_make_room_max_wait_us);
+    printf("virtio_hot_shape_make_room_depth_max %lu\n",
+           stats.virtio_hot_shape_make_room_depth_max);
+    printf("virtio_hot_shape_make_room_count_max %lu\n",
+           stats.virtio_hot_shape_make_room_count_max);
+    printf("virtio_hot_shape_make_room_wait_count_max %lu\n",
+           stats.virtio_hot_shape_make_room_wait_count_max);
+    printf("virtio_hot_shape_posted %lu\n",
+           stats.virtio_hot_shape_posted);
+    printf("virtio_hot_shape_post_count_max %lu\n",
+           stats.virtio_hot_shape_post_count_max);
+    printf("virtio_hot_shape_retired %lu\n",
+           stats.virtio_hot_shape_retired);
+    printf("virtio_hot_shape_retire_us %lu\n",
+           stats.virtio_hot_shape_retire_us);
+    printf("virtio_hot_shape_retire_max_us %lu\n",
+           stats.virtio_hot_shape_retire_max_us);
+    printf("virtio_hot_shape_failures %lu\n",
+           stats.virtio_hot_shape_failures);
+    printf("virtio_hot_shape_mixed %lu\n",
+           stats.virtio_hot_shape_mixed);
     printf("virgl_bo_presents %lu\n", stats.virgl_bo_presents);
     printf("virgl_bo_present_pixels %lu\n",
            stats.virgl_bo_present_pixels);
