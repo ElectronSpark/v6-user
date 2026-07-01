@@ -497,6 +497,20 @@ int main(int argc, char *argv[])
     PRINT_PREPTY_POLL_PAIR(unix_other_only);
     PRINT_PREPTY_POLL_PAIR(eventfd_only);
     PRINT_PREPTY_POLL_PAIR(pipe_only);
+    PRINT_PREPTY_POLL_PAIR(kqueue_wake);
+    PRINT_PREPTY_POLL_PAIR(timed_rescan);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready);
+    PRINT_PREPTY_POLL_PAIR(event_ready);
+    PRINT_PREPTY_POLL_PAIR(ready_wayland);
+    PRINT_PREPTY_POLL_PAIR(ready_qdbus);
+    PRINT_PREPTY_POLL_PAIR(ready_unix_other);
+    PRINT_PREPTY_POLL_PAIR(ready_eventfd);
+    PRINT_PREPTY_POLL_PAIR(ready_pipe);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready_wayland);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready_qdbus);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready_unix_other);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready_eventfd);
+    PRINT_PREPTY_POLL_PAIR(rescan_ready_pipe);
 #undef PRINT_PREPTY_POLL_PAIR
     print_delta("sys_ioctl_calls", after.sys_ioctl_calls,
                 before.sys_ioctl_calls);
