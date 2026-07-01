@@ -304,6 +304,79 @@ int main(int argc, char *argv[])
                         after.sys_openat_fdalloc_ticks,
                         before.sys_openat_fdalloc_ticks,
                         after.timebase_freq);
+    print_delta("sys_poll_calls", after.sys_poll_calls,
+                before.sys_poll_calls);
+    print_tick_delta_ms("sys_poll_ms", after.sys_poll_ticks,
+                        before.sys_poll_ticks, after.timebase_freq);
+    print_delta("sys_ppoll_calls", after.sys_ppoll_calls,
+                before.sys_ppoll_calls);
+    print_tick_delta_ms("sys_ppoll_ms", after.sys_ppoll_ticks,
+                        before.sys_ppoll_ticks, after.timebase_freq);
+    print_delta("sys_poll_blocking_calls",
+                after.sys_poll_blocking_calls,
+                before.sys_poll_blocking_calls);
+    print_tick_delta_ms("sys_poll_blocking_ms",
+                        after.sys_poll_blocking_ticks,
+                        before.sys_poll_blocking_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_calls", after.sys_ioctl_calls,
+                before.sys_ioctl_calls);
+    print_tick_delta_ms("sys_ioctl_ms", after.sys_ioctl_ticks,
+                        before.sys_ioctl_ticks, after.timebase_freq);
+    print_delta("sys_ioctl_tty_tcgets_calls",
+                after.sys_ioctl_tty_tcgets_calls,
+                before.sys_ioctl_tty_tcgets_calls);
+    print_tick_delta_ms("sys_ioctl_tty_tcgets_ms",
+                        after.sys_ioctl_tty_tcgets_ticks,
+                        before.sys_ioctl_tty_tcgets_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_tty_tcsets_calls",
+                after.sys_ioctl_tty_tcsets_calls,
+                before.sys_ioctl_tty_tcsets_calls);
+    print_tick_delta_ms("sys_ioctl_tty_tcsets_ms",
+                        after.sys_ioctl_tty_tcsets_ticks,
+                        before.sys_ioctl_tty_tcsets_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_tty_winsz_calls",
+                after.sys_ioctl_tty_winsz_calls,
+                before.sys_ioctl_tty_winsz_calls);
+    print_tick_delta_ms("sys_ioctl_tty_winsz_ms",
+                        after.sys_ioctl_tty_winsz_ticks,
+                        before.sys_ioctl_tty_winsz_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_tty_pgrp_calls",
+                after.sys_ioctl_tty_pgrp_calls,
+                before.sys_ioctl_tty_pgrp_calls);
+    print_tick_delta_ms("sys_ioctl_tty_pgrp_ms",
+                        after.sys_ioctl_tty_pgrp_ticks,
+                        before.sys_ioctl_tty_pgrp_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_tty_ptmx_calls",
+                after.sys_ioctl_tty_ptmx_calls,
+                before.sys_ioctl_tty_ptmx_calls);
+    print_tick_delta_ms("sys_ioctl_tty_ptmx_ms",
+                        after.sys_ioctl_tty_ptmx_ticks,
+                        before.sys_ioctl_tty_ptmx_ticks,
+                        after.timebase_freq);
+    print_delta("sys_ioctl_tty_ctty_calls",
+                after.sys_ioctl_tty_ctty_calls,
+                before.sys_ioctl_tty_ctty_calls);
+    print_tick_delta_ms("sys_ioctl_tty_ctty_ms",
+                        after.sys_ioctl_tty_ctty_ticks,
+                        before.sys_ioctl_tty_ctty_ticks,
+                        after.timebase_freq);
+    print_delta("sys_futex_calls", after.sys_futex_calls,
+                before.sys_futex_calls);
+    print_tick_delta_ms("sys_futex_ms", after.sys_futex_ticks,
+                        before.sys_futex_ticks, after.timebase_freq);
+    print_delta("sys_futex_wait_calls", after.sys_futex_wait_calls,
+                before.sys_futex_wait_calls);
+    print_tick_delta_ms("sys_futex_wait_ms", after.sys_futex_wait_ticks,
+                        before.sys_futex_wait_ticks, after.timebase_freq);
+    print_delta("sys_futex_wake_calls", after.sys_futex_wake_calls,
+                before.sys_futex_wake_calls);
+    print_tick_delta_ms("sys_futex_wake_ms", after.sys_futex_wake_ticks,
+                        before.sys_futex_wake_ticks, after.timebase_freq);
     print_delta("sys_fstatat_calls", after.sys_fstatat_calls,
                 before.sys_fstatat_calls);
     print_tick_delta_ms("sys_fstatat_ms", after.sys_fstatat_ticks,
