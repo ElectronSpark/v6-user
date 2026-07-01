@@ -121,6 +121,18 @@ int main(int argc, char *argv[])
     print_delta("vfs_inode_cache_miss_invalid_destroying",
                 after.vfs_inode_cache_miss_invalid_destroying,
                 before.vfs_inode_cache_miss_invalid_destroying);
+    print_delta("vfs_inode_cache_read_revive_attempts",
+                after.vfs_inode_cache_read_revive_attempts,
+                before.vfs_inode_cache_read_revive_attempts);
+    print_delta("vfs_inode_cache_read_revive_success",
+                after.vfs_inode_cache_read_revive_success,
+                before.vfs_inode_cache_read_revive_success);
+    print_delta("vfs_inode_cache_read_revive_lock_fail",
+                after.vfs_inode_cache_read_revive_lock_fail,
+                before.vfs_inode_cache_read_revive_lock_fail);
+    print_delta("vfs_inode_cache_read_revive_stale",
+                after.vfs_inode_cache_read_revive_stale,
+                before.vfs_inode_cache_read_revive_stale);
     print_tick_delta_ms("vfs_inode_cache_ms",
                         after.vfs_inode_cache_ticks,
                         before.vfs_inode_cache_ticks,
