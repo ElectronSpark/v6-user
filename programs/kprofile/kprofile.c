@@ -475,6 +475,29 @@ int main(int argc, char *argv[])
                         after.timebase_freq);
     print_delta("konsole_prepty_pty_seen", after.konsole_prepty_pty_seen,
                 before.konsole_prepty_pty_seen);
+#define PRINT_PREPTY_POLL_PAIR(field)                                      \
+    do {                                                                   \
+        print_delta("konsole_prepty_poll_" #field "_calls",                \
+                    after.konsole_prepty_poll_##field##_calls,             \
+                    before.konsole_prepty_poll_##field##_calls);           \
+        print_tick_delta_ms("konsole_prepty_poll_" #field "_ms",           \
+                            after.konsole_prepty_poll_##field##_ticks,     \
+                            before.konsole_prepty_poll_##field##_ticks,    \
+                            after.timebase_freq);                          \
+    } while (0)
+    PRINT_PREPTY_POLL_PAIR(wayland_pipe);
+    PRINT_PREPTY_POLL_PAIR(wayland_eventfd);
+    PRINT_PREPTY_POLL_PAIR(qdbus_pipe);
+    PRINT_PREPTY_POLL_PAIR(qdbus_eventfd);
+    PRINT_PREPTY_POLL_PAIR(unix_other_pipe);
+    PRINT_PREPTY_POLL_PAIR(unix_other_eventfd);
+    PRINT_PREPTY_POLL_PAIR(eventfd_pipe);
+    PRINT_PREPTY_POLL_PAIR(wayland_only);
+    PRINT_PREPTY_POLL_PAIR(qdbus_only);
+    PRINT_PREPTY_POLL_PAIR(unix_other_only);
+    PRINT_PREPTY_POLL_PAIR(eventfd_only);
+    PRINT_PREPTY_POLL_PAIR(pipe_only);
+#undef PRINT_PREPTY_POLL_PAIR
     print_delta("sys_ioctl_calls", after.sys_ioctl_calls,
                 before.sys_ioctl_calls);
     print_tick_delta_ms("sys_ioctl_ms", after.sys_ioctl_ticks,
