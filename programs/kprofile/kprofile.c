@@ -77,6 +77,13 @@ int main(int argc, char *argv[])
                         after.timebase_freq);
     print_delta("vfs_dentry_inode_calls", after.vfs_dentry_inode_calls,
                 before.vfs_dentry_inode_calls);
+    print_tick_delta_ms("vfs_dentry_inode_ms",
+                        after.vfs_dentry_inode_ticks,
+                        before.vfs_dentry_inode_ticks,
+                        after.timebase_freq);
+    print_delta("vfs_dentry_inode_retries",
+                after.vfs_dentry_inode_retries,
+                before.vfs_dentry_inode_retries);
     print_delta("vfs_dentry_inode_self_hits",
                 after.vfs_dentry_inode_self_hits,
                 before.vfs_dentry_inode_self_hits);
@@ -102,6 +109,18 @@ int main(int argc, char *argv[])
                 before.vfs_inode_cache_misses);
     print_delta("vfs_inode_cache_eagain", after.vfs_inode_cache_eagain,
                 before.vfs_inode_cache_eagain);
+    print_delta("vfs_inode_cache_miss_hash",
+                after.vfs_inode_cache_miss_hash,
+                before.vfs_inode_cache_miss_hash);
+    print_delta("vfs_inode_cache_miss_revive_without_wlock",
+                after.vfs_inode_cache_miss_revive_without_wlock,
+                before.vfs_inode_cache_miss_revive_without_wlock);
+    print_delta("vfs_inode_cache_miss_dying",
+                after.vfs_inode_cache_miss_dying,
+                before.vfs_inode_cache_miss_dying);
+    print_delta("vfs_inode_cache_miss_invalid_destroying",
+                after.vfs_inode_cache_miss_invalid_destroying,
+                before.vfs_inode_cache_miss_invalid_destroying);
     print_tick_delta_ms("vfs_inode_cache_ms",
                         after.vfs_inode_cache_ticks,
                         before.vfs_inode_cache_ticks,
@@ -191,6 +210,30 @@ int main(int argc, char *argv[])
                 before.ext4_fault_partial_copy);
     print_tick_delta_ms("ext4_fault_ms", after.ext4_fault_ticks,
                         before.ext4_fault_ticks, after.timebase_freq);
+    print_delta("ext4_lookup_calls", after.ext4_lookup_calls,
+                before.ext4_lookup_calls);
+    print_tick_delta_ms("ext4_lookup_lock_wait_ms",
+                        after.ext4_lookup_lock_wait_ticks,
+                        before.ext4_lookup_lock_wait_ticks,
+                        after.timebase_freq);
+    print_tick_delta_ms("ext4_lookup_lock_hold_ms",
+                        after.ext4_lookup_lock_hold_ticks,
+                        before.ext4_lookup_lock_hold_ticks,
+                        after.timebase_freq);
+    print_tick_delta_ms("ext4_lookup_parent_ref_ms",
+                        after.ext4_lookup_parent_ref_ticks,
+                        before.ext4_lookup_parent_ref_ticks,
+                        after.timebase_freq);
+    print_tick_delta_ms("ext4_lookup_dir_find_ms",
+                        after.ext4_lookup_dir_find_ticks,
+                        before.ext4_lookup_dir_find_ticks,
+                        after.timebase_freq);
+    print_delta("ext4_lookup_found", after.ext4_lookup_found,
+                before.ext4_lookup_found);
+    print_delta("ext4_lookup_enoent", after.ext4_lookup_enoent,
+                before.ext4_lookup_enoent);
+    print_delta("ext4_lookup_errors", after.ext4_lookup_errors,
+                before.ext4_lookup_errors);
     print_delta("sys_open_calls", after.sys_open_calls,
                 before.sys_open_calls);
     print_tick_delta_ms("sys_open_ms", after.sys_open_ticks,
