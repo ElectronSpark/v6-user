@@ -5,6 +5,19 @@
 #include "kernel/inc/uabi/fcntl.h"
 #include "user/user.h"
 
+#define CLOCK_MONOTONIC 1
+
+int clock_gettime(int clockid, struct timespec *tp);
+
+static long long monotonic_ms(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+        return 0;
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static int parse_mode(const char *s, uint32 *w, uint32 *h)
 {
     uint32 x = 0;
@@ -360,7 +373,7 @@ static int sample_rect(const char *x_arg, const char *y_arg,
 static int print_sample_pixels(const char *label, uint32 screen_w,
                                uint32 screen_h, uint32 pitch,
                                uint32 x, uint32 y, uint32 w, uint32 h,
-                               uint8 *pixels)
+                               uint8 *pixels, const char *timing)
 {
     uint64 total = 0;
     uint64 nonzero = 0;
@@ -409,13 +422,15 @@ static int print_sample_pixels(const char *label, uint32 screen_w,
     printf("%s screen=%ux%u pitch=%u rect=%u,%u %ux%u "
            "total=%lu nonzero=%lu nonblack=%lu "
            "avg_rgb=%lu,%lu,%lu hash=0x%lx "
-           "center=0x%x corners=0x%x,0x%x,0x%x,0x%x\n",
+           "center=0x%x corners=0x%x,0x%x,0x%x,0x%x%s%s\n",
            label, screen_w, screen_h, pitch, x, y, w, h,
            total, nonzero, nonblack,
            total ? sum_r / total : 0,
            total ? sum_g / total : 0,
            total ? sum_b / total : 0,
-           hash, center, tl, tr, bl, br);
+           hash, center, tl, tr, bl, br,
+           timing && timing[0] ? " " : "",
+           timing && timing[0] ? timing : "");
     return 0;
 }
 
@@ -428,7 +443,16 @@ static int sample_current_rect(const char *x_arg, const char *y_arg,
     uint8 *pixels;
     uint64 size;
     int fd;
+    long long start_ms;
+    long long opened_ms;
+    long long info_ms;
+    long long alloc_ms;
+    long long read_ms;
+    long long stats_start_ms;
+    long long stats_ms;
+    char timing[192];
 
+    start_ms = monotonic_ms();
     if (parse_u32_arg(x_arg, &x) != 0 || parse_u32_arg(y_arg, &y) != 0 ||
         parse_u32_arg(w_arg, &w) != 0 || parse_u32_arg(h_arg, &h) != 0 ||
         w == 0 || h == 0) {
@@ -437,6 +461,7 @@ static int sample_current_rect(const char *x_arg, const char *y_arg,
     }
 
     fd = open("/dev/fb0", O_RDWR);
+    opened_ms = monotonic_ms();
     if (fd < 0) {
         fprintf(2, "fbstat: open /dev/fb0 failed\n");
         return 1;
@@ -446,6 +471,7 @@ static int sample_current_rect(const char *x_arg, const char *y_arg,
         close(fd);
         return 1;
     }
+    info_ms = monotonic_ms();
     if (info.bits_per_pixel != 32) {
         fprintf(2, "fbstat: unsupported fb bpp %u\n", info.bits_per_pixel);
         close(fd);
@@ -464,6 +490,7 @@ static int sample_current_rect(const char *x_arg, const char *y_arg,
 
     size = (uint64)w * h * sizeof(uint32);
     pixels = malloc((uint)size);
+    alloc_ms = monotonic_ms();
     if (!pixels) {
         fprintf(2, "fbstat: sample-current allocation failed\n");
         close(fd);
@@ -483,9 +510,24 @@ static int sample_current_rect(const char *x_arg, const char *y_arg,
         close(fd);
         return 1;
     }
+    read_ms = monotonic_ms();
 
+    stats_start_ms = monotonic_ms();
+    snprintf(timing, sizeof(timing),
+             "timing_open_ms=%lld timing_info_ms=%lld timing_alloc_ms=%lld "
+             "timing_readback_ms=%lld",
+             opened_ms - start_ms, info_ms - opened_ms,
+             alloc_ms - info_ms, read_ms - alloc_ms);
     print_sample_pixels("fb_sample_current", req.screen_width,
-                        req.screen_height, req.pitch, x, y, w, h, pixels);
+                        req.screen_height, req.pitch, x, y, w, h, pixels,
+                        timing);
+    stats_ms = monotonic_ms() - stats_start_ms;
+    printf("fb_sample_current_timing rect=%u,%u %ux%u open_ms=%lld "
+           "info_ms=%lld alloc_ms=%lld readback_ms=%lld stats_ms=%lld "
+           "total_ms=%lld\n",
+           x, y, w, h, opened_ms - start_ms, info_ms - opened_ms,
+           alloc_ms - info_ms, read_ms - alloc_ms, stats_ms,
+           monotonic_ms() - start_ms);
     free(pixels);
     close(fd);
     return 0;
@@ -646,8 +688,17 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
     char header[64];
     char row[4096];
     uint64 size;
+    long long start_ms;
+    long long opened_ms;
+    long long info_ms;
+    long long alloc_ms;
+    long long read_ms;
+    long long write_start_ms;
+    long long write_ms;
 
+    start_ms = monotonic_ms();
     fbfd = open("/dev/fb0", O_RDWR);
+    opened_ms = monotonic_ms();
     if (fbfd < 0) {
         fprintf(2, "fbstat: open /dev/fb0 failed\n");
         return 1;
@@ -657,6 +708,7 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
         close(fbfd);
         return 1;
     }
+    info_ms = monotonic_ms();
     if (info.bits_per_pixel != 32) {
         fprintf(2, "fbstat: unsupported fb bpp %u\n", info.bits_per_pixel);
         close(fbfd);
@@ -686,6 +738,7 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
 
     size = (uint64)w * h * sizeof(uint32);
     pixels = malloc((uint)size);
+    alloc_ms = monotonic_ms();
     if (pixels == NULL) {
         fprintf(2, "fbstat: ppm-current allocation failed\n");
         close(fbfd);
@@ -705,6 +758,7 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
         close(fbfd);
         return 1;
     }
+    read_ms = monotonic_ms();
 
     outfd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (outfd < 0) {
@@ -714,6 +768,7 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
         return 1;
     }
 
+    write_start_ms = monotonic_ms();
     snprintf(header, sizeof(header), "P6\n%u %u\n255\n", w, h);
     if (write_full(outfd, header, strlen(header)) != 0)
         goto write_failed;
@@ -732,11 +787,16 @@ static int dump_ppm_current(const char *path, uint32 x, uint32 y, uint32 w,
     }
 
     close(outfd);
+    write_ms = monotonic_ms() - write_start_ms;
     free(pixels);
     close(fbfd);
-    printf("fb_ppm_current path=%s screen=%ux%u scanout=%ux%u rect=%u,%u %ux%u\n",
+    printf("fb_ppm_current path=%s screen=%ux%u scanout=%ux%u rect=%u,%u %ux%u "
+           "timing_open_ms=%lld timing_info_ms=%lld timing_alloc_ms=%lld "
+           "timing_readback_ms=%lld timing_write_ms=%lld timing_total_ms=%lld\n",
            path, info.xres, info.yres, req.screen_width, req.screen_height,
-           x, y, w, h);
+           x, y, w, h, opened_ms - start_ms, info_ms - opened_ms,
+           alloc_ms - info_ms, read_ms - alloc_ms, write_ms,
+           monotonic_ms() - start_ms);
     return 0;
 
 write_failed:
