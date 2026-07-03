@@ -32,6 +32,7 @@
 #define LINUX_NR_RT_SIGPROCMASK 14
 #define LINUX_NR_MUNMAP 11
 #define LINUX_NR_LSEEK 8
+#define LINUX_NR_IOCTL 16
 #define LINUX_NR_EXIT 60
 #define LINUX_NR_MREMAP 25
 #define LINUX_NR_MSYNC 26
@@ -39,6 +40,8 @@
 #define LINUX_NR_MADVISE 28
 #define LINUX_NR_PWRITE64 18
 #define LINUX_NR_ACCESS 21
+#define LINUX_NR_CLONE 56
+#define LINUX_NR_ARCH_PRCTL 158
 #define LINUX_NR_GETGID 104
 #define LINUX_NR_GETEUID 107
 #define LINUX_NR_GETEGID 108
@@ -148,6 +151,7 @@
 #else
 #define LINUX_NR_MUNMAP 215
 #define LINUX_NR_EXIT 93
+#define LINUX_NR_IOCTL 29
 #define LINUX_NR_CLOCK_GETTIME 113
 #define LINUX_NR_CLOCK_GETRES 114
 #define LINUX_NR_GETTIMEOFDAY 169
@@ -245,6 +249,7 @@
 #define LINUX_IN_MODIFY 0x00000002
 #define LINUX_IN_NONBLOCK 00004000
 #define LINUX_IN_CLOEXEC 02000000
+#define LINUX_FIONREAD 0x541B
 #define LINUX_SFD_NONBLOCK 00004000
 #define LINUX_SFD_CLOEXEC 02000000
 #define LINUX_SOCK_NONBLOCK 00004000
@@ -255,6 +260,9 @@
 #define SYNC_FILE_RANGE_WRITE 2
 #define SYNC_FILE_RANGE_WAIT_AFTER 4
 #define IOPRIO_WHO_PROCESS 1
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
+#define X86_NONCANONICAL_LOW 0x0000800000000000ULL
 
 struct linux_timeval {
     int64 tv_sec;
@@ -273,11 +281,114 @@ struct linux_tms {
     int64 tms_cstime;
 };
 
+struct linux_inotify_event_abi {
+    int wd;
+    uint32 mask;
+    uint32 cookie;
+    uint32 len;
+};
+
 struct linux_open_how {
     uint64 flags;
     uint64 mode;
     uint64 resolve;
 };
+
+static inline int64 raw_linux_syscall2(int64 num, int64 a0, int64 a1);
+static inline int64 raw_linux_syscall3(int64 num, int64 a0, int64 a1,
+                                       int64 a2);
+static inline int64 raw_linux_syscall4(int64 num, int64 a0, int64 a1,
+                                       int64 a2, int64 a3);
+
+static void test_linux_inotify_fionread_reducer(void)
+{
+#if defined(__x86_64__)
+    const char *path = "linuxabi.inotify.fionread";
+    char b = 'x';
+    char inotify_buf[sizeof(struct linux_inotify_event_abi) + 16];
+    int fd = -1;
+    int ifd = -1;
+    int wd = -1;
+    int inotify_empty_avail = -1;
+    int inotify_avail = -1;
+    int inotify_avail_after = -1;
+
+    memset(inotify_buf, 0, sizeof(inotify_buf));
+    unlink(path);
+
+    fd = raw_linux_syscall4(LINUX_NR_OPENAT, AT_FDCWD, (int64)path,
+                            O_CREAT | O_RDWR | O_TRUNC, 0600);
+    int create_write_ok = fd >= 0 && write(fd, &b, 1) == 1;
+    if (fd >= 0)
+        close(fd);
+
+    ifd = raw_linux_syscall2(LINUX_NR_INOTIFY_INIT1,
+                             LINUX_IN_NONBLOCK | LINUX_IN_CLOEXEC, 0);
+    if (ifd >= 0)
+        wd = raw_linux_syscall3(LINUX_NR_INOTIFY_ADD_WATCH, ifd,
+                                (int64)path, LINUX_IN_MODIFY);
+
+    int inotify_empty_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_empty_avail);
+    int inotify_empty_read =
+        raw_linux_syscall3(LINUX_NR_READ, ifd, (int64)inotify_buf,
+                           sizeof(inotify_buf));
+
+    fd = open(path, O_WRONLY);
+    int inotify_write_ok = fd >= 0 && write(fd, &b, 1) == 1;
+    if (fd >= 0)
+        close(fd);
+
+    int inotify_ready_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_avail);
+    int inotify_read =
+        raw_linux_syscall3(LINUX_NR_READ, ifd, (int64)inotify_buf,
+                           sizeof(inotify_buf));
+    struct linux_inotify_event_abi *iev =
+        (struct linux_inotify_event_abi *)inotify_buf;
+    int inotify_drained_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_avail_after);
+    int inotify_rm = wd > 0
+        ? raw_linux_syscall2(LINUX_NR_INOTIFY_RM_WATCH, ifd, wd)
+        : -EINVAL;
+
+    if (!create_write_ok || ifd < 0 || wd <= 0 ||
+        inotify_empty_ioctl != 0 || inotify_empty_avail != 0 ||
+        inotify_empty_read != -EAGAIN || !inotify_write_ok ||
+        inotify_ready_ioctl != 0 ||
+        inotify_avail < (int)sizeof(struct linux_inotify_event_abi) ||
+        inotify_avail > (int)sizeof(inotify_buf) ||
+        inotify_read != inotify_avail || iev->wd != wd ||
+        (iev->mask & LINUX_IN_MODIFY) == 0 || inotify_drained_ioctl != 0 ||
+        inotify_avail_after != 0 || inotify_rm != 0) {
+        printf("linuxsyscallabitest: inotify FIONREAD reducer failed: "
+               "create_write_ok=%d ifd=%d wd=%d empty_ioctl=%d "
+               "empty_avail=%d empty_read=%d write_ok=%d ready_ioctl=%d "
+               "ready_avail=%d read=%d ev_wd=%d ev_mask=0x%x "
+               "drained_ioctl=%d drained_avail=%d rm=%d\n",
+               create_write_ok, ifd, wd, inotify_empty_ioctl,
+               inotify_empty_avail, inotify_empty_read, inotify_write_ok,
+               inotify_ready_ioctl, inotify_avail, inotify_read, iev->wd,
+               iev->mask, inotify_drained_ioctl, inotify_avail_after,
+               inotify_rm);
+        if (ifd >= 0)
+            close(ifd);
+        unlink(path);
+        exit(1);
+    }
+
+    close(ifd);
+    unlink(path);
+    printf("linuxsyscallabitest: inotify FIONREAD reducer OK: "
+           "ready_avail=%d read=%d mask=0x%x\n",
+           inotify_avail, inotify_read, iev->mask);
+#else
+    printf("linuxsyscallabitest: inotify FIONREAD reducer skipped\n");
+#endif
+}
 
 struct linux_pselect6_sigmask {
     uint64 ss;
@@ -553,6 +664,52 @@ static void raw_linux_unmapself_child(void)
 static inline int64 raw_linux_munmap(void *addr, uint64 len)
 {
     return raw_linux_syscall2(LINUX_NR_MUNMAP, (int64)addr, (int64)len);
+}
+
+static void test_linux_arch_prctl_tls_rejects(void)
+{
+#if defined(__x86_64__)
+    uint64 before = 0;
+    uint64 after = 0;
+    int64 get_before;
+    int64 set_bad;
+    int64 get_after;
+    char *stack;
+    int64 clone_bad;
+
+    get_before =
+        raw_linux_syscall2(LINUX_NR_ARCH_PRCTL, ARCH_GET_FS, (int64)&before);
+    set_bad = raw_linux_syscall2(LINUX_NR_ARCH_PRCTL, ARCH_SET_FS,
+                                 (int64)X86_NONCANONICAL_LOW);
+    get_after =
+        raw_linux_syscall2(LINUX_NR_ARCH_PRCTL, ARCH_GET_FS, (int64)&after);
+
+    stack = mmap(0, STACK_SIZE, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+    if (stack == MAP_FAILED) {
+        printf("linuxsyscallabitest: tls reject stack mmap failed\n");
+        exit(1);
+    }
+    clone_bad = raw_linux_syscall5(
+        LINUX_NR_CLONE,
+        CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD |
+            CLONE_SETTLS,
+        (int64)(stack + STACK_SIZE), 0, 0, (int64)X86_NONCANONICAL_LOW);
+    munmap(stack, STACK_SIZE);
+
+    if (get_before != 0 || set_bad != -EPERM || get_after != 0 ||
+        before != after || clone_bad != -EPERM) {
+        printf("linuxsyscallabitest: x86 TLS reject failed: get_before=%ld "
+               "set_bad=%ld get_after=%ld before=0x%lx after=0x%lx "
+               "clone_bad=%ld\n",
+               get_before, set_bad, get_after, before, after, clone_bad);
+        exit(1);
+    }
+
+    printf("linuxsyscallabitest: x86 TLS reject OK\n");
+#else
+    printf("linuxsyscallabitest: x86 TLS reject skipped\n");
+#endif
 }
 
 static void test_linux_munmap_number(void)
@@ -1787,10 +1944,51 @@ static void test_linux_vfs_new_numbers(void)
     }
     int wd = raw_linux_syscall3(LINUX_NR_INOTIFY_ADD_WATCH, ifd,
                                 (int64)"linuxabi.vfs.a", LINUX_IN_MODIFY);
-    if (wd <= 0 ||
-        raw_linux_syscall3(LINUX_NR_READ, ifd, (int64)&out, 1) != -EAGAIN ||
-        raw_linux_syscall2(LINUX_NR_INOTIFY_RM_WATCH, ifd, wd) != 0) {
-        printf("linuxsyscallabitest: Linux inotify numbers failed\n");
+    int inotify_empty_avail = -1;
+    int inotify_avail = -1;
+    int inotify_avail_after = -1;
+    char inotify_buf[sizeof(struct linux_inotify_event_abi) + 16];
+    memset(inotify_buf, 0, sizeof(inotify_buf));
+    int inotify_empty_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_empty_avail);
+    int inotify_empty_read =
+        raw_linux_syscall3(LINUX_NR_READ, ifd, (int64)inotify_buf,
+                           sizeof(inotify_buf));
+    fd = open("linuxabi.vfs.a", O_WRONLY);
+    int inotify_write_ok = fd >= 0 && write(fd, &b, 1) == 1;
+    if (fd >= 0)
+        close(fd);
+    int inotify_ready_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_avail);
+    int inotify_read =
+        raw_linux_syscall3(LINUX_NR_READ, ifd, (int64)inotify_buf,
+                           sizeof(inotify_buf));
+    struct linux_inotify_event_abi *iev =
+        (struct linux_inotify_event_abi *)inotify_buf;
+    int inotify_drained_ioctl =
+        raw_linux_syscall3(LINUX_NR_IOCTL, ifd, LINUX_FIONREAD,
+                           (int64)&inotify_avail_after);
+    int inotify_rm =
+        raw_linux_syscall2(LINUX_NR_INOTIFY_RM_WATCH, ifd, wd);
+    if (wd <= 0 || inotify_empty_ioctl != 0 || inotify_empty_avail != 0 ||
+        inotify_empty_read != -EAGAIN || !inotify_write_ok ||
+        inotify_ready_ioctl != 0 ||
+        inotify_avail < (int)sizeof(struct linux_inotify_event_abi) ||
+        inotify_avail > (int)sizeof(inotify_buf) ||
+        inotify_read != inotify_avail || iev->wd != wd ||
+        (iev->mask & LINUX_IN_MODIFY) == 0 || inotify_drained_ioctl != 0 ||
+        inotify_avail_after != 0 || inotify_rm != 0) {
+        printf("linuxsyscallabitest: Linux inotify numbers failed: "
+               "wd=%d empty_ioctl=%d empty_avail=%d empty_read=%d "
+               "write_ok=%d ready_ioctl=%d ready_avail=%d read=%d "
+               "ev_wd=%d ev_mask=0x%x drained_ioctl=%d drained_avail=%d "
+               "rm=%d\n",
+               wd, inotify_empty_ioctl, inotify_empty_avail, inotify_empty_read,
+               inotify_write_ok, inotify_ready_ioctl, inotify_avail,
+               inotify_read, iev->wd, iev->mask, inotify_drained_ioctl,
+               inotify_avail_after, inotify_rm);
         close(ifd);
         unlink("linuxabi.vfs.a");
         unlink("linuxabi.vfs.b");
@@ -1970,11 +2168,18 @@ static void test_linux_proc_exec_snapshot(void)
 
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    if (argc > 1 && strcmp(argv[1], "inotify-fionread") == 0) {
+        test_linux_inotify_fionread_reducer();
+        exit(0);
+    }
+    if (argc > 1 && strcmp(argv[1], "tls-reject") == 0) {
+        test_linux_arch_prctl_tls_rejects();
+        exit(0);
+    }
 
     test_linux_munmap_number();
     test_linux_unmapself_sequence();
+    test_linux_arch_prctl_tls_rejects();
     test_linux_memory_locking_numbers();
     test_linux_time_numbers();
     test_linux_misc_numbers();
