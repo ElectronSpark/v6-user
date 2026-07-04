@@ -46,6 +46,7 @@ typedef int64_t int64;
 
 struct clone_args;
 struct kstats;
+struct kprofile_pgroup;
 struct kevent;
 struct netconf_req;
 
@@ -59,6 +60,10 @@ struct netconf_req;
 
 #ifndef XV6_SYS_kstats2
 #define XV6_SYS_kstats2 1368
+#endif
+
+#ifndef XV6_SYS_kprofile_pgroup
+#define XV6_SYS_kprofile_pgroup 1370
 #endif
 
 #ifndef XV6_SYS_netconf
@@ -251,6 +256,12 @@ static inline int kstatsctl(int enabled) {
     long ret = syscall(XV6_SYS_kstatsctl, enabled);
     if (ret < 0 && errno == ENOSYS)
         return 0;
+    return host_compat_errno_ret(ret);
+}
+
+static inline int kprofile_pgroup(int pgid, struct kprofile_pgroup *kp,
+                                  size_t size) {
+    long ret = syscall(XV6_SYS_kprofile_pgroup, pgid, kp, size);
     return host_compat_errno_ret(ret);
 }
 

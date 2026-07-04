@@ -1,5 +1,6 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/kstats.h"
+#include "kernel/inc/signo.h"
 #include "user/user.h"
 
 static void print_delta(const char *name, uint64 after, uint64 before)
@@ -20,10 +21,179 @@ static int read_kstats(struct kstats *ks)
     return kstats2(ks, sizeof(*ks));
 }
 
+static int read_pgroup(int pgid, struct kprofile_pgroup *kp)
+{
+    return kprofile_pgroup(pgid, kp, sizeof(*kp));
+}
+
+static void profile_sleep(void)
+{
+    struct timespec ts;
+
+    ts.tv_sec = 0;
+    ts.tv_nsec = 20 * 1000 * 1000;
+    nanosleep(&ts, 0);
+}
+
+static void print_tick_value_ms(const char *name, uint64 ticks,
+                                uint64 timebase_freq)
+{
+    uint64 ms = timebase_freq ? (ticks * 1000ULL) / timebase_freq : 0;
+    printf("%-28s %lu\n", name, (unsigned long)ms);
+}
+
+static void print_cpu_metrics(struct kstats *after, struct kstats *before)
+{
+    uint64 busy_ticks = 0;
+    uint64 total_ticks = 0;
+    uint64 final_running = 0;
+    uint64 final_idle = 0;
+    uint64 final_util_1s = 0;
+    int ncpus = after->ncpus;
+
+    if (ncpus > before->ncpus)
+        ncpus = before->ncpus;
+    if (ncpus > KSTATS_MAX_CPUS)
+        ncpus = KSTATS_MAX_CPUS;
+
+    for (int i = 0; i < ncpus; i++) {
+        busy_ticks += after->cpu[i].busy_ticks - before->cpu[i].busy_ticks;
+        total_ticks += after->cpu[i].total_ticks - before->cpu[i].total_ticks;
+        final_running += after->cpu[i].nr_running;
+        final_idle += after->cpu[i].idle ? 1 : 0;
+        final_util_1s += after->cpu[i].util_1s;
+    }
+
+    print_tick_value_ms("cpu_busy_ms", busy_ticks, after->timebase_freq);
+    print_tick_value_ms("cpu_total_ms", total_ticks, after->timebase_freq);
+    print_delta("cpu_final_nr_running", final_running, 0);
+    print_delta("cpu_final_idle", final_idle, 0);
+    print_delta("cpu_final_util_1s_fp", final_util_1s, 0);
+}
+
+static void print_pgroup_metrics(struct kprofile_pgroup *after,
+                                 struct kprofile_pgroup *before)
+{
+    printf("%-28s %ld\n", "pgroup_pgid", (long)after->pgid);
+    print_delta("pgroup_processes_final", after->processes, 0);
+    print_delta("pgroup_threads_final", after->threads, 0);
+    print_delta("pgroup_live_threads_final", after->live_threads, 0);
+    print_delta("pgroup_running_final", after->state_running, 0);
+    print_delta("pgroup_runnable_final", after->state_runnable, 0);
+    print_delta("pgroup_sleeping_final", after->state_sleeping, 0);
+    print_delta("pgroup_unintr_final", after->state_uninterruptible, 0);
+    print_delta("pgroup_wakening_final", after->state_wakening, 0);
+    print_delta("pgroup_stopped_final", after->state_stopped, 0);
+    print_delta("pgroup_zombie_final", after->state_zombie, 0);
+    print_delta("pgroup_on_cpu_final", after->on_cpu, 0);
+    print_delta("pgroup_on_rq_final", after->on_rq, 0);
+    print_tick_delta_ms("pgroup_cpu_runtime_ms",
+                        after->cpu_runtime_ticks,
+                        before->cpu_runtime_ticks,
+                        after->timebase_freq);
+    print_tick_value_ms("pgroup_max_thread_cpu_ms",
+                        after->max_thread_runtime_ticks,
+                        after->timebase_freq);
+    print_delta("pgroup_peak_vm_kb_final", after->peak_vm_bytes / 1024, 0);
+    print_delta("pgroup_peak_vm_kb_delta",
+                after->peak_vm_bytes / 1024,
+                before->peak_vm_bytes / 1024);
+    print_delta("pgroup_rss_pages_final", after->rss_pages, 0);
+    print_delta("pgroup_fs_opens", after->fs_opens, before->fs_opens);
+    print_delta("pgroup_fs_closes", after->fs_closes, before->fs_closes);
+    print_delta("pgroup_fs_bytes_read",
+                after->fs_bytes_read, before->fs_bytes_read);
+    print_delta("pgroup_fs_bytes_written",
+                after->fs_bytes_written, before->fs_bytes_written);
+    print_delta("pgroup_bio_reads", after->bio_reads, before->bio_reads);
+    print_delta("pgroup_bio_writes", after->bio_writes, before->bio_writes);
+    print_delta("pgroup_net_sockets",
+                after->net_sockets, before->net_sockets);
+    print_delta("pgroup_net_connects",
+                after->net_connects, before->net_connects);
+    print_delta("pgroup_net_accepts", after->net_accepts, before->net_accepts);
+    print_delta("pgroup_net_bytes_sent",
+                after->net_bytes_sent, before->net_bytes_sent);
+    print_delta("pgroup_net_bytes_recv",
+                after->net_bytes_recv, before->net_bytes_recv);
+    print_delta("pgroup_mm_mmap_count",
+                after->mm_mmap_count, before->mm_mmap_count);
+    print_delta("pgroup_mm_munmap_count",
+                after->mm_munmap_count, before->mm_munmap_count);
+    printf("%-28s %ld\n", "pgroup_mm_brk_delta",
+           (long)(after->mm_brk_delta - before->mm_brk_delta));
+    print_delta("pgroup_sched_forks",
+                after->sched_forks, before->sched_forks);
+    print_delta("pgroup_sched_execs",
+                after->sched_execs, before->sched_execs);
+    print_delta("pgroup_sched_exits",
+                after->sched_exits, before->sched_exits);
+}
+
+static int parse_uint_arg(const char *s, uint64 *value)
+{
+    uint64 v = 0;
+
+    if (!s || !*s)
+        return -1;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9')
+            return -1;
+        v = v * 10 + (uint64)(*s - '0');
+    }
+    *value = v;
+    return 0;
+}
+
+static int parse_options(int argc, char **argv, int *cmd_index,
+                         int *profile_pgroup, uint64 *timeout_ms)
+{
+    int i = 1;
+
+    *profile_pgroup = 1;
+    *timeout_ms = 0;
+    while (i < argc) {
+        if (strcmp(argv[i], "--system-only") == 0 ||
+            strcmp(argv[i], "--no-pgroup") == 0) {
+            *profile_pgroup = 0;
+            i++;
+        } else if (strcmp(argv[i], "--pgroup") == 0) {
+            *profile_pgroup = 1;
+            i++;
+        } else if (strcmp(argv[i], "--timeout-ms") == 0) {
+            if (i + 1 >= argc || parse_uint_arg(argv[i + 1], timeout_ms) < 0)
+                return -1;
+            i += 2;
+        } else if (strcmp(argv[i], "--") == 0) {
+            i++;
+            break;
+        } else {
+            break;
+        }
+    }
+    *cmd_index = i;
+    return i < argc ? 0 : -1;
+}
+
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        printf("usage: kprofile <command> [args...]\n");
+    int cmd_index;
+    int profile_pgroup;
+    uint64 timeout_ms;
+    uint64 child_start_ms = 0;
+    int timeout_hit = 0;
+    int term_sent = 0;
+    int kill_sent = 0;
+    int ready_pipe[2] = {-1, -1};
+    int go_pipe[2] = {-1, -1};
+    struct kprofile_pgroup pg_before;
+    struct kprofile_pgroup pg_after;
+    int have_pg_before = 0;
+    int have_pg_after = 0;
+
+    if (parse_options(argc, argv, &cmd_index, &profile_pgroup,
+                      &timeout_ms) < 0) {
+        printf("usage: kprofile [--system-only|--pgroup] [--timeout-ms N] [--] <command> [args...]\n");
         exit(1);
     }
 
@@ -41,6 +211,14 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    if (profile_pgroup) {
+        if (pipe(ready_pipe) < 0 || pipe(go_pipe) < 0) {
+            printf("kprofile: pipe failed\n");
+            kstatsctl(0);
+            exit(1);
+        }
+    }
+
     int pid = fork();
     if (pid < 0) {
         printf("kprofile: fork failed\n");
@@ -49,13 +227,89 @@ int main(int argc, char *argv[])
     }
 
     if (pid == 0) {
-        exec(argv[1], &argv[1]);
-        printf("kprofile: exec %s failed\n", argv[1]);
+        if (profile_pgroup) {
+            char ch = 'r';
+
+            close(ready_pipe[0]);
+            close(go_pipe[1]);
+            setpgid(0, 0);
+            if (write(ready_pipe[1], &ch, 1) != 1)
+                exit(1);
+            close(ready_pipe[1]);
+            if (read(go_pipe[0], &ch, 1) != 1)
+                exit(1);
+            close(go_pipe[0]);
+        }
+        exec(argv[cmd_index], &argv[cmd_index]);
+        printf("kprofile: exec %s failed\n", argv[cmd_index]);
         exit(1);
     }
 
+    if (profile_pgroup) {
+        char ch = 0;
+
+        close(ready_pipe[1]);
+        close(go_pipe[0]);
+        if (read(ready_pipe[0], &ch, 1) != 1) {
+            printf("kprofile: child setup failed\n");
+            kstatsctl(0);
+            exit(1);
+        }
+        close(ready_pipe[0]);
+        setpgid(pid, pid);
+        if (read_pgroup(pid, &pg_before) == 0) {
+            pg_after = pg_before;
+            have_pg_before = 1;
+            have_pg_after = 1;
+        }
+        ch = 'g';
+        if (write(go_pipe[1], &ch, 1) != 1) {
+            printf("kprofile: child start failed\n");
+            kstatsctl(0);
+            exit(1);
+        }
+        close(go_pipe[1]);
+    }
+    child_start_ms = (uint64)uptime();
+
     int status = 0;
-    waitpid(pid, &status, 0);
+    if (profile_pgroup) {
+        for (;;) {
+            struct kprofile_pgroup sample;
+            int w;
+            uint64 now_ms;
+
+            if (read_pgroup(pid, &sample) == 0) {
+                pg_after = sample;
+                have_pg_after = 1;
+            }
+            w = waitpid(pid, &status, WNOHANG);
+            if (w == pid)
+                break;
+            if (w < 0) {
+                status = 1 << 8;
+                break;
+            }
+            now_ms = (uint64)uptime();
+            if (timeout_ms && now_ms - child_start_ms >= timeout_ms) {
+                timeout_hit = 1;
+                if (!term_sent) {
+                    kill(-pid, SIGTERM);
+                    term_sent = 1;
+                } else if (!kill_sent &&
+                           now_ms - child_start_ms >= timeout_ms + 2000) {
+                    kill(-pid, SIGKILL);
+                    kill_sent = 1;
+                } else if (kill_sent &&
+                           now_ms - child_start_ms >= timeout_ms + 4000) {
+                    break;
+                }
+            }
+            profile_sleep();
+        }
+    } else {
+        waitpid(pid, &status, 0);
+    }
 
     if (read_kstats(&after) < 0) {
         printf("kprofile: kstats(after) failed\n");
@@ -66,6 +320,23 @@ int main(int argc, char *argv[])
 
     printf("elapsed_ms                  %lu\n",
            (unsigned long)(after.uptime_ms - before.uptime_ms));
+    printf("%-28s %lu\n", "kprofile_timeout_ms",
+           (unsigned long)timeout_ms);
+    printf("%-28s %d\n", "kprofile_timeout_hit", timeout_hit);
+    print_cpu_metrics(&after, &before);
+    print_delta("sched_starve_probe_snapshots",
+                after.sched_starve_probe_snapshots,
+                before.sched_starve_probe_snapshots);
+    print_delta("sched_starve_idle_needs_resched",
+                after.sched_starve_probe_idle_needs_resched_samples,
+                before.sched_starve_probe_idle_needs_resched_samples);
+    if (profile_pgroup) {
+        if (have_pg_before && have_pg_after) {
+            print_pgroup_metrics(&pg_after, &pg_before);
+        } else {
+            printf("%-28s %s\n", "pgroup_status", "unavailable");
+        }
+    }
     print_delta("vfs_lookup_calls", after.vfs_lookup_calls,
                 before.vfs_lookup_calls);
     print_delta("vfs_lookup_dcache_hits", after.vfs_lookup_dcache_hits,

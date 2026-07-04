@@ -212,9 +212,11 @@ int fadvise64(int fd, int64 offset, int64 len, int advice);
 
 // System-wide statistics
 struct kstats; // forward declaration
+struct kprofile_pgroup; // forward declaration
 int kstats(struct kstats *ks);
 int kstats2(struct kstats *ks, uint64 size);
 int kstatsctl(int enabled);
+int kprofile_pgroup(int pgid, struct kprofile_pgroup *kp, uint64 size);
 
 // kqueue
 struct kevent; // forward declaration

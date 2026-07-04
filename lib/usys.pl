@@ -116,6 +116,7 @@ entry("fadvise64");
 entry("kstats");
 entry("kstats2");
 entry("kstatsctl");
+entry("kprofile_pgroup");
 
 # kqueue syscalls
 entry("kqueue");
