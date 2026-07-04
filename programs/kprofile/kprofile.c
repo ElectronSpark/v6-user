@@ -1,6 +1,7 @@
 #include "kernel/inc/types.h"
 #include "kernel/inc/kstats.h"
 #include "kernel/inc/signo.h"
+#include "kernel/inc/timer/timer.h"
 #include "user/user.h"
 
 static void print_delta(const char *name, uint64 after, uint64 before)
@@ -42,6 +43,12 @@ static void print_tick_value_ms(const char *name, uint64 ticks,
     printf("%-28s %lu\n", name, (unsigned long)ms);
 }
 
+static void print_sched_tick_value_ms(const char *name, uint64 ticks)
+{
+    uint64 ms = (ticks * 1000ULL) / HZ;
+    printf("%-28s %lu\n", name, (unsigned long)ms);
+}
+
 static void print_cpu_metrics(struct kstats *after, struct kstats *before)
 {
     uint64 busy_ticks = 0;
@@ -64,8 +71,8 @@ static void print_cpu_metrics(struct kstats *after, struct kstats *before)
         final_util_1s += after->cpu[i].util_1s;
     }
 
-    print_tick_value_ms("cpu_busy_ms", busy_ticks, after->timebase_freq);
-    print_tick_value_ms("cpu_total_ms", total_ticks, after->timebase_freq);
+    print_sched_tick_value_ms("cpu_busy_ms", busy_ticks);
+    print_sched_tick_value_ms("cpu_total_ms", total_ticks);
     print_delta("cpu_final_nr_running", final_running, 0);
     print_delta("cpu_final_idle", final_idle, 0);
     print_delta("cpu_final_util_1s_fp", final_util_1s, 0);
@@ -74,6 +81,8 @@ static void print_cpu_metrics(struct kstats *after, struct kstats *before)
 static void print_pgroup_metrics(struct kprofile_pgroup *after,
                                  struct kprofile_pgroup *before)
 {
+    printf("%-28s %s\n", "pgroup_scope", "process-group-only");
+    printf("%-28s %s\n", "pgroup_descendant_tracking", "none");
     printf("%-28s %ld\n", "pgroup_pgid", (long)after->pgid);
     print_delta("pgroup_processes_final", after->processes, 0);
     print_delta("pgroup_threads_final", after->threads, 0);
