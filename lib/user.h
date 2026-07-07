@@ -213,10 +213,21 @@ int fadvise64(int fd, int64 offset, int64 len, int advice);
 // System-wide statistics
 struct kstats; // forward declaration
 struct kprofile_pgroup; // forward declaration
+struct konsole_prepty_wake_snapshot; // forward declaration
+struct kprofile_userpc_config; // forward declaration
+struct kprofile_userpc_snapshot; // forward declaration
+struct kprofile_vfs_enoent_snapshot; // forward declaration
 int kstats(struct kstats *ks);
 int kstats2(struct kstats *ks, uint64 size);
 int kstatsctl(int enabled);
 int kprofile_pgroup(int pgid, struct kprofile_pgroup *kp, uint64 size);
+int kprofile_prepty_ring(struct konsole_prepty_wake_snapshot *snap,
+                         uint64 size);
+int kprofile_userpc_ctl(struct kprofile_userpc_config *cfg, uint64 size);
+int kprofile_userpc_snapshot(struct kprofile_userpc_snapshot *snap,
+                             uint64 size);
+int kprofile_vfs_enoent_snapshot(struct kprofile_vfs_enoent_snapshot *snap,
+                                 uint64 size);
 
 // kqueue
 struct kevent; // forward declaration

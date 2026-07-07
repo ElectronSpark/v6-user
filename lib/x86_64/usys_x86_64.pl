@@ -131,6 +131,10 @@ entry("kstats");
 entry("kstats2");
 entry("kstatsctl");
 entry("kprofile_pgroup");
+entry("kprofile_prepty_ring");
+entry("kprofile_userpc_ctl");
+entry("kprofile_userpc_snapshot");
+entry("kprofile_vfs_enoent_snapshot");
 
 # kqueue syscalls
 entry("kqueue");

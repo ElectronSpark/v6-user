@@ -47,6 +47,10 @@ typedef int64_t int64;
 struct clone_args;
 struct kstats;
 struct kprofile_pgroup;
+struct konsole_prepty_wake_snapshot;
+struct kprofile_userpc_config;
+struct kprofile_userpc_snapshot;
+struct kprofile_vfs_enoent_snapshot;
 struct kevent;
 struct netconf_req;
 
@@ -64,6 +68,22 @@ struct netconf_req;
 
 #ifndef XV6_SYS_kprofile_pgroup
 #define XV6_SYS_kprofile_pgroup 1370
+#endif
+
+#ifndef XV6_SYS_kprofile_prepty_ring
+#define XV6_SYS_kprofile_prepty_ring 1371
+#endif
+
+#ifndef XV6_SYS_kprofile_userpc_ctl
+#define XV6_SYS_kprofile_userpc_ctl 1372
+#endif
+
+#ifndef XV6_SYS_kprofile_userpc_snapshot
+#define XV6_SYS_kprofile_userpc_snapshot 1373
+#endif
+
+#ifndef XV6_SYS_kprofile_vfs_enoent_snapshot
+#define XV6_SYS_kprofile_vfs_enoent_snapshot 1374
 #endif
 
 #ifndef XV6_SYS_netconf
@@ -262,6 +282,30 @@ static inline int kstatsctl(int enabled) {
 static inline int kprofile_pgroup(int pgid, struct kprofile_pgroup *kp,
                                   size_t size) {
     long ret = syscall(XV6_SYS_kprofile_pgroup, pgid, kp, size);
+    return host_compat_errno_ret(ret);
+}
+
+static inline int kprofile_prepty_ring(
+    struct konsole_prepty_wake_snapshot *snap, size_t size) {
+    long ret = syscall(XV6_SYS_kprofile_prepty_ring, snap, size);
+    return host_compat_errno_ret(ret);
+}
+
+static inline int kprofile_userpc_ctl(struct kprofile_userpc_config *cfg,
+                                      size_t size) {
+    long ret = syscall(XV6_SYS_kprofile_userpc_ctl, cfg, size);
+    return host_compat_errno_ret(ret);
+}
+
+static inline int kprofile_userpc_snapshot(
+    struct kprofile_userpc_snapshot *snap, size_t size) {
+    long ret = syscall(XV6_SYS_kprofile_userpc_snapshot, snap, size);
+    return host_compat_errno_ret(ret);
+}
+
+static inline int kprofile_vfs_enoent_snapshot(
+    struct kprofile_vfs_enoent_snapshot *snap, size_t size) {
+    long ret = syscall(XV6_SYS_kprofile_vfs_enoent_snapshot, snap, size);
     return host_compat_errno_ret(ret);
 }
 
