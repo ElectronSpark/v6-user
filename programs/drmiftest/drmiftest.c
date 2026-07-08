@@ -330,6 +330,61 @@ static int atomic_out_fence_fb_commit(int fd, uint32 crtc_id,
     return ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic);
 }
 
+/*
+ * Atomic commit variant that carries the ioctl's user_data through to the
+ * kernel (struct drm_mode_atomic_compat.user_data) and lets the caller pass
+ * arbitrary flags (e.g. DRM_MODE_PAGE_FLIP_EVENT). A single primary-plane
+ * commit that sets CRTC_ID + FB_ID is enough to make the kernel flag has_new_fb
+ * and, when DRM_MODE_PAGE_FLIP_EVENT is set on a real (non-TEST_ONLY) commit,
+ * queue exactly one DRM_EVENT_FLIP_COMPLETE keyed by user_data.
+ */
+static int atomic_flip_commit(int fd, uint32 plane_id, uint32 crtc_prop,
+                              uint32 fb_prop, uint32 crtc_id, uint32 fb_id,
+                              uint32 flags, uint64 user_data)
+{
+    struct drm_mode_atomic_compat atomic;
+    uint32 objs[1];
+    uint32 counts[1];
+    uint32 props[2];
+    uint64 values[2];
+
+    objs[0] = plane_id;
+    counts[0] = 2;
+    props[0] = crtc_prop;
+    values[0] = crtc_id;
+    props[1] = fb_prop;
+    values[1] = fb_id;
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = flags;
+    atomic.count_objs = 1;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    atomic.user_data = user_data;
+    return ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic);
+}
+
+/*
+ * Non-blocking drain of the shared DRM event ring. The driver read() returns
+ * < 0 (no partial delivery) when the ring is empty, so this never blocks; the
+ * hard bound keeps it from ever spinning even if the ring were somehow
+ * refilled concurrently.
+ */
+static int drain_drm_events(int fd)
+{
+    struct drm_event_vblank_compat event;
+    int drained = 0;
+
+    while (drained <= 4 * DRM_XV6_EVENT_QUEUE_CAPACITY) {
+        memset(&event, 0, sizeof(event));
+        if (read(fd, &event, sizeof(event)) != (int)sizeof(event))
+            break;
+        drained++;
+    }
+    return drained;
+}
+
 struct atomic_test_fence_source {
     int fd;
     uint32 handle;
@@ -1151,8 +1206,13 @@ static int check_primary(int fd)
     memset(&plane_res, 0, sizeof(plane_res));
     plane_res.plane_id_ptr = (uint64)plane_ids;
     plane_res.count_planes = 2;
+    /* Contract (UNIVERSAL_PLANES set above): exactly two planes -- the
+     * primary scanout plane first, then the cursor plane (added with the
+     * kernel's hardened cursor-plane support; the old expectation of a
+     * single plane predates it). */
     if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res) < 0 ||
-        plane_res.count_planes != 1 || plane_ids[0] == 0)
+        plane_res.count_planes != 2 || plane_ids[0] == 0 ||
+        plane_ids[1] == 0)
         return fail("GETPLANERESOURCES failed");
 
     memset(formats, 0, sizeof(formats));
@@ -1526,8 +1586,14 @@ static int check_kms_fb(int fd)
     fb_legacy.bpp = 32;
     fb_legacy.depth = 24;
     fb_legacy.handle = create.handle;
-    if (ioctl(fd, DRM_IOCTL_MODE_ADDFB, &fb_legacy) >= 0)
-        return fail("legacy ADDFB unexpectedly enabled");
+    /* Contract update: the legacy DRM_IOCTL_MODE_ADDFB shim is implemented
+     * (bpp=32/depth=24 -> XRGB8888); it must succeed and yield a distinct,
+     * removable fb.  (The old fail-closed expectation predates the shim.) */
+    if (ioctl(fd, DRM_IOCTL_MODE_ADDFB, &fb_legacy) < 0 ||
+        fb_legacy.fb_id == 0 || fb_legacy.fb_id == fb_id)
+        return fail("legacy ADDFB shim failed");
+    if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_legacy.fb_id) < 0)
+        return fail("legacy ADDFB RMFB failed");
 
     memset(&fb, 0, sizeof(fb));
     fb.width = create.width;
@@ -4621,6 +4687,207 @@ static int check_lease_failclosed_matrix(int primary, int render)
     return 0;
 }
 
+/*
+ * U5 validation: the atomic (DRM_IOCTL_MODE_ATOMIC) path now queues
+ * DRM_MODE_PAGE_FLIP_EVENT completions exactly like the legacy page-flip path
+ * (fb_kms_atomic.c: pre-present -EAGAIN ring guard + one FLIP_COMPLETE per
+ * successful has_new_fb commit). This mirrors the legacy event read-back in
+ * check_kms_fb and asserts, on the shared per-fd event ring:
+ *   (a) one FLIP_COMPLETE per event-flagged successful atomic commit, with
+ *       matching user_data, crtc_id == GPU_DRM_CRTC_ID (1), and a strictly
+ *       monotonic sequence (each present advances display_last_complete);
+ *   (b) TEST_ONLY commits with the event flag emit zero events;
+ *   (c) flag-absent commits emit zero events;
+ *   (d) ring-full backpressure: fill the ring (DRM_XV6_EVENT_QUEUE_CAPACITY),
+ *       the next event-flagged commit returns -EAGAIN *before* presenting
+ *       (kms_atomic_commits unchanged), then all queued events drain in order
+ *       with no loss;
+ *   (e) mixed legacy + atomic interleaving keeps ordered, monotonic sequences
+ *       on the one shared ring.
+ * Reads are non-blocking (empty ring -> read() < 0), matching the legacy block,
+ * so the test can never hang a nographic run.
+ */
+static int check_kms_atomic_flip_events(int fd)
+{
+    struct drm_mode_create_dumb_compat create;
+    struct drm_mode_destroy_dumb_compat destroy;
+    struct drm_mode_fb_cmd2_compat fb;
+    struct drm_mode_crtc_compat crtc;
+    struct drm_mode_crtc_page_flip_compat flip;
+    struct drm_event_vblank_compat event;
+    struct drm_mode_get_plane_res_compat plane_res;
+    struct fb_gpu_stats stats_before;
+    struct fb_gpu_stats stats_after;
+    const uint64 seq_base = 0x41544f4d00000000ULL;   /* "ATOM" */
+    const uint64 ring_base = 0x52494e4700000000ULL;  /* "RING" */
+    const uint64 leg_base = 0x4c45470000000000ULL;   /* "LEG"  */
+    const uint64 ato_base = 0x41544f0000000000ULL;   /* "ATO"  */
+    uint32 plane_ids[2];
+    uint32 plane_id;
+    uint32 plane_crtc_prop;
+    uint32 plane_fb_prop;
+    uint32 fb_id = 0;
+    uint32 prev_sequence;
+    int i;
+
+    memset(&create, 0, sizeof(create));
+    create.width = 80;
+    create.height = 48;
+    create.bpp = 32;
+    if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) < 0 ||
+        create.handle == 0 || create.pitch < create.width * 4)
+        return fail("atomic_flip_event CREATE_DUMB failed");
+
+    memset(&fb, 0, sizeof(fb));
+    fb.width = create.width;
+    fb.height = create.height;
+    fb.pixel_format = DRM_FORMAT_XRGB8888;
+    fb.handles[0] = create.handle;
+    fb.pitches[0] = create.pitch;
+    if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0 || fb.fb_id == 0) {
+        memset(&destroy, 0, sizeof(destroy));
+        destroy.handle = create.handle;
+        (void)ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+        return fail("atomic_flip_event ADDFB2 failed");
+    }
+    fb_id = fb.fb_id;
+
+    memset(plane_ids, 0, sizeof(plane_ids));
+    memset(&plane_res, 0, sizeof(plane_res));
+    plane_res.plane_id_ptr = (uint64)plane_ids;
+    plane_res.count_planes = 2;
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res) < 0 ||
+        plane_ids[0] == 0)
+        return fail("atomic_flip_event plane lookup failed");
+    plane_id = plane_ids[0];
+    plane_crtc_prop = find_obj_prop(fd, plane_id, DRM_MODE_OBJECT_PLANE,
+                                    "CRTC_ID", DRM_MODE_PROP_OBJECT);
+    plane_fb_prop = find_obj_prop(fd, plane_id, DRM_MODE_OBJECT_PLANE,
+                                  "FB_ID", DRM_MODE_PROP_OBJECT);
+    if (plane_crtc_prop == 0 || plane_fb_prop == 0)
+        return fail("atomic_flip_event plane props missing");
+
+    /* Establish an active scanout so the plane FB_ID commits below present. */
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = 1;
+    crtc.fb_id = fb_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
+        return fail("atomic_flip_event SETCRTC failed");
+
+    /* Start from a known-empty ring regardless of prior tests. */
+    (void)drain_drm_events(fd);
+
+    /* (a) one FLIP_COMPLETE per event-flagged commit, ordered + monotonic. */
+    for (i = 0; i < 3; i++) {
+        if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                               1, fb_id, DRM_MODE_PAGE_FLIP_EVENT,
+                               seq_base + (uint64)i) != 0)
+            return fail("atomic_flip_event flagged commit failed");
+    }
+    prev_sequence = 0;
+    for (i = 0; i < 3; i++) {
+        memset(&event, 0, sizeof(event));
+        if (read(fd, &event, sizeof(event)) != (int)sizeof(event) ||
+            event.base.type != DRM_EVENT_FLIP_COMPLETE ||
+            event.base.length != sizeof(event) ||
+            event.user_data != seq_base + (uint64)i ||
+            event.crtc_id != 1 || event.sequence <= prev_sequence)
+            return fail("atomic_flip_event order/user_data/crtc failed");
+        prev_sequence = event.sequence;
+    }
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("atomic_flip_event queue not drained after commits");
+
+    /* (b) TEST_ONLY with the event flag emits no event. */
+    if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                           1, fb_id,
+                           DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_TEST_ONLY,
+                           0x5445535400000000ULL) != 0)
+        return fail("atomic_flip_event TEST_ONLY commit failed");
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("atomic_flip_event TEST_ONLY emitted event");
+
+    /* (c) a real commit without the event flag emits no event. */
+    if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                           1, fb_id, 0, 0x4e4f4556454e5400ULL) != 0)
+        return fail("atomic_flip_event flag-absent commit failed");
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("atomic_flip_event flag-absent emitted event");
+
+    /* (d) ring-full backpressure: fill the ring, next commit -EAGAIN pre-present. */
+    for (i = 0; i < DRM_XV6_EVENT_QUEUE_CAPACITY; i++) {
+        if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                               1, fb_id, DRM_MODE_PAGE_FLIP_EVENT,
+                               ring_base + (uint64)i) != 0)
+            return fail("atomic_flip_event ring fill failed");
+    }
+    if (get_fb_stats(&stats_before) < 0)
+        return fail("atomic_flip_event backpressure stats before failed");
+    if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                           1, fb_id, DRM_MODE_PAGE_FLIP_EVENT,
+                           0x52494e47ffffffffULL) >= 0)
+        return fail("atomic_flip_event full ring accepted commit");
+    if (get_fb_stats(&stats_after) < 0)
+        return fail("atomic_flip_event backpressure stats after failed");
+    if (stats_after.kms_atomic_commits != stats_before.kms_atomic_commits)
+        return fail("atomic_flip_event EAGAIN presented before backpressure");
+    for (i = 0; i < DRM_XV6_EVENT_QUEUE_CAPACITY; i++) {
+        memset(&event, 0, sizeof(event));
+        if (read(fd, &event, sizeof(event)) != (int)sizeof(event) ||
+            event.base.type != DRM_EVENT_FLIP_COMPLETE ||
+            event.user_data != ring_base + (uint64)i ||
+            event.crtc_id != 1)
+            return fail("atomic_flip_event overflow drain failed");
+    }
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("atomic_flip_event overflow queue not drained");
+
+    /* (e) mixed legacy + atomic on the shared ring stays ordered + monotonic. */
+    for (i = 0; i < 3; i++) {
+        memset(&flip, 0, sizeof(flip));
+        flip.crtc_id = 1;
+        flip.fb_id = fb_id;
+        flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
+        flip.user_data = leg_base + (uint64)i;
+        if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) < 0)
+            return fail("atomic_flip_event interleave legacy flip failed");
+        if (atomic_flip_commit(fd, plane_id, plane_crtc_prop, plane_fb_prop,
+                               1, fb_id, DRM_MODE_PAGE_FLIP_EVENT,
+                               ato_base + (uint64)i) != 0)
+            return fail("atomic_flip_event interleave atomic commit failed");
+    }
+    prev_sequence = 0;
+    for (i = 0; i < 6; i++) {
+        uint64 expect = (i & 1) ? (ato_base + (uint64)(i / 2))
+                                : (leg_base + (uint64)(i / 2));
+
+        memset(&event, 0, sizeof(event));
+        if (read(fd, &event, sizeof(event)) != (int)sizeof(event) ||
+            event.base.type != DRM_EVENT_FLIP_COMPLETE ||
+            event.user_data != expect || event.crtc_id != 1 ||
+            event.sequence <= prev_sequence)
+            return fail("atomic_flip_event interleave order failed");
+        prev_sequence = event.sequence;
+    }
+    if (read(fd, &event, sizeof(event)) >= 0)
+        return fail("atomic_flip_event interleave queue not drained");
+
+    (void)drain_drm_events(fd);
+    if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) < 0)
+        return fail("atomic_flip_event RMFB failed");
+    memset(&destroy, 0, sizeof(destroy));
+    destroy.handle = create.handle;
+    if (ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy) < 0)
+        return fail("atomic_flip_event DESTROY_DUMB failed");
+
+    printf("drmiftest: kms_atomic_flip_event_matrix event_per_commit=PASS "
+           "test_only_noevent=PASS flag_absent_noevent=PASS "
+           "ring_full_eagain_pre_present=PASS overflow_drain=PASS "
+           "legacy_atomic_interleave=PASS crtc_id=1 capacity=%d status=PASS\n",
+           DRM_XV6_EVENT_QUEUE_CAPACITY);
+    return 0;
+}
+
 int main(void)
 {
     int primary = open("/dev/dri/card0", O_RDWR);
@@ -4639,6 +4906,8 @@ int main(void)
     if (check_legacy_drm_probes(primary) != 0)
         goto out;
     if (check_kms_fb(primary) != 0)
+        goto out;
+    if (check_kms_atomic_flip_events(primary) != 0)
         goto out;
     if (check_common(render, "render") != 0)
         goto out;
