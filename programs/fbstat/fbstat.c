@@ -5242,6 +5242,10 @@ int main(int argc, char *argv[])
                    stats.dxg_present_helper_transport_present == 0 &&
                    stats.dxg_present_helper_requires_completion != 0 ?
                "PASS" : "DIAGNOSTIC");
+    printf("cursor_async submits_total=%lu coalesced_total=%lu errors_total=%lu\n",
+           stats.cursor_async_submits_total,
+           stats.cursor_async_coalesced_total,
+           stats.cursor_async_errors_total);
     close(fd);
     return 0;
 }
