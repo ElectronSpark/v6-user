@@ -115,19 +115,26 @@ static struct fb_gpu_scanout_read g_req;
 static uint32 *g_pixels;
 static uint32 g_npix;
 
-/* Read the region of interest and return its FNV-1a hash. -1 on ioctl error. */
-static int sample_roi(uint64 *hash_out)
+/* Read an explicit region of interest and return its FNV-1a hash. */
+static int sample_roi_req(struct fb_gpu_scanout_read *req, uint32 *pixels,
+                          uint32 npix, uint64 *hash_out)
 {
     uint64 h = 1469598103934665603UL;
 
-    if (ioctl(fb_fd, FB_GPU_SCANOUT_READ, &g_req) < 0)
+    if (ioctl(fb_fd, FB_GPU_SCANOUT_READ, req) < 0)
         return -1;
-    for (uint32 i = 0; i < g_npix; i++) {
-        h ^= g_pixels[i];
+    for (uint32 i = 0; i < npix; i++) {
+        h ^= pixels[i];
         h *= 1099511628211UL;
     }
     *hash_out = h;
     return 0;
+}
+
+/* Read the primary region of interest and return its FNV-1a hash. */
+static int sample_roi(uint64 *hash_out)
+{
+    return sample_roi_req(&g_req, g_pixels, g_npix, hash_out);
 }
 
 /*
@@ -150,6 +157,39 @@ static int poll_for_change(uint64 baseline, long long t_inject_us,
         long long now;
 
         if (sample_roi(&h) < 0)
+            return -1;
+        now = monotonic_us();
+        if (samples == 0)
+            first_us = now;
+        last_us = now;
+        samples++;
+        *samples_out = samples;
+        *period_us = (samples > 1) ? (last_us - first_us) / (samples - 1) : 0;
+        if (h != baseline) {
+            *t_change_us = now;
+            return 1;
+        }
+        if (now >= deadline) {
+            *t_change_us = now;
+            return 0;
+        }
+    }
+}
+
+/* Like poll_for_change but over an explicit ROI (used for the menu body). */
+static int poll_menu_change(struct fb_gpu_scanout_read *req, uint32 *pixels,
+                            uint32 npix, uint64 baseline, long long t_inject_us,
+                            long long timeout_us, long long *t_change_us,
+                            long long *period_us, long long *samples_out)
+{
+    long long first_us = 0, last_us = 0, samples = 0;
+    long long deadline = t_inject_us + timeout_us;
+    uint64 h;
+
+    for (;;) {
+        long long now;
+
+        if (sample_roi_req(req, pixels, npix, &h) < 0)
             return -1;
         now = monotonic_us();
         if (samples == 0)
@@ -197,6 +237,59 @@ static void wait_roi_stable(long long settle_ms)
     }
 }
 
+/* Dump the full primary scanout to a P6 PPM (proof that the menu is open). */
+static void dump_full_frame_ppm(const char *path, uint32 xres, uint32 yres)
+{
+    struct fb_gpu_scanout_read req;
+    uint32 *px;
+    uint32 n = xres * yres;
+    int fd;
+    char hdr[64];
+    unsigned char *rgb;
+
+    px = malloc(n * sizeof(uint32));
+    rgb = malloc((uint64)n * 3);
+    if (!px || !rgb) { free(px); free(rgb); return; }
+    memset(&req, 0, sizeof(req));
+    req.x = 0; req.y = 0; req.w = xres; req.h = yres;
+    req.pitch = xres * sizeof(uint32);
+    req.pixels = (uint64)px;
+    if (ioctl(fb_fd, FB_GPU_SCANOUT_READ, &req) < 0) { free(px); free(rgb); return; }
+    for (uint32 i = 0; i < n; i++) {
+        uint32 p = px[i];               /* assume XRGB8888 little-endian */
+        rgb[i * 3 + 0] = (p >> 16) & 0xff;
+        rgb[i * 3 + 1] = (p >> 8) & 0xff;
+        rgb[i * 3 + 2] = p & 0xff;
+    }
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd >= 0) {
+        int hlen = 0;
+        const char *magic = "P6\n";
+        int ok = 1;
+        while (magic[hlen]) hlen++;
+        if (write(fd, magic, hlen) != hlen) ok = 0;
+        {   /* "W H\n255\n" without snprintf */
+            char *w = hdr;
+            long long vals[2]; vals[0] = xres; vals[1] = yres;
+            for (int k = 0; k < 2; k++) {
+                char tmp[16]; int t = 0; long long v = vals[k];
+                if (v == 0) tmp[t++] = '0';
+                while (v > 0) { tmp[t++] = '0' + (v % 10); v /= 10; }
+                while (t > 0) *w++ = tmp[--t];
+                *w++ = (k == 0) ? ' ' : '\n';
+            }
+            *w++ = '2'; *w++ = '5'; *w++ = '5'; *w++ = '\n';
+            if (write(fd, hdr, (int)(w - hdr)) != (int)(w - hdr)) ok = 0;
+        }
+        if (ok && write(fd, rgb, (int)((uint64)n * 3)) != (int)((uint64)n * 3))
+            ok = 0;
+        (void)ok;
+        close(fd);
+    }
+    free(px);
+    free(rgb);
+}
+
 /* --- median helper ------------------------------------------------------- */
 
 static void sort_ll(long long *a, int n)
@@ -225,6 +318,25 @@ int main(int argc, char **argv)
     long long settle_ms = arg_int(argc, argv, 8, 900);
     long long timeout_ms = arg_int(argc, argv, 9, 2500);
     int calib_samples = arg_int(argc, argv, 10, 256);
+    /* Menu-mode extension: an ROI over the popup BODY (distinct from the click
+     * target) plus a click->open / click-away->close protocol. Enabled when a
+     * menu ROI centre pixel is supplied (args 11,12 > 0). Args 13,14 size the
+     * menu ROI; arg 15 = iters (default = iters). */
+    int menu_px_x = arg_int(argc, argv, 11, 0);
+    int menu_px_y = arg_int(argc, argv, 12, 0);
+    int menu_rw = arg_int(argc, argv, 13, 64);
+    int menu_rh = arg_int(argc, argv, 14, 64);
+    int menu_iters = arg_int(argc, argv, 15, iters);
+    /* arg 16: run the hover/click phase before menu mode (default 1). Set 0 so
+     * the first menu_open is a genuine COLD Kickoff activation (nothing has
+     * clicked the launcher yet). */
+    int do_hover = arg_int(argc, argv, 16, 1);
+    /* arg 17: prewarm Kickoff once (unmeasured open + long wait for full model
+     * population + close) before the measured iters. Models a session-start
+     * prewarm: the one-time QML-compile/model-build cost is paid here instead
+     * of on the user's first click. */
+    int prewarm = arg_int(argc, argv, 17, 0);
+    int menu_mode = (menu_px_x > 0 && menu_px_y > 0);
     uint32 xres, yres;
     int icon_px, icon_py, away_px, away_py;
     int rx, ry;
@@ -352,7 +464,7 @@ int main(int argc, char **argv)
 
     long long timeout_us = timeout_ms * 1000;
 
-    for (int ev = 0; ev < 3; ev++) {
+    for (int ev = 0; do_hover && ev < 3; ev++) {
         const char *name = ev == 0 ? "hover_in" :
                            ev == 1 ? "hover_out" : "click";
         long long lat[64];
@@ -453,6 +565,168 @@ int main(int argc, char **argv)
                    MS_F(mn), MS_I(mx), MS_F(mx), MS_I(pmean), MS_F(pmean),
                    rx, ry, rw, rh);
         }
+    }
+
+    /* --- menu mode: click Kickoff -> menu-body ROI open, click-away -> close --- */
+    if (menu_mode) {
+        struct fb_gpu_scanout_read mreq;
+        uint32 *mpix;
+        uint32 mnpix;
+        int mrw = menu_rw, mrh = menu_rh;
+        int mrx, mry;
+        long long open_lat[64], close_lat[64];
+        int open_n = 0, close_n = 0;
+
+        if (mrw < 4) mrw = 4;
+        if (mrh < 4) mrh = 4;
+        if (menu_iters < 1) menu_iters = 1;
+        if (menu_iters > 64) menu_iters = 64;
+
+        mrx = menu_px_x - mrw / 2;
+        mry = menu_px_y - mrh / 2;
+        if (mrx < 0) mrx = 0;
+        if (mry < 0) mry = 0;
+        if ((uint32)(mrx + mrw) > xres) mrx = (int)xres - mrw;
+        if ((uint32)(mry + mrh) > yres) mry = (int)yres - mrh;
+        if (mrx < 0) mrx = 0;
+        if (mry < 0) mry = 0;
+
+        mnpix = (uint32)mrw * (uint32)mrh;
+        mpix = malloc(mnpix * sizeof(uint32));
+        if (!mpix) {
+            fprintf(2, "hoverprobe: menu roi allocation failed\n");
+            return 1;
+        }
+        memset(&mreq, 0, sizeof(mreq));
+        mreq.x = (uint32)mrx;
+        mreq.y = (uint32)mry;
+        mreq.w = (uint32)mrw;
+        mreq.h = (uint32)mrh;
+        mreq.pitch = (uint32)mrw * sizeof(uint32);
+        mreq.pixels = (uint64)mpix;
+
+        printf("hoverprobe menu_config icon_abs16=%d,%d away_abs16=%d,%d "
+               "menu_rect=%d,%d,%d,%d menu_iters=%d\n",
+               icon_x, icon_y, away_x, away_y, mrx, mry, mrw, mrh, menu_iters);
+
+        /* Start from a known-closed state (click empty desktop to dismiss). */
+        inject_abs(away_x, away_y, 0);
+        sleep_ms(settle_ms);
+        inject_abs(away_x, away_y, 1);
+        sleep_ms(40);
+        inject_abs(away_x, away_y, 0);
+        sleep_ms(settle_ms);
+
+        /* Optional prewarm: open Kickoff once, wait long enough for the full
+         * QML component + app/recents models to build, then close. Unmeasured. */
+        if (prewarm) {
+            long long t0 = monotonic_us();
+            inject_abs(icon_x, icon_y, 1);
+            sleep_ms(40);
+            inject_abs(icon_x, icon_y, 0);       /* open */
+            sleep_ms(4000);                       /* pay cold QML/model cost */
+            inject_abs(away_x, away_y, 1);
+            sleep_ms(40);
+            inject_abs(away_x, away_y, 0);       /* close */
+            sleep_ms(settle_ms);
+            printf("hoverprobe menu_prewarm done elapsed_ms=%lld.%03lld\n",
+                   MS_I(monotonic_us() - t0), MS_F(monotonic_us() - t0));
+        }
+
+        for (int it = 0; it < menu_iters; it++) {
+            long long t_inject, t_change = 0, period = 0, samples = 0;
+            uint64 base;
+            int r;
+            const char *res;
+
+            /* ---- OPEN: menu is closed; click the icon, watch the menu body ---- */
+            inject_abs(away_x, away_y, 0);
+            sleep_ms(settle_ms);
+            wait_roi_stable(settle_ms);      /* let the icon-ROI settle */
+            if (sample_roi_req(&mreq, mpix, mnpix, &base) < 0) {
+                fprintf(2, "hoverprobe: menu baseline readback failed\n");
+                return 1;
+            }
+            t_inject = monotonic_us();
+            inject_abs(icon_x, icon_y, 1);   /* press Kickoff ... */
+            sleep_ms(40);
+            inject_abs(icon_x, icon_y, 0);   /* ... and release => complete click */
+            r = poll_menu_change(&mreq, mpix, mnpix, base, t_inject, timeout_us,
+                                 &t_change, &period, &samples);
+            if (r < 0) { fprintf(2, "hoverprobe: menu open poll failed\n"); return 1; }
+            res = (r == 1) ? "CHANGED" : "TIMEOUT";
+            {
+                long long latency = t_change - t_inject;
+                printf("hoverprobe event=menu_open iter=%d t_inject_ms=%lld.%03lld "
+                       "t_first_change_ms=%lld.%03lld latency_ms=%lld.%03lld "
+                       "sampler_period_ms=%lld.%03lld samples=%lld result=%s "
+                       "temperature=%s menu_rect=%d,%d,%d,%d\n",
+                       it + 1, MS_I(t_inject), MS_F(t_inject), MS_I(t_change),
+                       MS_F(t_change), MS_I(latency), MS_F(latency), MS_I(period),
+                       MS_F(period), samples, res, it == 0 ? "first" : "repeat",
+                       mrx, mry, mrw, mrh);
+                if (r == 1) open_lat[open_n++] = latency;
+            }
+
+            /* Let the menu finish painting before closing. */
+            sleep_ms(settle_ms);
+            wait_roi_stable(settle_ms);
+
+            /* Proof capture: dump the full frame while the menu is open (iter 1). */
+            if (it == 0)
+                dump_full_frame_ppm("/kde-plasma-menu-open-proof.ppm", xres, yres);
+
+            /* ---- CLOSE: menu is open; click empty desktop, watch the body clear ---- */
+            if (sample_roi_req(&mreq, mpix, mnpix, &base) < 0) {
+                fprintf(2, "hoverprobe: menu close baseline readback failed\n");
+                return 1;
+            }
+            t_inject = monotonic_us();
+            inject_abs(away_x, away_y, 1);   /* click empty desktop ... */
+            sleep_ms(40);
+            inject_abs(away_x, away_y, 0);   /* ... and release => dismiss */
+            r = poll_menu_change(&mreq, mpix, mnpix, base, t_inject, timeout_us,
+                                 &t_change, &period, &samples);
+            if (r < 0) { fprintf(2, "hoverprobe: menu close poll failed\n"); return 1; }
+            res = (r == 1) ? "CHANGED" : "TIMEOUT";
+            {
+                long long latency = t_change - t_inject;
+                printf("hoverprobe event=menu_close iter=%d t_inject_ms=%lld.%03lld "
+                       "t_first_change_ms=%lld.%03lld latency_ms=%lld.%03lld "
+                       "sampler_period_ms=%lld.%03lld samples=%lld result=%s "
+                       "temperature=%s menu_rect=%d,%d,%d,%d\n",
+                       it + 1, MS_I(t_inject), MS_F(t_inject), MS_I(t_change),
+                       MS_F(t_change), MS_I(latency), MS_F(latency), MS_I(period),
+                       MS_F(period), samples, res, it == 0 ? "first" : "repeat",
+                       mrx, mry, mrw, mrh);
+                if (r == 1) close_lat[close_n++] = latency;
+            }
+            sleep_ms(settle_ms);
+        }
+
+        {
+            long long med = 0, mn = 0, mx = 0;
+            if (open_n > 0) {
+                sort_ll(open_lat, open_n);
+                med = open_lat[open_n / 2]; mn = open_lat[0]; mx = open_lat[open_n - 1];
+            }
+            printf("hoverprobe summary event=menu_open n=%d changed=%d "
+                   "latency_median_ms=%lld.%03lld latency_min_ms=%lld.%03lld "
+                   "latency_max_ms=%lld.%03lld menu_rect=%d,%d,%d,%d\n",
+                   menu_iters, open_n, MS_I(med), MS_F(med), MS_I(mn), MS_F(mn),
+                   MS_I(mx), MS_F(mx), mrx, mry, mrw, mrh);
+            med = mn = mx = 0;
+            if (close_n > 0) {
+                sort_ll(close_lat, close_n);
+                med = close_lat[close_n / 2]; mn = close_lat[0]; mx = close_lat[close_n - 1];
+            }
+            printf("hoverprobe summary event=menu_close n=%d changed=%d "
+                   "latency_median_ms=%lld.%03lld latency_min_ms=%lld.%03lld "
+                   "latency_max_ms=%lld.%03lld menu_rect=%d,%d,%d,%d\n",
+                   menu_iters, close_n, MS_I(med), MS_F(med), MS_I(mn), MS_F(mn),
+                   MS_I(mx), MS_F(mx), mrx, mry, mrw, mrh);
+        }
+        free(mpix);
     }
 
     printf("hoverprobe done status=PASS\n");
