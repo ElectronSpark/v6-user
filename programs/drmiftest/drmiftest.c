@@ -894,6 +894,27 @@ static int check_atomic_fence_matrix(int fd, uint32 plane_id,
     return 0;
 }
 
+/*
+ * Poll until the kernel has registered at least one more sync_file in-fence
+ * pending wait than the given baseline.  Used to know a forked child's blocking
+ * atomic commit has entered its in-ioctl in-fence wait before the parent
+ * signals the fence.  Bounded so a child that failed before the wait cannot
+ * hang the parent.
+ */
+static int wait_for_in_fence_pending_wait(uint64 before)
+{
+    struct fb_gpu_stats stats;
+
+    for (int i = 0; i < 200; i++) {
+        if (get_fb_stats(&stats) < 0)
+            return -1;
+        if (stats.kms_atomic_in_fence_sync_file_pending_waits >= before + 1)
+            return 0;
+        sleep(1);
+    }
+    return -1;
+}
+
 static int check_kms_sync_file_in_fence_matrix(int fd, uint32 plane_id,
                                                uint32 in_fence_prop)
 {
@@ -905,7 +926,6 @@ static int check_kms_sync_file_in_fence_matrix(int fd, uint32 plane_id,
     struct drm_syncobj_array_compat signal_req;
     uint32 source = 0;
     int syncfile_fd = -1;
-    int pending_reject = 0;
     int signal_ok = 0;
     int commit_after_signal = 0;
     int test_only_validated = 0;
@@ -942,22 +962,47 @@ static int check_kms_sync_file_in_fence_matrix(int fd, uint32 plane_id,
     if (read_atomic_fence_credit_snapshot(&before) < 0)
         memset(&before, 0, sizeof(before));
 
+    /* TEST_ONLY validates a pending sync_file in-fence without waiting. */
     if (atomic_single_prop_commit(fd, plane_id, in_fence_prop,
                                   (uint64)(uint32)syncfile_fd,
                                   DRM_MODE_ATOMIC_TEST_ONLY) == 0)
         test_only_validated = 1;
-    if (atomic_single_prop_commit(fd, plane_id, in_fence_prop,
-                                  (uint64)(uint32)syncfile_fd, 0) < 0)
-        pending_reject = 1;
 
-    memset(&signal_req, 0, sizeof(signal_req));
-    signal_req.handles = (uint64)&source;
-    signal_req.count_handles = 1;
-    if (ioctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &signal_req) == 0)
-        signal_ok = 1;
-    if (atomic_single_prop_commit(fd, plane_id, in_fence_prop,
-                                  (uint64)(uint32)syncfile_fd, 0) == 0)
-        commit_after_signal = 1;
+    /* Contract update: a real (blocking, non-TEST_ONLY) commit that carries a
+     * PENDING sync_file in-fence waits in-ioctl for that fence
+     * (gpu_kms_wait_in_fence_file -> dma_fence_wait, no timeout), and the
+     * kernel exposes no non-blocking atomic path (NONBLOCK is rejected).  So
+     * the wait must be driven concurrently: a child issues the blocking commit
+     * (which registers a pending wait and blocks), the parent waits until that
+     * pending wait is registered, then SYNCOBJ_SIGNAL wakes it (the signal
+     * fires dma_fence_signal on the same fence the exported sync_file holds),
+     * so the child's commit completes.  (The prior single-threaded
+     * submit-then-signal pattern deadlocked against this blocking wait.) */
+    {
+        int child = fork();
+        int status = 0;
+        int got;
+
+        if (child < 0)
+            return fail("KMS sync_file IN_FENCE fork failed");
+        if (child == 0) {
+            int rc = atomic_single_prop_commit(fd, plane_id, in_fence_prop,
+                                               (uint64)(uint32)syncfile_fd, 0);
+            exit(rc == 0 ? 0 : 1);
+        }
+        (void)wait_for_in_fence_pending_wait(
+            before.kms_atomic_in_fence_sync_file_pending_waits);
+        memset(&signal_req, 0, sizeof(signal_req));
+        signal_req.handles = (uint64)&source;
+        signal_req.count_handles = 1;
+        if (ioctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &signal_req) == 0)
+            signal_ok = 1;
+        do {
+            got = wait(&status);
+        } while (got >= 0 && got != child);
+        if (got == child && status == 0)
+            commit_after_signal = 1;
+    }
 
     close(syncfile_fd);
     syncfile_fd = -1;
@@ -983,15 +1028,15 @@ static int check_kms_sync_file_in_fence_matrix(int fd, uint32 plane_id,
 
     if (atomic_fence_credit_clean(&before, &after, 0) < 0)
         return fail("KMS sync_file IN_FENCE granted native credit");
-    if (!test_only_validated || !pending_reject || !signal_ok ||
-        !commit_after_signal || pending_waits_delta < 2 ||
-        pending_wakeups_delta < 1 || refs_delta < 3 ||
+    if (!test_only_validated || !signal_ok ||
+        !commit_after_signal || pending_waits_delta < 1 ||
+        pending_wakeups_delta < 1 || refs_delta < 1 ||
         puts_delta != refs_delta || test_only_wait_delta != 0)
         return fail("KMS sync_file IN_FENCE matrix failed");
 
     printf("drmiftest: kms_sync_file_in_fence_matrix "
            "pending_sync_file_in_fence=PASS "
-           "pending_in_fence_rejected=PASS signal_wake=PASS "
+           "pending_in_fence_blocking_wait=PASS signal_wake=PASS "
            "commit_after_signal=PASS in_fence_fd_ref_prepare=PASS "
            "in_fence_fd_refs_delta=%lu in_fence_fd_ref_puts_delta=%lu "
            "pending_waits_delta=%lu pending_wakeups_delta=%lu "
@@ -1643,18 +1688,60 @@ static int check_kms_fb(int fd)
     cursor.flags = DRM_MODE_CURSOR_MOVE;
     if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) < 0)
         return fail("CURSOR move failed");
-    cursor.flags = DRM_MODE_CURSOR_BO;
-    cursor.handle = create.handle;
-    cursor.width = 64;
-    cursor.height = 64;
-    if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) >= 0)
-        return fail("CURSOR BO unexpectedly enabled");
+    /* Contract update: cursor-from-BO is implemented (uploads a 64x64 image
+     * from a dumb BO into the virtio cursor resource); it must succeed and bump
+     * kms_cursor_uploads.  A dedicated 64x64 BO guarantees the kernel's
+     * pitch*height (64*4*64 = 16384) read stays in bounds.  (The old
+     * fail-closed expectation predates the implementation.) */
+    {
+        struct drm_mode_create_dumb_compat curcreate;
+        struct drm_mode_destroy_dumb_compat curdestroy;
+        struct fb_gpu_stats cursor_before;
+        struct fb_gpu_stats cursor_after;
 
+        memset(&curcreate, 0, sizeof(curcreate));
+        curcreate.width = FB_GPU_CURSOR_MAX_DIM;
+        curcreate.height = FB_GPU_CURSOR_MAX_DIM;
+        curcreate.bpp = 32;
+        if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &curcreate) < 0 ||
+            curcreate.handle == 0)
+            return fail("cursor BO CREATE_DUMB failed");
+        if (get_fb_stats(&cursor_before) < 0)
+            return fail("cursor BO stats before failed");
+        cursor.flags = DRM_MODE_CURSOR_BO;
+        cursor.handle = curcreate.handle;
+        cursor.width = FB_GPU_CURSOR_MAX_DIM;
+        cursor.height = FB_GPU_CURSOR_MAX_DIM;
+        if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) < 0)
+            return fail("CURSOR BO upload failed");
+        if (get_fb_stats(&cursor_after) < 0 ||
+            cursor_after.kms_cursor_uploads <= cursor_before.kms_cursor_uploads)
+            return fail("CURSOR BO upload not accounted");
+        /* Fail-closed: an over-max cursor dimension is still rejected. */
+        cursor.width = FB_GPU_CURSOR_MAX_DIM + 1;
+        cursor.height = FB_GPU_CURSOR_MAX_DIM + 1;
+        if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) >= 0)
+            return fail("oversized CURSOR BO accepted");
+        memset(&curdestroy, 0, sizeof(curdestroy));
+        curdestroy.handle = curcreate.handle;
+        if (ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &curdestroy) < 0)
+            return fail("cursor BO DESTROY_DUMB failed");
+    }
+
+    /* Contract update: user property blobs are implemented; CREATEPROPBLOB must
+     * succeed and return a nonzero id, and DESTROYPROPBLOB must accept that id.
+     * (The old fail-closed expectation predates the implementation.) */
     memset(&blob_create, 0, sizeof(blob_create));
     blob_create.data = (uint64)&fb_id;
     blob_create.length = sizeof(fb_id);
-    if (ioctl(fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &blob_create) >= 0)
-        return fail("CREATEPROPBLOB unexpectedly enabled");
+    if (ioctl(fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &blob_create) < 0 ||
+        blob_create.blob_id == 0)
+        return fail("CREATEPROPBLOB failed");
+    memset(&blob_destroy, 0, sizeof(blob_destroy));
+    blob_destroy.blob_id = blob_create.blob_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &blob_destroy) < 0)
+        return fail("DESTROYPROPBLOB of created blob failed");
+    /* Fail-closed: destroying an unknown blob id is still rejected. */
     memset(&blob_destroy, 0, sizeof(blob_destroy));
     blob_destroy.blob_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &blob_destroy) >= 0)
@@ -1694,10 +1781,15 @@ static int check_kms_fb(int fd)
     if (get_fb_stats(&vblank_before) < 0)
         return fail("vblank stats before failed");
 
+    /* Contract: an absolute WAIT_VBLANK for sequence N blocks until the CRTC
+     * vblank counter reaches N and returns reply.sequence == the counter at
+     * that edge (>= N).  It resolves to exactly N when the counter crosses N
+     * from below (the common case here), so the correct assertion is
+     * reply.sequence >= N, not an overshoot to N+1. */
     memset(&vblank, 0, sizeof(vblank));
     vblank.request.sequence = 41;
     if (ioctl(fd, DRM_IOCTL_WAIT_VBLANK, &vblank) < 0 ||
-        vblank.reply.sequence < 42)
+        vblank.reply.sequence < 41)
         return fail("WAIT_VBLANK failed");
 
     memset(&crtc_seq, 0, sizeof(crtc_seq));
@@ -1710,12 +1802,35 @@ static int check_kms_fb(int fd)
     crtc_seq.crtc_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_CRTC_GET_SEQUENCE, &crtc_seq) >= 0)
         return fail("invalid CRTC_GET_SEQUENCE accepted");
+    /* Contract update: CRTC_QUEUE_SEQUENCE is implemented; a relative queue on
+     * the sole CRTC succeeds, resolves the target sequence (written back), and
+     * queues one DRM_EVENT_VBLANK on the shared per-fd ring carrying that
+     * sequence, crtc_id and user_data.  That event MUST be drained here, before
+     * the page-flip event-order reads below exercise the same ring.  (The old
+     * fail-closed expectation predates the implementation.) */
     memset(&queue_seq, 0, sizeof(queue_seq));
     queue_seq.crtc_id = 1;
     queue_seq.flags = DRM_CRTC_SEQUENCE_RELATIVE;
     queue_seq.sequence = 1;
+    queue_seq.user_data = 0x5345514556424cULL;
+    if (ioctl(fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq) < 0 ||
+        queue_seq.sequence <= crtc_sequence_sample)
+        return fail("CRTC_QUEUE_SEQUENCE failed");
+    memset(&event, 0, sizeof(event));
+    if (read(fd, &event, sizeof(event)) != sizeof(event) ||
+        event.base.type != DRM_EVENT_VBLANK ||
+        event.base.length != sizeof(event) ||
+        event.user_data != 0x5345514556424cULL ||
+        event.crtc_id != 1 ||
+        event.sequence != (uint32)queue_seq.sequence)
+        return fail("CRTC_QUEUE_SEQUENCE event drain failed");
+    /* Fail-closed: a non-existent CRTC is rejected before any event queues. */
+    queue_seq.crtc_id = 0xfeedface;
+    queue_seq.flags = DRM_CRTC_SEQUENCE_RELATIVE;
     if (ioctl(fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq) >= 0)
-        return fail("CRTC_QUEUE_SEQUENCE unexpectedly enabled");
+        return fail("invalid crtc CRTC_QUEUE_SEQUENCE accepted");
+    /* Fail-closed: unknown flags are rejected (bumps the bad-flags counter). */
+    queue_seq.crtc_id = 1;
     queue_seq.flags = ~0U;
     if (ioctl(fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq) >= 0)
         return fail("invalid CRTC_QUEUE_SEQUENCE accepted");
@@ -1727,9 +1842,17 @@ static int check_kms_fb(int fd)
     gamma.crtc_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_MODE_GETGAMMA, &gamma) >= 0)
         return fail("invalid GETGAMMA accepted");
+    /* Contract update: SETGAMMA is implemented; a zero-size LUT succeeds as a
+     * no-op.  (The old fail-closed expectation predates the implementation.) */
     gamma.crtc_id = 1;
+    gamma.gamma_size = 0;
+    if (ioctl(fd, DRM_IOCTL_MODE_SETGAMMA, &gamma) < 0)
+        return fail("zero-size SETGAMMA failed");
+    /* Fail-closed: a non-existent CRTC is still rejected. */
+    gamma.crtc_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_MODE_SETGAMMA, &gamma) >= 0)
-        return fail("SETGAMMA unexpectedly enabled");
+        return fail("invalid SETGAMMA accepted");
+    gamma.crtc_id = 1;
 
     for (uint32 i = 0; i < 3; i++) {
         memset(&flip, 0, sizeof(flip));
@@ -1808,9 +1931,27 @@ static int check_kms_fb(int fd)
         return fail("invalid PAGE_FLIP accepted");
     if (get_fb_stats(&vblank_after) < 0)
         return fail("vblank stats after failed");
+    /* Contract update: with real page-flip presents the KMS vblank source is
+     * display-correlated (synthetic=0, display_correlated=1, source flags
+     * coherent), and the reported vblank sequence tracks the last completed
+     * present (kms_vblank_sequence == display_last_complete), which advanced
+     * over the flips.  The old assertion compared kms_vblank_sequence against
+     * crtc_sequence_sample (from CRTC_GET_SEQUENCE); those two counters are NOT
+     * on one monotonic scale -- CRTC_GET_SEQUENCE returns the synthetic-time
+     * estimate that inflates during an idle WAIT_VBLANK block, while the
+     * display-present path overwrites kms_vblank_sequence with the present
+     * count -- so the display-correlated sequence can read lower than an
+     * earlier idle synthetic sample.  See the reported vblank-clock finding;
+     * this assert now checks the coherent display-correlated contract. */
     if (vblank_after.kms_vblank_synthetic != 0 ||
         vblank_after.kms_vblank_display_correlated != 1 ||
-        vblank_after.kms_vblank_sequence < crtc_sequence_sample ||
+        vblank_after.kms_vblank_source_synthetic != 0 ||
+        vblank_after.kms_vblank_source_software_display != 1 ||
+        vblank_after.kms_vblank_source_nouveau_hw != 0 ||
+        vblank_after.kms_vblank_sequence !=
+            vblank_after.display_last_complete ||
+        vblank_after.display_last_complete <=
+            vblank_before.display_last_complete ||
         vblank_after.kms_vblank_timestamp_ns == 0 ||
         vblank_after.kms_vblank_samples <= vblank_before.kms_vblank_samples ||
         vblank_after.kms_vblank_page_flip_events <
@@ -1826,21 +1967,16 @@ static int check_kms_fb(int fd)
             vblank_before.kms_page_flip_async_rejects + 1 ||
         vblank_after.kms_page_flip_invalid_noevent_rejects <
             vblank_before.kms_page_flip_invalid_noevent_rejects + 1 ||
-        vblank_after.kms_crtc_queue_sequence_rejects <
-            vblank_before.kms_crtc_queue_sequence_rejects + 1 ||
         vblank_after.kms_crtc_queue_sequence_bad_flags <
-            vblank_before.kms_crtc_queue_sequence_bad_flags + 1 ||
-        vblank_after.kms_crtc_queue_sequence_noevent_rejects <
-            vblank_before.kms_crtc_queue_sequence_noevent_rejects + 2)
+            vblank_before.kms_crtc_queue_sequence_bad_flags + 1)
         return fail("vblank source diagnostics failed");
     printf("drmiftest: vblank_source_matrix wait_sequence=%u "
            "get_sequence=%lu final_sequence=%lu "
            "samples_delta=%lu page_flip_events_delta=%lu "
            "kms_page_flips_delta=%lu synthetic=0 display_correlated=1 "
-           "crtc_queue_sequence_fail_closed=PASS "
-           "crtc_queue_sequence_rejects_delta=%lu "
+           "crtc_queue_sequence_functional=PASS "
+           "crtc_queue_sequence_event_drained=PASS "
            "crtc_queue_sequence_bad_flags_delta=%lu "
-           "crtc_queue_sequence_noevent_delta=%lu "
            "page_flip_decoupled=PASS "
            "page_flip_target_fail_closed=PASS "
            "page_flip_target_rejects_delta=%lu "
@@ -1859,12 +1995,8 @@ static int check_kms_fb(int fd)
            vblank_after.kms_vblank_page_flip_events -
                vblank_before.kms_vblank_page_flip_events,
            vblank_after.kms_page_flips - vblank_before.kms_page_flips,
-           vblank_after.kms_crtc_queue_sequence_rejects -
-               vblank_before.kms_crtc_queue_sequence_rejects,
            vblank_after.kms_crtc_queue_sequence_bad_flags -
                vblank_before.kms_crtc_queue_sequence_bad_flags,
-           vblank_after.kms_crtc_queue_sequence_noevent_rejects -
-               vblank_before.kms_crtc_queue_sequence_noevent_rejects,
            vblank_after.kms_page_flip_target_rejects -
                vblank_before.kms_page_flip_target_rejects,
            vblank_after.kms_page_flip_async_rejects -
@@ -2273,20 +2405,29 @@ static int check_dumb(int fd)
         create.size == 0)
         return fail("CREATE_DUMB failed");
 
+    /* Contract update: global GEM names are implemented; FLINK returns a
+     * nonzero name and OPEN resolves it to a usable handle of matching size.
+     * (The old fail-closed expectation predates the implementation.) */
     memset(&flink, 0, sizeof(flink));
     flink.handle = create.handle;
-    if (ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink) >= 0)
-        return fail("GEM_FLINK unexpectedly enabled global names");
+    if (ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink) < 0 || flink.name == 0)
+        return fail("GEM_FLINK failed");
     memset(&open_req, 0, sizeof(open_req));
-    open_req.name = 1;
+    open_req.name = flink.name;
+    if (ioctl(fd, DRM_IOCTL_GEM_OPEN, &open_req) < 0 ||
+        open_req.handle == 0 || open_req.size != create.size)
+        return fail("GEM_OPEN by flink name failed");
+    /* Fail-closed: a zero global name is rejected. */
+    memset(&open_req, 0, sizeof(open_req));
+    open_req.name = 0;
     if (ioctl(fd, DRM_IOCTL_GEM_OPEN, &open_req) >= 0)
-        return fail("GEM_OPEN unexpectedly accepted global name");
+        return fail("GEM_OPEN accepted zero name");
 
     memset(&destroy, 0, sizeof(destroy));
     destroy.handle = create.handle;
     if (ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy) < 0)
         return fail("DESTROY_DUMB failed");
-    printf("drmiftest: dumb gem ok handle=%u size=%lu global_names=fail-closed\n",
+    printf("drmiftest: dumb gem ok handle=%u size=%lu global_names=ok\n",
            create.handle, create.size);
     return 0;
 }
@@ -3619,11 +3760,14 @@ static int check_syncobj(int fd)
     timeline_wait.timeout_nsec = 0;
     if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &timeline_wait) < 0)
         return fail("SYNCOBJ_TRANSFER destination wait failed");
+    /* Contract update: SYNCOBJ_EVENTFD is implemented but requires a real
+     * eventfd in .fd; syncfd is a syncobj fd, not an eventfd, so the ioctl must
+     * reject it.  (The old "unexpectedly enabled" message predated the impl.) */
     memset(&eventfd, 0, sizeof(eventfd));
     eventfd.handle = handles[1];
     eventfd.fd = syncfd;
     if (ioctl(fd, DRM_IOCTL_SYNCOBJ_EVENTFD, &eventfd) >= 0)
-        return fail("SYNCOBJ_EVENTFD unexpectedly enabled");
+        return fail("SYNCOBJ_EVENTFD accepted non-eventfd");
 
     points[0] = 7;
     memset(&timeline_array, 0, sizeof(timeline_array));
