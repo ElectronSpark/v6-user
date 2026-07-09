@@ -290,6 +290,35 @@ static void dump_full_frame_ppm(const char *path, uint32 xres, uint32 yres)
     free(rgb);
 }
 
+/* Wait for an EXPLICIT region of interest to stop changing (settle). */
+static void wait_req_stable(struct fb_gpu_scanout_read *req, uint32 *pixels,
+                            uint32 npix, long long settle_ms)
+{
+    long long deadline = monotonic_us() + settle_ms * 1000;
+    uint64 prev = 0;
+    int have_prev = 0;
+    int stable = 0;
+
+    for (;;) {
+        uint64 h;
+        long long now = monotonic_us();
+
+        if (sample_roi_req(req, pixels, npix, &h) < 0)
+            break;
+        if (have_prev && h == prev)
+            stable++;
+        else
+            stable = 0;
+        prev = h;
+        have_prev = 1;
+        if (stable >= 3)
+            break;
+        if (now >= deadline)
+            break;
+        sleep_ms(15);
+    }
+}
+
 /* --- median helper ------------------------------------------------------- */
 
 static void sort_ll(long long *a, int n)
@@ -303,6 +332,249 @@ static void sort_ll(long long *a, int n)
         }
         a[j + 1] = key;
     }
+}
+
+/* Integer sqrt (binary search); inputs are variances of us latencies. */
+static long long isqrt_ll(long long v)
+{
+    long long lo = 0, hi = 40000000; /* 40s in us: > any latency we time */
+
+    if (v <= 0)
+        return 0;
+    while (lo < hi) {
+        long long mid = lo + (hi - lo + 1) / 2;
+
+        if (mid <= v / mid)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+    return lo;
+}
+
+/* Variance-characterised summary for the tooltip protocol (median/p90/max/
+ * stddev are the deliverable for the tooltip-latency metric). Sorts lat[]. */
+static void print_tooltip_summary(const char *name, long long *lat, int n,
+                                  int iters, int mrx, int mry, int mrw,
+                                  int mrh)
+{
+    long long med = 0, mn = 0, mx = 0, p90 = 0, sd = 0;
+
+    if (n > 0) {
+        long long mean = 0, var = 0;
+        int i90 = (9 * n) / 10;
+
+        sort_ll(lat, n);
+        if (i90 >= n)
+            i90 = n - 1;
+        med = lat[n / 2];
+        mn = lat[0];
+        mx = lat[n - 1];
+        p90 = lat[i90];
+        for (int i = 0; i < n; i++)
+            mean += lat[i];
+        mean /= n;
+        for (int i = 0; i < n; i++) {
+            long long d = lat[i] - mean;
+
+            var += d * d;
+        }
+        var /= n;
+        sd = isqrt_ll(var);
+    }
+    printf("hoverprobe summary event=%s n=%d changed=%d "
+           "latency_median_ms=%lld.%03lld latency_p90_ms=%lld.%03lld "
+           "latency_min_ms=%lld.%03lld latency_max_ms=%lld.%03lld "
+           "latency_stddev_ms=%lld.%03lld tip_rect=%d,%d,%d,%d\n",
+           name, iters, n, MS_I(med), MS_F(med), MS_I(p90), MS_F(p90),
+           MS_I(mn), MS_F(mn), MS_I(mx), MS_F(mx), MS_I(sd), MS_F(sd),
+           mrx, mry, mrw, mrh);
+}
+
+/* --- tooltip (hover) protocol --------------------------------------------
+ * Measures the taskbar-icon TOOLTIP popup: move the pointer onto the icon
+ * (no click) and time until the tip ROI above the icon first changes
+ * (tooltip appears = Plasma ToolTipArea show-delay + tooltip QML + kwin
+ * popup schedule), then move away and time the ROI reverting (hide). An
+ * optional A->B switch phase re-hovers icon A until its tooltip shows, then
+ * moves straight to icon B while the dialog is still visible.
+ */
+static void run_tooltip_protocol(struct fb_gpu_scanout_read *mreq,
+                                 uint32 *mpix, uint32 mnpix,
+                                 int mrx, int mry, int mrw, int mrh,
+                                 int icon_x, int icon_y,
+                                 int icon2_x, int icon2_y,
+                                 int away_x, int away_y,
+                                 int iters, long long settle_ms,
+                                 long long timeout_us,
+                                 uint32 xres, uint32 yres)
+{
+    long long open_lat[64], close_lat[64], switch_lat[64];
+    int open_n = 0, close_n = 0, switch_n = 0;
+    int do_switch = (icon2_x > 0 && icon2_y > 0);
+
+    printf("hoverprobe tooltip_config icon_abs16=%d,%d icon2_abs16=%d,%d "
+           "away_abs16=%d,%d tip_rect=%d,%d,%d,%d iters=%d protocol=hover\n",
+           icon_x, icon_y, icon2_x, icon2_y, away_x, away_y,
+           mrx, mry, mrw, mrh, iters);
+
+    /* Known state: pointer away from the taskbar, no tooltip visible. */
+    inject_abs(away_x, away_y, 0);
+    sleep_ms(settle_ms);
+
+    for (int it = 0; it < iters; it++) {
+        long long t_inject, t_change = 0, period = 0, samples = 0;
+        uint64 base;
+        int r;
+
+        /* ---- OPEN: pointer rests away; move onto the icon; the tooltip
+         * must appear in the tip ROI (show-delay + render + schedule). */
+        inject_abs(away_x, away_y, 0);
+        sleep_ms(settle_ms);
+        wait_req_stable(mreq, mpix, mnpix, settle_ms);
+        if (sample_roi_req(mreq, mpix, mnpix, &base) < 0) {
+            fprintf(2, "hoverprobe: tooltip baseline readback failed\n");
+            return;
+        }
+        t_inject = monotonic_us();
+        inject_abs(icon_x, icon_y, 0);       /* hover, no click */
+        r = poll_menu_change(mreq, mpix, mnpix, base, t_inject, timeout_us,
+                             &t_change, &period, &samples);
+        if (r < 0) {
+            fprintf(2, "hoverprobe: tooltip open poll failed\n");
+            return;
+        }
+        {
+            long long latency = t_change - t_inject;
+
+            printf("hoverprobe event=tooltip_open iter=%d "
+                   "t_inject_ms=%lld.%03lld t_first_change_ms=%lld.%03lld "
+                   "latency_ms=%lld.%03lld sampler_period_ms=%lld.%03lld "
+                   "samples=%lld result=%s temperature=%s "
+                   "tip_rect=%d,%d,%d,%d\n",
+                   it + 1, MS_I(t_inject), MS_F(t_inject), MS_I(t_change),
+                   MS_F(t_change), MS_I(latency), MS_F(latency), MS_I(period),
+                   MS_F(period), samples, r == 1 ? "CHANGED" : "TIMEOUT",
+                   it == 0 ? "first" : "repeat", mrx, mry, mrw, mrh);
+            if (r == 1)
+                open_lat[open_n++] = latency;
+        }
+
+        /* Let the tooltip finish its fade-in before measuring the hide. */
+        sleep_ms(350);
+        wait_req_stable(mreq, mpix, mnpix, settle_ms);
+        if (it == 0)
+            dump_full_frame_ppm("/kde-plasma-tooltip-proof.ppm", xres, yres);
+
+        /* ---- CLOSE: tooltip visible; move away; ROI reverts on hide. */
+        if (sample_roi_req(mreq, mpix, mnpix, &base) < 0) {
+            fprintf(2, "hoverprobe: tooltip close baseline readback failed\n");
+            return;
+        }
+        t_inject = monotonic_us();
+        inject_abs(away_x, away_y, 0);
+        r = poll_menu_change(mreq, mpix, mnpix, base, t_inject, timeout_us,
+                             &t_change, &period, &samples);
+        if (r < 0) {
+            fprintf(2, "hoverprobe: tooltip close poll failed\n");
+            return;
+        }
+        {
+            long long latency = t_change - t_inject;
+
+            printf("hoverprobe event=tooltip_close iter=%d "
+                   "t_inject_ms=%lld.%03lld t_first_change_ms=%lld.%03lld "
+                   "latency_ms=%lld.%03lld sampler_period_ms=%lld.%03lld "
+                   "samples=%lld result=%s temperature=%s "
+                   "tip_rect=%d,%d,%d,%d\n",
+                   it + 1, MS_I(t_inject), MS_F(t_inject), MS_I(t_change),
+                   MS_F(t_change), MS_I(latency), MS_F(latency), MS_I(period),
+                   MS_F(period), samples, r == 1 ? "CHANGED" : "TIMEOUT",
+                   it == 0 ? "first" : "repeat", mrx, mry, mrw, mrh);
+            if (r == 1)
+                close_lat[close_n++] = latency;
+        }
+        sleep_ms(settle_ms);
+        wait_req_stable(mreq, mpix, mnpix, settle_ms);
+    }
+
+    /* ---- SWITCH: hover A until its tooltip shows, then move directly to
+     * icon B while the dialog is still visible (per-icon cold question). */
+    if (do_switch) {
+        for (int it = 0; it < iters; it++) {
+            long long t_inject, t_change = 0, period = 0, samples = 0;
+            uint64 base;
+            int r;
+
+            /* Arm: away -> stable -> hover A -> wait for A's tooltip. */
+            inject_abs(away_x, away_y, 0);
+            sleep_ms(settle_ms);
+            wait_req_stable(mreq, mpix, mnpix, settle_ms);
+            if (sample_roi_req(mreq, mpix, mnpix, &base) < 0) {
+                fprintf(2, "hoverprobe: tooltip arm readback failed\n");
+                return;
+            }
+            t_inject = monotonic_us();
+            inject_abs(icon_x, icon_y, 0);
+            r = poll_menu_change(mreq, mpix, mnpix, base, t_inject,
+                                 timeout_us, &t_change, &period, &samples);
+            if (r < 0) {
+                fprintf(2, "hoverprobe: tooltip arm poll failed\n");
+                return;
+            }
+            if (r == 0) {
+                printf("hoverprobe event=tooltip_switch iter=%d "
+                       "result=ARM_TIMEOUT tip_rect=%d,%d,%d,%d\n",
+                       it + 1, mrx, mry, mrw, mrh);
+                continue;
+            }
+            sleep_ms(350);
+            wait_req_stable(mreq, mpix, mnpix, settle_ms);
+
+            /* Measured leg: A's tooltip up; move straight onto icon B. */
+            if (sample_roi_req(mreq, mpix, mnpix, &base) < 0) {
+                fprintf(2, "hoverprobe: tooltip switch readback failed\n");
+                return;
+            }
+            t_inject = monotonic_us();
+            inject_abs(icon2_x, icon2_y, 0);
+            r = poll_menu_change(mreq, mpix, mnpix, base, t_inject,
+                                 timeout_us, &t_change, &period, &samples);
+            if (r < 0) {
+                fprintf(2, "hoverprobe: tooltip switch poll failed\n");
+                return;
+            }
+            {
+                long long latency = t_change - t_inject;
+
+                printf("hoverprobe event=tooltip_switch iter=%d "
+                       "t_inject_ms=%lld.%03lld t_first_change_ms=%lld.%03lld "
+                       "latency_ms=%lld.%03lld sampler_period_ms=%lld.%03lld "
+                       "samples=%lld result=%s temperature=%s "
+                       "tip_rect=%d,%d,%d,%d\n",
+                       it + 1, MS_I(t_inject), MS_F(t_inject), MS_I(t_change),
+                       MS_F(t_change), MS_I(latency), MS_F(latency),
+                       MS_I(period), MS_F(period), samples,
+                       r == 1 ? "CHANGED" : "TIMEOUT",
+                       it == 0 ? "first" : "repeat", mrx, mry, mrw, mrh);
+                if (r == 1)
+                    switch_lat[switch_n++] = latency;
+            }
+
+            /* Dismiss fully before the next arm. */
+            inject_abs(away_x, away_y, 0);
+            sleep_ms(settle_ms);
+            wait_req_stable(mreq, mpix, mnpix, settle_ms);
+        }
+    }
+
+    print_tooltip_summary("tooltip_open", open_lat, open_n, iters,
+                          mrx, mry, mrw, mrh);
+    print_tooltip_summary("tooltip_close", close_lat, close_n, iters,
+                          mrx, mry, mrw, mrh);
+    if (do_switch)
+        print_tooltip_summary("tooltip_switch", switch_lat, switch_n, iters,
+                              mrx, mry, mrw, mrh);
 }
 
 int main(int argc, char **argv)
@@ -336,6 +608,19 @@ int main(int argc, char **argv)
      * prewarm: the one-time QML-compile/model-build cost is paid here instead
      * of on the user's first click. */
     int prewarm = arg_int(argc, argv, 17, 0);
+    /* arg 18: menu protocol. 0 (default) = click protocol (Kickoff open/close,
+     * unchanged). 1 = HOVER protocol: move the pointer ONTO the icon with no
+     * click and watch the popup ROI for the TOOLTIP that pops above the
+     * taskbar icon (Plasma ToolTipArea show-delay + render); move away and
+     * watch the ROI revert (tooltip hide). Events are emitted as
+     * tooltip_open/tooltip_close with temperature=first|repeat. */
+    int menu_protocol = arg_int(argc, argv, 18, 0);
+    /* args 19,20: OPTIONAL second icon abs16 coord for the hover protocol's
+     * A->B switch phase (hover icon A until its tooltip shows, then move
+     * straight to icon B and time the tooltip switch; answers whether tooltip
+     * cost is per-icon). 0 = skip the switch phase. */
+    int icon2_x = clamp_abs16(arg_int(argc, argv, 19, 0));
+    int icon2_y = clamp_abs16(arg_int(argc, argv, 20, 0));
     int menu_mode = (menu_px_x > 0 && menu_px_y > 0);
     uint32 xres, yres;
     int icon_px, icon_py, away_px, away_py;
@@ -608,6 +893,21 @@ int main(int argc, char **argv)
         printf("hoverprobe menu_config icon_abs16=%d,%d away_abs16=%d,%d "
                "menu_rect=%d,%d,%d,%d menu_iters=%d\n",
                icon_x, icon_y, away_x, away_y, mrx, mry, mrw, mrh, menu_iters);
+
+        /* Hover (tooltip) protocol: run it and finish; the click protocol
+         * below stays byte-identical for the default menu_protocol=0. */
+        if (menu_protocol == 1) {
+            run_tooltip_protocol(&mreq, mpix, mnpix, mrx, mry, mrw, mrh,
+                                 icon_x, icon_y, icon2_x, icon2_y,
+                                 away_x, away_y, menu_iters, settle_ms,
+                                 timeout_us, xres, yres);
+            free(mpix);
+            printf("hoverprobe done status=PASS\n");
+            free(g_pixels);
+            close(fb_fd);
+            close(mouse_fd);
+            return 0;
+        }
 
         /* Start from a known-closed state (click empty desktop to dismiss). */
         inject_abs(away_x, away_y, 0);
