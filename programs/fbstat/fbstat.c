@@ -5246,6 +5246,9 @@ int main(int argc, char *argv[])
            stats.cursor_async_submits_total,
            stats.cursor_async_coalesced_total,
            stats.cursor_async_errors_total);
+    printf("present_clock60 events_total=%lu snap_total=%lu\n",
+           stats.present_clock60_events_total,
+           stats.present_clock60_snap_total);
     close(fd);
     return 0;
 }
