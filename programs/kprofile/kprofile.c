@@ -8,6 +8,10 @@
 #define KPROFILE_USERPC_PERIOD_MAX 2147483647ULL
 #define KPROFILE_O_RDONLY 0
 
+_Static_assert(sizeof(((struct konsole_prepty_wake_record *)0)
+                          ->file_poll_capable) == sizeof(uint64),
+               "prepty file poll capability ABI");
+
 #define KPROFILE_USERPC_MAP_PID_CAP 64
 #define KPROFILE_USERPC_MAP_CAP 512
 #define KPROFILE_USERPC_MAP_PATH_LEN 160
@@ -825,7 +829,7 @@ static void print_prepty_ring(struct konsole_prepty_wake_snapshot *snap)
                "poll_revents=0x%lx poll_file_count=%lu "
                "eventfd_readable=%ld eventfd_writable=%ld "
                "poll_readable_mismatch=%ld file_ops=0x%lx "
-               "file_poll=0x%lx first_kq_waiters=%ld "
+               "file_poll_capable=%lu first_kq_waiters=%ld "
                "last_kq_waiters=%ld "
                "first_ident=%lu last_ident=%lu first_udata=%lu "
                "last_udata=%lu first_kq=0x%lx last_kq=0x%lx "
@@ -874,7 +878,8 @@ static void print_prepty_ring(struct konsole_prepty_wake_snapshot *snap)
                (unsigned long)r->poll_file_count,
                (long)r->eventfd_readable, (long)r->eventfd_writable,
                (long)r->poll_readable_mismatch,
-               (unsigned long)r->file_ops, (unsigned long)r->file_poll,
+               (unsigned long)r->file_ops,
+               (unsigned long)r->file_poll_capable,
                (long)r->first_kq_waiters, (long)r->last_kq_waiters,
                (unsigned long)r->first_ident,
                (unsigned long)r->last_ident,
