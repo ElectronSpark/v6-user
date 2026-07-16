@@ -1440,6 +1440,7 @@ static void test_linux_rt_signal_abi(void)
     sigset_t pending = {0};
     siginfo_t info;
     struct linux_timespec zero = {0, 0};
+    struct linux_timespec one_ms = {0, 1000000};
 
     memset(&oldact, 0, sizeof(oldact));
     if (raw_linux_syscall4(LINUX_NR_RT_SIGACTION, SIGUSR1, 0,
@@ -1510,6 +1511,10 @@ static void test_linux_rt_signal_abi(void)
     memset(&info, 0, sizeof(info));
     if (raw_linux_syscall4(LINUX_NR_RT_SIGTIMEDWAIT, (int64)&mask,
                            (int64)&info, (int64)&zero,
+                           LINUX_KERNEL_SIGSET_SIZE) !=
+            -EAGAIN ||
+        raw_linux_syscall4(LINUX_NR_RT_SIGTIMEDWAIT, (int64)&mask,
+                           (int64)&info, (int64)&one_ms,
                            LINUX_KERNEL_SIGSET_SIZE) !=
             -EAGAIN ||
         raw_linux_syscall4(LINUX_NR_RT_SIGTIMEDWAIT, (int64)&mask,
@@ -2176,6 +2181,13 @@ int main(int argc, char **argv)
         test_linux_arch_prctl_tls_rejects();
         exit(0);
     }
+#if defined(__x86_64__)
+    if (argc > 1 && strcmp(argv[1], "rt-sigtimedwait") == 0) {
+        test_linux_rt_signal_abi();
+        printf("linuxsyscallabitest: rt_sigtimedwait focused tests passed\n");
+        exit(0);
+    }
+#endif
 
     test_linux_munmap_number();
     test_linux_unmapself_sequence();

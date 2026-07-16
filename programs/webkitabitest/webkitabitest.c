@@ -2725,6 +2725,155 @@ static int recv_chromium_ipc_chunk(int sock, char *buf, uint cap, int *outfd)
     return n;
 }
 
+#define CHROMIUM_AUDIO_SYNC_CYCLES 4096
+
+static int chromium_audio_sync_child(int control)
+{
+    struct ucred cred;
+    struct pollfd pfd;
+    char payload[8];
+    int syncfd = -1;
+    int hascred = 0;
+    int n;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = control;
+    pfd.events = POLLIN;
+    if (poll_raw(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLIN))
+        return 11;
+    n = recv_seqpacket_control(control, payload, sizeof(payload), &syncfd,
+                               &cred, &hascred);
+    close(control);
+    if (n != 1 || payload[0] != 'A' || syncfd < 0)
+        return 12;
+
+    for (uint32 seq = 1; seq <= CHROMIUM_AUDIO_SYNC_CYCLES; seq++) {
+        uint32 request = 0;
+
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = syncfd;
+        pfd.events = POLLIN;
+        if (poll_raw(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLIN)) {
+            close(syncfd);
+            return 13;
+        }
+        if (read(syncfd, &request, sizeof(request)) !=
+                (int)sizeof(request) || request != seq) {
+            close(syncfd);
+            return 14;
+        }
+        if (write_raw(syncfd, &request, sizeof(request)) !=
+                (int)sizeof(request)) {
+            close(syncfd);
+            return 15;
+        }
+    }
+
+    close(syncfd);
+    return 0;
+}
+
+static void test_chromium_audio_sync_socket_lifetime(void)
+{
+    const char *name = "Chromium audio SyncSocket SCM lifetime";
+    int control[2] = {-1, -1};
+    int syncfd[2] = {-1, -1};
+    int pid = -1;
+    int status = 0;
+    int failed_cycle = 0;
+    const char payload = 'A';
+
+    if (socketpair_raw(SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                       control) < 0 ||
+        socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, syncfd) < 0) {
+        fail(name, "socketpair setup failed");
+        goto out;
+    }
+
+    fflush(stdout);
+    pid = fork();
+    if (pid < 0) {
+        fail(name, "fork failed");
+        goto out;
+    }
+    if (pid == 0) {
+        int rc;
+
+        close(control[0]);
+        close(syncfd[0]);
+        close(syncfd[1]);
+        rc = chromium_audio_sync_child(control[1]);
+        exit(rc);
+    }
+
+    close(control[1]);
+    control[1] = -1;
+    if (send_one_fd_payload(control[0], syncfd[1], &payload, 1) != 1) {
+        fail(name, "SCM_RIGHTS transfer failed");
+        goto out;
+    }
+    close(syncfd[1]);
+    syncfd[1] = -1;
+    close(control[0]);
+    control[0] = -1;
+
+    for (uint32 seq = 1; seq <= CHROMIUM_AUDIO_SYNC_CYCLES; seq++) {
+        struct pollfd pfd;
+        uint32 response = 0;
+        int flags = fcntl(syncfd[0], F_GETFL, 0);
+
+        if (flags < 0 ||
+            fcntl(syncfd[0], F_SETFL, flags | O_NONBLOCK) < 0 ||
+            write_raw(syncfd[0], &seq, sizeof(seq)) != (int)sizeof(seq) ||
+            fcntl(syncfd[0], F_SETFL, flags) < 0) {
+            failed_cycle = (int)seq;
+            break;
+        }
+
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = syncfd[0];
+        pfd.events = POLLIN;
+        if (poll_raw(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLIN) ||
+            read(syncfd[0], &response, sizeof(response)) !=
+                (int)sizeof(response) || response != seq) {
+            failed_cycle = (int)seq;
+            break;
+        }
+    }
+
+    close(syncfd[0]);
+    syncfd[0] = -1;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || failed_cycle != 0) {
+        char why[128];
+        snprintf(why, sizeof(why),
+                 "sync exchange failed cycle=%d status=%d exit=%d",
+                 failed_cycle, status,
+                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        pid = -1;
+        fail(name, why);
+        goto out;
+    }
+    pid = -1;
+    pass(name);
+
+out:
+    if (pid > 0) {
+        if (syncfd[0] >= 0)
+            close(syncfd[0]);
+        syncfd[0] = -1;
+        waitpid(pid, &status, 0);
+    }
+    if (control[0] >= 0)
+        close(control[0]);
+    if (control[1] >= 0)
+        close(control[1]);
+    if (syncfd[0] >= 0)
+        close(syncfd[0]);
+    if (syncfd[1] >= 0)
+        close(syncfd[1]);
+}
+
 static int check_received_ipc_fd(const char *name, int fd, const char *expect)
 {
     struct stat st;
@@ -7667,9 +7816,17 @@ int main(int argc, char **argv)
                passed, skipped, failed);
         exit(failed == 0 ? 0 : 1);
     }
+    if (argc == 2 && strcmp(argv[1], "chromium-audio-sync") == 0) {
+        printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
+        test_chromium_audio_sync_socket_lifetime();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
     if (argc == 2 && strcmp(argv[1], "chromium-ipc") == 0) {
         printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
         test_chromium_forked_seqpacket_control();
+        test_chromium_audio_sync_socket_lifetime();
         test_chromium_stream_scm_oneshot_rearm();
         test_chromium_seqpacket_bootstrap_eof();
         test_chromium_seqpacket_passcred_bootstrap();
@@ -7738,6 +7895,7 @@ int main(int argc, char **argv)
     test_wayland_stream_wrapped_iov_batch();
     test_wayland_stream_scm_batch();
     test_chromium_forked_seqpacket_control();
+    test_chromium_audio_sync_socket_lifetime();
     test_chromium_stream_scm_oneshot_rearm();
     test_chromium_seqpacket_bootstrap_eof();
     test_chromium_seqpacket_passcred_bootstrap();

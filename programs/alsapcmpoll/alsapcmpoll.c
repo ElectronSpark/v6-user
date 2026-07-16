@@ -10,7 +10,9 @@
 #define SNDRV_PCM_IOCTL_SW_PARAMS     0xc0884113
 #define SNDRV_PCM_IOCTL_STATUS        0x80984120
 #define SNDRV_PCM_IOCTL_DELAY         0x80084121
+#define SNDRV_PCM_IOCTL_HWSYNC        0x4122
 #define SNDRV_PCM_IOCTL_PREPARE       0x4140
+#define SNDRV_PCM_IOCTL_START         0x4142
 #define SNDRV_PCM_IOCTL_DROP          0x4143
 #define SNDRV_PCM_IOCTL_DRAIN         0x4144
 
@@ -51,10 +53,14 @@
 #define MAX_PERIOD_FRAMES PIPEWIRE_PERIOD_FRAMES
 #define SUSTAIN_SECONDS 6U
 #define SUSTAIN_MIN_PERCENT 90U
+#define RECOVER_ROUNDS 16U
+#define RECOVER_DRAIN_MS 120U
 #define ALSA_BOUNDARY 0x40000000ULL
 #define START_THRESHOLD_BUFFER 0U
 #define START_THRESHOLD_PERIOD ((uint)-1)
+#define STOP_THRESHOLD_BUFFER 0U
 #define EAGAIN_VALUE 11
+#define EPIPE_VALUE 32
 
 typedef struct alsa_mask {
     uint bits[8];
@@ -424,7 +430,8 @@ static int pcm_failed_state(int state)
 
 static int configure_pcm(int fd, uint requested_period_frames,
                          const char *mode_label, uint *period_frames_out,
-                         uint *buffer_frames_out, uint start_threshold)
+                         uint *buffer_frames_out, uint start_threshold,
+                         uint64 stop_threshold)
 {
     alsa_pcm_hw_params_t hw;
     alsa_pcm_hw_params_t refine;
@@ -460,13 +467,15 @@ static int configure_pcm(int fd, uint requested_period_frames,
         start_threshold = buffer_frames;
     else if (start_threshold == START_THRESHOLD_PERIOD)
         start_threshold = period_frames;
+    if (stop_threshold == STOP_THRESHOLD_BUFFER)
+        stop_threshold = buffer_frames;
 
     memset(&sw, 0, sizeof(sw));
     sw.period_step = 1;
     sw.avail_min = period_frames;
     sw.xfer_align = 1;
     sw.start_threshold = start_threshold;
-    sw.stop_threshold = ALSA_BOUNDARY;
+    sw.stop_threshold = stop_threshold;
     sw.boundary = ALSA_BOUNDARY;
     ret = ioctl(fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sw);
     printf("ALSAPCMPOLL: SW_PARAMS mode=%s ret=%d errno=%d avail_min=%lu "
@@ -510,7 +519,8 @@ static int run_default_mode(void)
         return 1;
 
     if (configure_pcm(fd, DEFAULT_PERIOD_FRAMES, "default", &period_frames,
-                      &buffer_frames, START_THRESHOLD_BUFFER) < 0) {
+                      &buffer_frames, START_THRESHOLD_BUFFER,
+                      ALSA_BOUNDARY) < 0) {
         close(fd);
         return 1;
     }
@@ -581,6 +591,8 @@ static int run_sustain_mode(uint requested_period_frames)
     uint64 poll_count = 0;
     uint64 pollerr_count = 0;
     uint64 no_progress_polls = 0;
+    uint64 start_ms = 0;
+    uint64 elapsed_ms = 0;
     int status_ok = 1;
     int state_ok = 1;
     int cleanup_ok = 1;
@@ -607,7 +619,7 @@ static int run_sustain_mode(uint requested_period_frames)
 
     if (configure_pcm(fd, requested_period_frames, "sustain",
                       &period_frames, &buffer_frames,
-                      START_THRESHOLD_PERIOD) < 0) {
+                      START_THRESHOLD_PERIOD, ALSA_BOUNDARY) < 0) {
         close(fd);
         printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u target_frames=%lu "
                "submitted_frames=0 result=FAIL reason=config\n",
@@ -620,6 +632,7 @@ static int run_sustain_mode(uint requested_period_frames)
            "target_frames=%lu min_frames=%lu buffer_frames=%u\n",
            period_frames, period_frames, RATE_HZ, CHANNELS, SUSTAIN_SECONDS,
            target_frames, min_frames, buffer_frames);
+    start_ms = (uint64)uptime();
 
     ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
     print_ret("PREPARE sustain", ret);
@@ -849,21 +862,236 @@ static int run_sustain_mode(uint requested_period_frames)
     if (submitted < min_frames)
         fail = 1;
 
+    elapsed_ms = (uint64)uptime() - start_ms;
+
     printf("ALSAPCMPOLL_SUSTAIN_RESULT period=%u write_frames=%u "
            "target_seconds=%u target_frames=%lu min_frames=%lu "
            "submitted_frames=%lu writes=%lu short_writes=%lu eagain=%lu "
            "polls=%lu poll_bad_revents=%lu final_state=%d(%s) "
+           "elapsed_ms=%lu nominal_audio_ms=%lu "
            "submitted_ok=%s status_ok=%s state_ok=%s cleanup_ok=%s "
            "result=%s\n",
            period_frames, period_frames, SUSTAIN_SECONDS, target_frames,
            min_frames, submitted, writes, short_writes, eagain_count,
            poll_count, pollerr_count, status.state, state_name(status.state),
+           elapsed_ms, (uint64)(submitted * 1000ULL / RATE_HZ),
            submitted >= min_frames ? "PASS" : "FAIL",
            status_ok ? "PASS" : "FAIL", state_ok ? "PASS" : "FAIL",
            cleanup_ok ? "PASS" : "FAIL",
            fail ? "FAIL" : "PASS");
 
     return fail ? 1 : 0;
+}
+
+/*
+ * Timing reducer for the desktop audio master clock.  Unlike sustain mode,
+ * this intentionally emits no per-period STATUS/POLL/WRITE diagnostics: that
+ * output can take longer than a 25 ms PipeWire period and manufacture an
+ * underrun.  Keep the four-period ring fed, drain it, then compare monotonic
+ * elapsed time with the submitted 48 kHz frame duration.
+ */
+static int run_pace_mode(void)
+{
+    unsigned char audio[PIPEWIRE_PERIOD_FRAMES * FRAME_BYTES];
+    uint period_frames;
+    uint buffer_frames;
+    uint64 target_frames = (uint64)RATE_HZ * SUSTAIN_SECONDS;
+    uint64 submitted = 0;
+    uint64 writes = 0;
+    uint64 polls = 0;
+    uint64 eagain = 0;
+    uint64 start_ms;
+    uint64 elapsed_ms;
+    int fail = 0;
+    int fd;
+    int ret;
+
+    fill_audio(audio, PIPEWIRE_PERIOD_FRAMES);
+    fd = open_pcm();
+    if (fd < 0)
+        return 1;
+    if (configure_pcm(fd, PIPEWIRE_PERIOD_FRAMES, "pace",
+                      &period_frames, &buffer_frames,
+                      START_THRESHOLD_PERIOD, ALSA_BOUNDARY) < 0) {
+        close(fd);
+        return 1;
+    }
+    ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
+    if (ret < 0) {
+        close(fd);
+        return 1;
+    }
+
+    start_ms = (uint64)uptime();
+    while (submitted < target_frames) {
+        struct pollfd pfd;
+        uint64 remaining = target_frames - submitted;
+        uint frames = period_frames;
+
+        if (remaining < frames)
+            frames = (uint)remaining;
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = fd;
+        pfd.events = POLLOUT | POLLERR | POLLHUP;
+        ret = poll_raw(&pfd, 1, 200);
+        polls++;
+        if (ret < 0 || (pfd.revents & (POLLERR | POLLHUP)) != 0 ||
+            polls > (target_frames / period_frames + 1000)) {
+            fail = 1;
+            break;
+        }
+        if ((pfd.revents & (POLLOUT | POLLWRNORM | POLLWRBAND)) == 0)
+            continue;
+
+        ret = write(fd, audio, frames * FRAME_BYTES);
+        writes++;
+        if (ret < 0 && saved_errno(ret) == EAGAIN_VALUE) {
+            eagain++;
+            continue;
+        }
+        if (ret <= 0 || (ret % (int)FRAME_BYTES) != 0) {
+            fail = 1;
+            break;
+        }
+        submitted += (uint64)ret / FRAME_BYTES;
+    }
+
+    ret = ioctl(fd, SNDRV_PCM_IOCTL_DRAIN, 0);
+    if (ret < 0)
+        fail = 1;
+    elapsed_ms = (uint64)uptime() - start_ms;
+    (void)ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+    if (close(fd) < 0)
+        fail = 1;
+
+    printf("ALSAPCMPOLL_PACE_RESULT period=%u buffer=%u "
+           "target_frames=%lu submitted_frames=%lu writes=%lu polls=%lu "
+           "eagain=%lu elapsed_ms=%lu nominal_audio_ms=%lu result=%s\n",
+           period_frames, buffer_frames, target_frames, submitted, writes,
+           polls, eagain, elapsed_ms,
+           (uint64)(submitted * 1000ULL / RATE_HZ),
+           !fail && submitted == target_frames ? "PASS" : "FAIL");
+    return !fail && submitted == target_frames ? 0 : 1;
+}
+
+static void sleep_milliseconds(uint milliseconds)
+{
+    struct timespec req;
+
+    req.tv_sec = milliseconds / 1000U;
+    req.tv_nsec = (int64)(milliseconds % 1000U) * 1000000LL;
+    while (nanosleep(&req, &req) < 0)
+        ;
+}
+
+/*
+ * Reproduce PipeWire's playback recovery sequence.  Its ALSA node recovers an
+ * underrun with DROP -> PREPARE -> START, then calls snd_pcm_avail() before it
+ * refills the empty ring.  The post-START HWSYNC must succeed; an immediate
+ * EPIPE is a recovery loop, not a second hardware underrun.
+ */
+static int run_recover_mode(void)
+{
+    alsa_pcm_status_t status;
+    unsigned char audio[PIPEWIRE_PERIOD_FRAMES * FRAME_BYTES];
+    uint period_frames;
+    uint buffer_frames;
+    uint completed = 0;
+    int fd;
+    int ret;
+
+    printf("ALSAPCMPOLL_RECOVER_ENTER rounds=%u drain_ms=%u\n",
+           RECOVER_ROUNDS, RECOVER_DRAIN_MS);
+    memset(&status, 0, sizeof(status));
+    fill_audio(audio, PIPEWIRE_PERIOD_FRAMES);
+
+    fd = open_pcm();
+    if (fd < 0)
+        return 1;
+    if (configure_pcm(fd, PIPEWIRE_PERIOD_FRAMES, "recover",
+                      &period_frames, &buffer_frames,
+                      (uint)ALSA_BOUNDARY,
+                      STOP_THRESHOLD_BUFFER) < 0) {
+        close(fd);
+        return 1;
+    }
+
+    for (uint round = 0; round < RECOVER_ROUNDS; round++) {
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+        if (ret < 0)
+            goto fail;
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
+        if (ret < 0)
+            goto fail;
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_START, 0);
+        if (ret < 0)
+            goto fail;
+
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_HWSYNC, 0);
+        (void)pcm_status(fd, "recover_after_empty_start", &status);
+        printf("ALSAPCMPOLL_RECOVER_EVENT round=%u phase=empty_hwsync "
+               "ret=%d errno=%d state=%d(%s) avail=%lu\n",
+               round, ret, saved_errno(ret), status.state,
+               state_name(status.state), status.avail);
+        if (ret < 0 || status.state != SNDRV_PCM_STATE_RUNNING)
+            goto fail;
+
+        /* PipeWire's do_prepare() pre-fills silence before START. */
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+        if (ret < 0)
+            goto fail;
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_PREPARE, 0);
+        if (ret < 0)
+            goto fail;
+        ret = write_frames(fd, "recover_prefill", audio, period_frames);
+        if (ret != (int)(period_frames * FRAME_BYTES))
+            goto fail;
+        (void)pcm_status(fd, "recover_before_prefilled_start", &status);
+        if (status.state != SNDRV_PCM_STATE_PREPARED)
+            goto fail;
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_START, 0);
+        if (ret < 0)
+            goto fail;
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_HWSYNC, 0);
+        (void)pcm_status(fd, "recover_after_prefilled_start", &status);
+        printf("ALSAPCMPOLL_RECOVER_EVENT round=%u phase=prefilled_hwsync "
+               "ret=%d errno=%d state=%d(%s) avail=%lu\n",
+               round, ret, saved_errno(ret), status.state,
+               state_name(status.state), status.avail);
+        if (ret < 0 || status.state != SNDRV_PCM_STATE_RUNNING)
+            goto fail;
+        sleep_milliseconds(RECOVER_DRAIN_MS);
+
+        ret = ioctl(fd, SNDRV_PCM_IOCTL_HWSYNC, 0);
+        (void)pcm_status(fd, "recover_after_underrun", &status);
+        printf("ALSAPCMPOLL_RECOVER_EVENT round=%u phase=xrun_hwsync "
+               "ret=%d errno=%d state=%d(%s) appl_ptr=%lu hw_ptr=%lu\n",
+               round, ret, saved_errno(ret), status.state,
+               state_name(status.state), status.appl_ptr, status.hw_ptr);
+        if (ret >= 0 || saved_errno(ret) != EPIPE_VALUE ||
+            status.state != SNDRV_PCM_STATE_XRUN)
+            goto fail;
+        completed++;
+    }
+
+    (void)ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+    ret = close(fd);
+    printf("ALSAPCMPOLL_RECOVER_RESULT rounds=%u completed=%u "
+           "period=%u buffer=%u close_ret=%d result=%s\n",
+           RECOVER_ROUNDS, completed, period_frames, buffer_frames, ret,
+           ret == 0 && completed == RECOVER_ROUNDS ? "PASS" : "FAIL");
+    return ret == 0 && completed == RECOVER_ROUNDS ? 0 : 1;
+
+fail:
+    printf("ALSAPCMPOLL_RECOVER_FAIL completed=%u ret=%d errno=%d "
+           "state=%d(%s)\n", completed, ret, saved_errno(ret), status.state,
+           state_name(status.state));
+    (void)ioctl(fd, SNDRV_PCM_IOCTL_DROP, 0);
+    (void)close(fd);
+    printf("ALSAPCMPOLL_RECOVER_RESULT rounds=%u completed=%u "
+           "period=%u buffer=%u result=FAIL\n",
+           RECOVER_ROUNDS, completed, period_frames, buffer_frames);
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -882,6 +1110,11 @@ int main(int argc, char **argv)
             exit(run_sustain_mode(PIPEWIRE_PERIOD_FRAMES));
         if (strcmp(argv[1], "sustain-period") == 0 && argc > 2)
             exit(run_sustain_mode((uint)atoi(argv[2])));
+        if (strcmp(argv[1], "pace") == 0)
+            exit(run_pace_mode());
+        if (strcmp(argv[1], "recover") == 0 ||
+            strcmp(argv[1], "pipewire-recover") == 0)
+            exit(run_recover_mode());
     }
 
     exit(run_default_mode());

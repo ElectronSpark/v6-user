@@ -7,6 +7,7 @@
 #include "user/user.h"
 #include "kernel/inc/vfs/fcntl.h"
 #include "kernel/inc/dev/netconf.h"
+#include "kernel/inc/errno.h"
 
 #ifndef TIOCSCTTY
 #define TIOCSCTTY 0x540E
@@ -390,8 +391,17 @@ next_startup_line:
                 // the shell exited; restart it.
                 break;
             } else if (wpid < 0) {
-                printf("init: wait returned an error\n");
-                exit(1);
+                // PID 1 must never exit because an interruptible child wait
+                // returned before a child became reapable.  Native wait()
+                // normally reports -EINTR here, but retain liveness for the
+                // historical generic -1 return as well.  Back off on an
+                // unexpected value so a broken child list cannot busy-loop.
+                if (wpid != -EINTR) {
+                    printf("init: wait returned transient error %d; retrying\n",
+                           wpid);
+                    sleep(1);
+                }
+                continue;
             } else {
                 // it was a parentless process; do nothing.
             }
