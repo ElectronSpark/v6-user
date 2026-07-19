@@ -36,7 +36,10 @@
  *   hoverprobe [icon_x] [icon_y] [away_x] [away_y] [iters] [rw] [rh]
  *              [settle_ms] [timeout_ms] [calib_samples]
  * All arguments optional; abs16 coords default to the taskbar-left-icons
- * target (11000,64200) and a neutral desktop-centre rest point (32768,32768).
+ * target (11000,64200) and an upper-right desktop rest point (60000,10000).
+ * The latter remains outside the large lower-left Kickoff popup, so a menu
+ * close probe cannot accidentally activate one of the popup's application
+ * tiles.
  */
 
 #include "kernel/inc/types.h"
@@ -582,8 +585,8 @@ int main(int argc, char **argv)
     struct fb_var_screeninfo info;
     int icon_x = clamp_abs16(arg_int(argc, argv, 1, 11000));
     int icon_y = clamp_abs16(arg_int(argc, argv, 2, 64200));
-    int away_x = clamp_abs16(arg_int(argc, argv, 3, 32768));
-    int away_y = clamp_abs16(arg_int(argc, argv, 4, 32768));
+    int away_x = clamp_abs16(arg_int(argc, argv, 3, 60000));
+    int away_y = clamp_abs16(arg_int(argc, argv, 4, 10000));
     int iters = arg_int(argc, argv, 5, 6);
     int rw = arg_int(argc, argv, 6, 56);
     int rh = arg_int(argc, argv, 7, 40);

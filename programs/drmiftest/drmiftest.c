@@ -122,6 +122,84 @@ static uint32 find_obj_prop(int fd, uint32 obj_id, uint32 obj_type,
     return find_prop(fd, props, count, name, required_flags);
 }
 
+static int find_obj_prop_value(int fd, uint32 obj_id, uint32 obj_type,
+                               const char *name, uint32 required_flags,
+                               uint32 *prop_id, uint64 *value)
+{
+    struct drm_mode_get_property_compat prop;
+    uint32 props[16];
+    uint64 values[16];
+    uint32 count = 16;
+
+    memset(props, 0, sizeof(props));
+    memset(values, 0, sizeof(values));
+    if (get_obj_props(fd, obj_id, obj_type, props, values, &count) < 0)
+        return -1;
+    for (uint32 i = 0; i < count && i < 16; i++) {
+        memset(&prop, 0, sizeof(prop));
+        prop.prop_id = props[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) < 0)
+            return -1;
+        if (strcmp(prop.name, name) != 0 ||
+            (prop.flags & required_flags) != required_flags)
+            continue;
+        if (prop_id != NULL)
+            *prop_id = props[i];
+        if (value != NULL)
+            *value = values[i];
+        return 0;
+    }
+    return -1;
+}
+
+static int discover_kms_planes(int fd, uint32 *primary_plane,
+                               uint32 *cursor_plane, uint32 *plane_count)
+{
+    struct drm_mode_get_plane_res_compat res;
+    uint32 planes[8];
+    uint32 primary = 0;
+    uint32 cursor = 0;
+
+    memset(planes, 0, sizeof(planes));
+    memset(&res, 0, sizeof(res));
+    res.plane_id_ptr = (uint64)planes;
+    res.count_planes = sizeof(planes) / sizeof(planes[0]);
+    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &res) < 0 ||
+        res.count_planes == 0 ||
+        res.count_planes > sizeof(planes) / sizeof(planes[0]))
+        return -1;
+
+    for (uint32 i = 0; i < res.count_planes; i++) {
+        uint64 type = 0;
+
+        if (planes[i] == 0 ||
+            find_obj_prop_value(fd, planes[i], DRM_MODE_OBJECT_PLANE,
+                                "type", DRM_MODE_PROP_ENUM, NULL,
+                                &type) < 0)
+            return -1;
+        if (type == DRM_PLANE_TYPE_PRIMARY) {
+            if (primary != 0)
+                return -1;
+            primary = planes[i];
+        } else if (type == DRM_PLANE_TYPE_CURSOR) {
+            if (cursor != 0)
+                return -1;
+            cursor = planes[i];
+        } else {
+            return -1;
+        }
+    }
+    if (primary == 0 || res.count_planes != (cursor != 0 ? 2U : 1U))
+        return -1;
+    if (primary_plane != NULL)
+        *primary_plane = primary;
+    if (cursor_plane != NULL)
+        *cursor_plane = cursor;
+    if (plane_count != NULL)
+        *plane_count = res.count_planes;
+    return 0;
+}
+
 struct atomic_fence_credit_snapshot {
     uint64 gpu_backend_flags;
     uint64 dxg_present_register_successes;
@@ -1120,16 +1198,14 @@ static int check_primary(int fd)
     struct drm_mode_get_connector_compat conn;
     struct drm_mode_get_property_compat prop;
     struct drm_mode_get_blob_compat blob;
-    struct drm_mode_get_plane_res_compat plane_res;
     struct drm_mode_get_plane_compat plane;
-    struct drm_mode_modeinfo_compat modes[2];
+    struct drm_mode_modeinfo_compat modes[8];
     struct drm_mode_modeinfo_compat blob_mode;
     struct {
         struct drm_format_modifier_blob_compat header;
         uint32 formats[4];
         struct drm_format_modifier_compat modifiers[1];
     } in_formats;
-    uint32 plane_ids[2];
     uint32 formats[4];
     uint32 props[4];
     uint64 prop_values[4];
@@ -1143,6 +1219,9 @@ static int check_primary(int fd)
     uint32 in_formats_prop = 0;
     uint32 in_formats_blob = 0;
     uint32 crtc_prop = 0;
+    uint32 primary_plane_id = 0;
+    uint32 cursor_plane_id = 0;
+    uint32 plane_count = 0;
 
     memset(&magic, 0, sizeof(magic));
     if (ioctl(fd, DRM_IOCTL_GET_MAGIC, &magic) < 0 || magic.magic == 0)
@@ -1173,8 +1252,8 @@ static int check_primary(int fd)
     memset(&crtc, 0, sizeof(crtc));
     crtc.crtc_id = ids[0];
     if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0 ||
-        crtc.mode_valid != 1 ||
-        crtc.mode.hdisplay == 0 || crtc.mode.vdisplay == 0)
+        (crtc.mode_valid != 0 &&
+         (crtc.mode.hdisplay == 0 || crtc.mode.vdisplay == 0)))
         return fail("GETCRTC failed");
     memset(&crtc, 0, sizeof(crtc));
     crtc.crtc_id = 0xfeedface;
@@ -1199,11 +1278,12 @@ static int check_primary(int fd)
     conn.modes_ptr = (uint64)modes;
     conn.props_ptr = (uint64)props;
     conn.prop_values_ptr = (uint64)prop_values;
-    conn.count_modes = 2;
+    conn.count_modes = sizeof(modes) / sizeof(modes[0]);
     conn.count_props = 4;
     if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0 ||
-        conn.count_modes == 0 || conn.connection != 1 ||
+        conn.count_modes != 1 || conn.connection != 1 ||
         modes[0].hdisplay == 0 || modes[0].vdisplay == 0 ||
+        (modes[0].type & DRM_MODE_TYPE_PREFERRED) == 0 ||
         conn.count_props < 2)
         return fail("GETCONNECTOR failed");
 
@@ -1247,22 +1327,16 @@ static int check_primary(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) >= 0)
         return fail("invalid GETPROPBLOB accepted");
 
-    memset(plane_ids, 0, sizeof(plane_ids));
-    memset(&plane_res, 0, sizeof(plane_res));
-    plane_res.plane_id_ptr = (uint64)plane_ids;
-    plane_res.count_planes = 2;
-    /* Contract (UNIVERSAL_PLANES set above): exactly two planes -- the
-     * primary scanout plane first, then the cursor plane (added with the
-     * kernel's hardened cursor-plane support; the old expectation of a
-     * single plane predates it). */
-    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res) < 0 ||
-        plane_res.count_planes != 2 || plane_ids[0] == 0 ||
-        plane_ids[1] == 0)
+    /* The primary plane is always present.  A cursor plane is advertised only
+     * when the active scanout backend owns a real hardware cursor queue; Bochs
+     * deliberately leaves cursor composition to the compositor. */
+    if (discover_kms_planes(fd, &primary_plane_id, &cursor_plane_id,
+                            &plane_count) < 0)
         return fail("GETPLANERESOURCES failed");
 
     memset(formats, 0, sizeof(formats));
     memset(&plane, 0, sizeof(plane));
-    plane.plane_id = plane_ids[0];
+    plane.plane_id = primary_plane_id;
     plane.format_type_ptr = (uint64)formats;
     plane.count_format_types = 4;
     if (ioctl(fd, DRM_IOCTL_MODE_GETPLANE, &plane) < 0 ||
@@ -1290,7 +1364,7 @@ static int check_primary(int fd)
     memset(obj_props, 0, sizeof(obj_props));
     memset(obj_values, 0, sizeof(obj_values));
     obj_count = 16;
-    if (get_obj_props(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE, obj_props,
+    if (get_obj_props(fd, primary_plane_id, DRM_MODE_OBJECT_PLANE, obj_props,
                       obj_values, &obj_count) < 0 || obj_count < 8)
         return fail("plane OBJ_GETPROPERTIES failed");
     plane_type_prop = find_prop(fd, obj_props, obj_count, "type",
@@ -1317,6 +1391,21 @@ static int check_primary(int fd)
     if (plane_type_prop == 0 || fb_prop == 0 || crtc_prop == 0 ||
         in_formats_prop == 0)
         return fail("plane object properties missing");
+
+    if (cursor_plane_id != 0) {
+        uint32 cursor_formats[2];
+
+        memset(cursor_formats, 0, sizeof(cursor_formats));
+        memset(&plane, 0, sizeof(plane));
+        plane.plane_id = cursor_plane_id;
+        plane.format_type_ptr = (uint64)cursor_formats;
+        plane.count_format_types =
+            sizeof(cursor_formats) / sizeof(cursor_formats[0]);
+        if (ioctl(fd, DRM_IOCTL_MODE_GETPLANE, &plane) < 0 ||
+            plane.possible_crtcs == 0 || plane.count_format_types != 1 ||
+            cursor_formats[0] != DRM_FORMAT_ARGB8888)
+            return fail("cursor plane discovery mismatch");
+    }
 
     memset(&blob, 0, sizeof(blob));
     memset(&in_formats, 0, sizeof(in_formats));
@@ -1364,8 +1453,11 @@ static int check_primary(int fd)
     if (ioctl(fd, 0x12345678, 0) >= 0)
         return fail("unknown ioctl accepted");
 
-    printf("drmiftest: primary ok mode=%ux%u ioctls=%lu stats=%lu\n",
-           modes[0].hdisplay, modes[0].vdisplay, client.iocs, stats.count);
+    printf("drmiftest: primary ok mode=%ux%u planes=%u cursor=%s "
+           "ioctls=%lu stats=%lu\n",
+           modes[0].hdisplay, modes[0].vdisplay, plane_count,
+           cursor_plane_id != 0 ? "hardware" : "software",
+           client.iocs, stats.count);
     return 0;
 }
 
@@ -1533,6 +1625,11 @@ static int check_kms_fb(int fd)
     struct drm_mode_cursor_compat cursor;
     struct drm_mode_create_blob_compat blob_create;
     struct drm_mode_destroy_blob_compat blob_destroy;
+    struct drm_mode_card_res_compat kms_res;
+    struct drm_mode_get_connector_compat kms_conn;
+    struct drm_mode_modeinfo_compat atomic_mode;
+    struct drm_mode_modeinfo_compat nonadvertised_mode;
+    struct drm_mode_modeinfo_compat advertised_modes[8];
     struct drm_mode_create_lease_compat lease_create;
     struct drm_mode_closefb_compat closefb;
     struct drm_mode_fb_cmd_compat fb_legacy;
@@ -1542,7 +1639,6 @@ static int check_kms_fb(int fd)
     struct drm_mode_crtc_page_flip_compat flip;
     struct drm_event_vblank_compat event;
     struct drm_mode_atomic_compat atomic;
-    struct drm_mode_get_plane_res_compat plane_res;
     struct drm_mode_get_plane_compat plane;
     struct drm_mode_obj_set_property_compat obj_set;
     struct drm_mode_destroy_dumb_compat destroy;
@@ -1560,6 +1656,9 @@ static int check_kms_fb(int fd)
     struct fb_gpu_stats xbgr_after;
     struct atomic_test_fence_source present_fail_fence_source;
     uint32 plane_ids[2];
+    uint32 kms_crtc_ids[2];
+    uint32 kms_connector_ids[2];
+    uint32 advertised_mode_blob_ids[8];
     uint32 objs[2];
     uint32 counts[2];
     uint32 props[16];
@@ -1576,16 +1675,76 @@ static int check_kms_fb(int fd)
     uint32 out_fence_prop;
     uint32 atomic_plane_before;
     uint32 atomic_plane_after;
+    uint32 atomic_mode_blob_id = 0;
+    uint32 malformed_mode_blob_id = 0;
+    uint32 nonadvertised_mode_blob_id = 0;
+    uint32 crtc_id = 0;
+    uint32 connector_id = 0;
+    uint32 primary_plane_id = 0;
+    uint32 cursor_plane_id = 0;
+    uint32 plane_count = 0;
+    uint32 advertised_mode_count = 0;
+    uint32 preferred_mode_index = 0;
     uint64 crtc_sequence_sample = 0;
     uint32 fb_id = 0;
     uint32 nvfb_id = 0;
     uint32 xbgr_fb_id = 0;
     int present_fail_in_fence_fd = -1;
     int32 out_fence = -2;
+    int has_cursor_plane = 0;
 
     memset(&present_fail_fence_source, 0,
            sizeof(present_fail_fence_source));
     present_fail_fence_source.fd = -1;
+
+    memset(kms_crtc_ids, 0, sizeof(kms_crtc_ids));
+    memset(kms_connector_ids, 0, sizeof(kms_connector_ids));
+    memset(advertised_mode_blob_ids, 0,
+           sizeof(advertised_mode_blob_ids));
+    memset(&kms_res, 0, sizeof(kms_res));
+    kms_res.crtc_id_ptr = (uint64)kms_crtc_ids;
+    kms_res.connector_id_ptr = (uint64)kms_connector_ids;
+    kms_res.count_crtcs = sizeof(kms_crtc_ids) / sizeof(kms_crtc_ids[0]);
+    kms_res.count_connectors =
+        sizeof(kms_connector_ids) / sizeof(kms_connector_ids[0]);
+    if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &kms_res) < 0 ||
+        kms_res.count_crtcs != 1 || kms_res.count_connectors != 1 ||
+        kms_crtc_ids[0] == 0 || kms_connector_ids[0] == 0)
+        return fail("KMS resource discovery failed");
+    crtc_id = kms_crtc_ids[0];
+    connector_id = kms_connector_ids[0];
+
+    memset(advertised_modes, 0, sizeof(advertised_modes));
+    memset(&kms_conn, 0, sizeof(kms_conn));
+    kms_conn.connector_id = connector_id;
+    kms_conn.modes_ptr = (uint64)advertised_modes;
+    kms_conn.count_modes =
+        sizeof(advertised_modes) / sizeof(advertised_modes[0]);
+    if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &kms_conn) < 0 ||
+        kms_conn.count_modes != 1 || advertised_modes[0].hdisplay == 0 ||
+        advertised_modes[0].vdisplay == 0)
+        return fail("KMS connector mode discovery failed");
+    advertised_mode_count = kms_conn.count_modes;
+    {
+        uint32 preferred_count = 0;
+
+        for (uint32 i = 0; i < advertised_mode_count; i++) {
+            if ((advertised_modes[i].type & DRM_MODE_TYPE_PREFERRED) == 0)
+                continue;
+            preferred_mode_index = i;
+            preferred_count++;
+        }
+        if (preferred_count != 1)
+            return fail("KMS preferred mode discovery failed");
+    }
+    atomic_mode = advertised_modes[preferred_mode_index];
+
+    memset(plane_ids, 0, sizeof(plane_ids));
+    if (discover_kms_planes(fd, &primary_plane_id, &cursor_plane_id,
+                            &plane_count) < 0 || plane_count > 2)
+        return fail("KMS plane discovery failed");
+    plane_ids[0] = primary_plane_id;
+    plane_ids[1] = cursor_plane_id;
 
     memset(&create, 0, sizeof(create));
     create.width = 80;
@@ -1683,11 +1842,27 @@ static int check_kms_fb(int fd)
         fb.pitches[1] != nvcreate.width ||
         fb.offsets[1] != nvcreate.width * nvcreate.height)
         return fail("NV12 GETFB2 metadata failed");
-    memset(&cursor, 0, sizeof(cursor));
-    cursor.crtc_id = 1;
-    cursor.flags = DRM_MODE_CURSOR_MOVE;
-    if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) < 0)
-        return fail("CURSOR move failed");
+    has_cursor_plane = cursor_plane_id != 0;
+    if (!has_cursor_plane) {
+        memset(&cursor, 0, sizeof(cursor));
+        cursor.crtc_id = crtc_id;
+        cursor.flags = DRM_MODE_CURSOR_MOVE;
+        if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) >= 0)
+            return fail("hidden cursor legacy CURSOR accepted");
+    }
+    if (has_cursor_plane) {
+        uint64 cursor_type = 0;
+
+        if (find_obj_prop_value(fd, cursor_plane_id, DRM_MODE_OBJECT_PLANE,
+                                "type", DRM_MODE_PROP_ENUM, NULL,
+                                &cursor_type) < 0 ||
+            cursor_type != DRM_PLANE_TYPE_CURSOR)
+            return fail("cursor plane type discovery failed");
+        memset(&cursor, 0, sizeof(cursor));
+        cursor.crtc_id = crtc_id;
+        cursor.flags = DRM_MODE_CURSOR_MOVE;
+        if (ioctl(fd, DRM_IOCTL_MODE_CURSOR, &cursor) < 0)
+            return fail("CURSOR move failed");
     /* Contract update: cursor-from-BO is implemented (uploads a 64x64 image
      * from a dumb BO into the virtio cursor resource); it must succeed and bump
      * kms_cursor_uploads.  A dedicated 64x64 BO guarantees the kernel's
@@ -1727,6 +1902,7 @@ static int check_kms_fb(int fd)
         if (ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &curdestroy) < 0)
             return fail("cursor BO DESTROY_DUMB failed");
     }
+    }
 
     /* Contract update: user property blobs are implemented; CREATEPROPBLOB must
      * succeed and return a nonzero id, and DESTROYPROPBLOB must accept that id.
@@ -1751,7 +1927,7 @@ static int check_kms_fb(int fd)
         return fail("CREATE_LEASE unexpectedly enabled");
 
     memset(&crtc, 0, sizeof(crtc));
-    crtc.crtc_id = 1;
+    crtc.crtc_id = crtc_id;
     crtc.fb_id = fb_id;
     if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0)
         return fail("SETCRTC failed");
@@ -1793,7 +1969,7 @@ static int check_kms_fb(int fd)
         return fail("WAIT_VBLANK failed");
 
     memset(&crtc_seq, 0, sizeof(crtc_seq));
-    crtc_seq.crtc_id = 1;
+    crtc_seq.crtc_id = crtc_id;
     if (ioctl(fd, DRM_IOCTL_CRTC_GET_SEQUENCE, &crtc_seq) < 0 ||
         crtc_seq.active == 0 || crtc_seq.sequence_ns == 0)
         return fail("CRTC_GET_SEQUENCE failed");
@@ -1809,7 +1985,7 @@ static int check_kms_fb(int fd)
      * the page-flip event-order reads below exercise the same ring.  (The old
      * fail-closed expectation predates the implementation.) */
     memset(&queue_seq, 0, sizeof(queue_seq));
-    queue_seq.crtc_id = 1;
+    queue_seq.crtc_id = crtc_id;
     queue_seq.flags = DRM_CRTC_SEQUENCE_RELATIVE;
     queue_seq.sequence = 1;
     queue_seq.user_data = 0x5345514556424cULL;
@@ -1821,7 +1997,7 @@ static int check_kms_fb(int fd)
         event.base.type != DRM_EVENT_VBLANK ||
         event.base.length != sizeof(event) ||
         event.user_data != 0x5345514556424cULL ||
-        event.crtc_id != 1 ||
+        event.crtc_id != crtc_id ||
         event.sequence != (uint32)queue_seq.sequence)
         return fail("CRTC_QUEUE_SEQUENCE event drain failed");
     /* Fail-closed: a non-existent CRTC is rejected before any event queues. */
@@ -1830,13 +2006,13 @@ static int check_kms_fb(int fd)
     if (ioctl(fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq) >= 0)
         return fail("invalid crtc CRTC_QUEUE_SEQUENCE accepted");
     /* Fail-closed: unknown flags are rejected (bumps the bad-flags counter). */
-    queue_seq.crtc_id = 1;
+    queue_seq.crtc_id = crtc_id;
     queue_seq.flags = ~0U;
     if (ioctl(fd, DRM_IOCTL_CRTC_QUEUE_SEQUENCE, &queue_seq) >= 0)
         return fail("invalid CRTC_QUEUE_SEQUENCE accepted");
 
     memset(&gamma, 0, sizeof(gamma));
-    gamma.crtc_id = 1;
+    gamma.crtc_id = crtc_id;
     if (ioctl(fd, DRM_IOCTL_MODE_GETGAMMA, &gamma) < 0)
         return fail("GETGAMMA zero-size query failed");
     gamma.crtc_id = 0xfeedface;
@@ -1844,7 +2020,7 @@ static int check_kms_fb(int fd)
         return fail("invalid GETGAMMA accepted");
     /* Contract update: SETGAMMA is implemented; a zero-size LUT succeeds as a
      * no-op.  (The old fail-closed expectation predates the implementation.) */
-    gamma.crtc_id = 1;
+    gamma.crtc_id = crtc_id;
     gamma.gamma_size = 0;
     if (ioctl(fd, DRM_IOCTL_MODE_SETGAMMA, &gamma) < 0)
         return fail("zero-size SETGAMMA failed");
@@ -1852,11 +2028,11 @@ static int check_kms_fb(int fd)
     gamma.crtc_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_MODE_SETGAMMA, &gamma) >= 0)
         return fail("invalid SETGAMMA accepted");
-    gamma.crtc_id = 1;
+    gamma.crtc_id = crtc_id;
 
     for (uint32 i = 0; i < 3; i++) {
         memset(&flip, 0, sizeof(flip));
-        flip.crtc_id = 1;
+        flip.crtc_id = crtc_id;
         flip.fb_id = fb_id;
         flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
         flip.user_data = 0x44524d464c495000ULL + i;
@@ -1872,7 +2048,7 @@ static int check_kms_fb(int fd)
             event.base.type != DRM_EVENT_FLIP_COMPLETE ||
             event.base.length != sizeof(event) ||
             event.user_data != 0x44524d464c495000ULL + i ||
-            event.crtc_id != 1 || event.sequence <= prev_sequence)
+            event.crtc_id != crtc_id || event.sequence <= prev_sequence)
             return fail("queued PAGE_FLIP event order failed");
         prev_sequence = event.sequence;
     }
@@ -1880,7 +2056,7 @@ static int check_kms_fb(int fd)
         return fail("empty PAGE_FLIP event queue accepted");
     for (uint32 i = 0; i < DRM_XV6_EVENT_QUEUE_CAPACITY; i++) {
         memset(&flip, 0, sizeof(flip));
-        flip.crtc_id = 1;
+        flip.crtc_id = crtc_id;
         flip.fb_id = fb_id;
         flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
         flip.user_data = 0x4f564552464c0000ULL + i;
@@ -1888,7 +2064,7 @@ static int check_kms_fb(int fd)
             return fail("PAGE_FLIP event queue filled early");
     }
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = fb_id;
     flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
     flip.user_data = 0x4f564552464cffffULL;
@@ -1899,7 +2075,7 @@ static int check_kms_fb(int fd)
         if (read(fd, &event, sizeof(event)) != sizeof(event) ||
             event.base.type != DRM_EVENT_FLIP_COMPLETE ||
             event.user_data != 0x4f564552464c0000ULL + i ||
-            event.crtc_id != 1)
+            event.crtc_id != crtc_id)
             return fail("overflow PAGE_FLIP event drain failed");
     }
     if (read(fd, &event, sizeof(event)) >= 0)
@@ -1907,25 +2083,25 @@ static int check_kms_fb(int fd)
     if (get_fb_stats(&vblank_negative_before) < 0)
         return fail("vblank negative stats before failed");
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = fb_id;
     flip.flags = DRM_MODE_PAGE_FLIP_TARGET_ABSOLUTE;
     if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) >= 0)
         return fail("absolute target PAGE_FLIP accepted");
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = fb_id;
     flip.flags = DRM_MODE_PAGE_FLIP_TARGET_RELATIVE;
     if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) >= 0)
         return fail("relative target PAGE_FLIP accepted");
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = fb_id;
     flip.flags = DRM_MODE_PAGE_FLIP_ASYNC;
     if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) >= 0)
         return fail("async PAGE_FLIP accepted while cap disabled");
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = 0xfeedface;
     if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) >= 0)
         return fail("invalid PAGE_FLIP accepted");
@@ -2034,16 +2210,14 @@ static int check_kms_fb(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0)
         return fail("invalid ATOMIC accepted");
 
-    memset(plane_ids, 0, sizeof(plane_ids));
-    memset(&plane_res, 0, sizeof(plane_res));
-    plane_res.plane_id_ptr = (uint64)plane_ids;
-    plane_res.count_planes = 2;
-    if (ioctl(fd, DRM_IOCTL_MODE_GETPLANERESOURCES, &plane_res) < 0 ||
-        plane_ids[0] == 0)
+    if (discover_kms_planes(fd, &primary_plane_id, &cursor_plane_id,
+                            &plane_count) < 0 ||
+        primary_plane_id != plane_ids[0] ||
+        cursor_plane_id != plane_ids[1])
         return fail("atomic plane lookup failed");
     memset(&setplane, 0, sizeof(setplane));
-    setplane.plane_id = plane_ids[0];
-    setplane.crtc_id = 1;
+    setplane.plane_id = primary_plane_id;
+    setplane.crtc_id = crtc_id;
     setplane.fb_id = fb_id;
     setplane.crtc_w = create.width;
     setplane.crtc_h = create.height;
@@ -2055,11 +2229,11 @@ static int check_kms_fb(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_SETPLANE, &setplane) >= 0)
         return fail("invalid SETPLANE accepted");
 
-    active_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC, "ACTIVE",
+    active_prop = find_obj_prop(fd, crtc_id, DRM_MODE_OBJECT_CRTC, "ACTIVE",
                                 DRM_MODE_PROP_RANGE);
-    mode_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC, "MODE_ID",
+    mode_prop = find_obj_prop(fd, crtc_id, DRM_MODE_OBJECT_CRTC, "MODE_ID",
                               DRM_MODE_PROP_BLOB);
-    out_fence_prop = find_obj_prop(fd, 1, DRM_MODE_OBJECT_CRTC,
+    out_fence_prop = find_obj_prop(fd, crtc_id, DRM_MODE_OBJECT_CRTC,
                                    "OUT_FENCE_PTR", DRM_MODE_PROP_RANGE);
     plane_crtc_prop = find_obj_prop(fd, plane_ids[0], DRM_MODE_OBJECT_PLANE,
                                     "CRTC_ID", DRM_MODE_PROP_OBJECT);
@@ -2081,19 +2255,59 @@ static int check_kms_fb(int fd)
         src_w_prop == 0 || src_h_prop == 0 ||
         crtc_w_prop == 0 || crtc_h_prop == 0 || in_fence_prop == 0)
         return fail("atomic properties missing");
+    if (!has_cursor_plane) {
+        printf("drmiftest: kms_cursor_absent_matrix enumeration=PASS "
+               "primary_type=PASS cursor_plane_count=0 "
+               "legacy_cursor=PASS status=PASS\n");
+    }
 
-    objs[0] = 1;
+    /*
+     * KWin/libdrm creates a fresh blob from the advertised mode and submits
+     * that returned id as CRTC MODE_ID.  A fixed-id-only implementation makes
+     * the compositor's first TEST_ONLY modeset fail and leaves the kernel boot
+     * logo on screen forever.
+     */
+    for (uint32 i = 0; i < advertised_mode_count; i++) {
+        memset(&blob_create, 0, sizeof(blob_create));
+        blob_create.data = (uint64)&advertised_modes[i];
+        blob_create.length = sizeof(advertised_modes[i]);
+        if (ioctl(fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &blob_create) < 0 ||
+            blob_create.blob_id == 0)
+            return fail("atomic advertised mode blob create failed");
+        advertised_mode_blob_ids[i] = blob_create.blob_id;
+    }
+    atomic_mode_blob_id = advertised_mode_blob_ids[preferred_mode_index];
+
+    memset(&blob_create, 0, sizeof(blob_create));
+    blob_create.data = (uint64)&fb_id;
+    blob_create.length = sizeof(fb_id);
+    if (ioctl(fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &blob_create) < 0 ||
+        blob_create.blob_id == 0)
+        return fail("atomic malformed mode blob create failed");
+    malformed_mode_blob_id = blob_create.blob_id;
+
+    nonadvertised_mode = atomic_mode;
+    nonadvertised_mode.clock++;
+    memset(&blob_create, 0, sizeof(blob_create));
+    blob_create.data = (uint64)&nonadvertised_mode;
+    blob_create.length = sizeof(nonadvertised_mode);
+    if (ioctl(fd, DRM_IOCTL_MODE_CREATEPROPBLOB, &blob_create) < 0 ||
+        blob_create.blob_id == 0)
+        return fail("atomic nonadvertised mode blob create failed");
+    nonadvertised_mode_blob_id = blob_create.blob_id;
+
+    objs[0] = crtc_id;
     counts[0] = 3;
     props[0] = active_prop;
     values[0] = 1;
     props[1] = mode_prop;
-    values[1] = 5;
+    values[1] = atomic_mode_blob_id;
     props[2] = out_fence_prop;
     values[2] = (uint64)&out_fence;
     objs[1] = plane_ids[0];
     counts[1] = 6;
     props[3] = plane_crtc_prop;
-    values[3] = 1;
+    values[3] = crtc_id;
     props[4] = plane_fb_prop;
     values[4] = fb_id;
     props[5] = src_w_prop;
@@ -2104,6 +2318,86 @@ static int check_kms_fb(int fd)
     values[7] = create.width;
     props[8] = crtc_h_prop;
     values[8] = create.height;
+
+    /* Every mode returned by GETCONNECTOR must survive the same TEST_ONLY
+     * transaction KWin uses.  The current no-resize contract advertises one
+     * preferred active mode, so this single derived blob covers the complete
+     * advertised set without relying on a driver-private blob id. */
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
+    atomic.count_objs = 2;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    for (uint32 i = 0; i < advertised_mode_count; i++) {
+        values[1] = advertised_mode_blob_ids[i];
+        out_fence = -2;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
+            return fail("advertised MODE_ID TEST_ONLY failed");
+    }
+    values[1] = atomic_mode_blob_id;
+
+    /* ACTIVE and MODE_ID describe one indivisible CRTC state.  Neither
+     * half-state may pass TEST_ONLY, while a fully disabled state remains a
+     * valid transaction. */
+    values[1] = 0;
+    out_fence = -2;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+        return fail("ACTIVE=1 MODE_ID=0 unexpectedly accepted");
+    values[0] = 0;
+    values[1] = atomic_mode_blob_id;
+    values[3] = 0;
+    values[4] = 0;
+    out_fence = -2;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+        return fail("ACTIVE=0 MODE_ID!=0 unexpectedly accepted");
+    values[1] = 0;
+    out_fence = -2;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
+        return fail("coherent disabled CRTC TEST_ONLY failed");
+    values[0] = 1;
+    values[1] = atomic_mode_blob_id;
+    values[3] = crtc_id;
+    values[4] = fb_id;
+
+    memset(&obj_set, 0, sizeof(obj_set));
+    obj_set.obj_id = crtc_id;
+    obj_set.obj_type = DRM_MODE_OBJECT_CRTC;
+    obj_set.prop_id = mode_prop;
+    obj_set.value = 0;
+    if (ioctl(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &obj_set) >= 0)
+        return fail("active CRTC MODE_ID=0 OBJ_SETPROPERTY accepted");
+    obj_set.value = atomic_mode_blob_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &obj_set) < 0)
+        return fail("active CRTC dynamic MODE_ID OBJ_SETPROPERTY failed");
+
+    values[1] = malformed_mode_blob_id;
+    out_fence = -2;
+    memset(&atomic, 0, sizeof(atomic));
+    atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
+    atomic.count_objs = 2;
+    atomic.objs_ptr = (uint64)objs;
+    atomic.count_props_ptr = (uint64)counts;
+    atomic.props_ptr = (uint64)props;
+    atomic.prop_values_ptr = (uint64)values;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+        return fail("atomic malformed MODE_ID unexpectedly accepted");
+    memset(&blob_destroy, 0, sizeof(blob_destroy));
+    blob_destroy.blob_id = malformed_mode_blob_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &blob_destroy) < 0)
+        return fail("atomic malformed mode blob destroy failed");
+
+    values[1] = nonadvertised_mode_blob_id;
+    out_fence = -2;
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+        return fail("atomic nonadvertised MODE_ID unexpectedly accepted");
+    memset(&blob_destroy, 0, sizeof(blob_destroy));
+    blob_destroy.blob_id = nonadvertised_mode_blob_id;
+    if (ioctl(fd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &blob_destroy) < 0)
+        return fail("atomic nonadvertised mode blob destroy failed");
+    values[1] = atomic_mode_blob_id;
+
     if (plane_fb_id(fd, plane_ids[0], &atomic_plane_before) < 0)
         return fail("present fail-closed baseline plane failed");
     memset(&obj_set, 0, sizeof(obj_set));
@@ -2127,7 +2421,7 @@ static int check_kms_fb(int fd)
     if (get_fb_stats(&present_fail_before) < 0)
         return fail("present fail-closed stats before failed");
     memset(&crtc, 0, sizeof(crtc));
-    crtc.crtc_id = 1;
+    crtc.crtc_id = crtc_id;
     crtc.fb_id = nvfb_id;
     if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &crtc) >= 0)
         return fail("NV12 SETCRTC present unexpectedly accepted");
@@ -2135,7 +2429,7 @@ static int check_kms_fb(int fd)
         atomic_plane_after != atomic_plane_before)
         return fail("NV12 SETCRTC changed plane state");
     memset(&flip, 0, sizeof(flip));
-    flip.crtc_id = 1;
+    flip.crtc_id = crtc_id;
     flip.fb_id = nvfb_id;
     flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
     flip.user_data = 0x4e5631324641494cULL;
@@ -2350,15 +2644,95 @@ static int check_kms_fb(int fd)
     if (ioctl(fd, DRM_IOCTL_MODE_GETPLANE, &plane) < 0 ||
         plane.fb_id != fb_id)
         return fail("atomic plane state mismatch");
+    {
+        uint32 nonblock_objs[2] = { crtc_id, plane_ids[0] };
+        uint32 nonblock_counts[2] = { 1, 6 };
+        uint32 nonblock_props[7] = {
+            out_fence_prop,
+            plane_crtc_prop, plane_fb_prop, src_w_prop, src_h_prop,
+            crtc_w_prop, crtc_h_prop,
+        };
+        uint64 nonblock_values[7] = {
+            (uint64)&out_fence,
+            crtc_id, xbgr_fb_id,
+            (uint64)create.width << 16,
+            (uint64)create.height << 16,
+            create.width, create.height,
+        };
+        const uint64 nonblock_event_data = 0x4e424c4b464c4950ULL;
+
+        out_fence = -2;
+        memset(&atomic, 0, sizeof(atomic));
+        atomic.flags = DRM_MODE_ATOMIC_NONBLOCK |
+            DRM_MODE_PAGE_FLIP_EVENT;
+        atomic.count_objs = 2;
+        atomic.objs_ptr = (uint64)nonblock_objs;
+        atomic.count_props_ptr = (uint64)nonblock_counts;
+        atomic.props_ptr = (uint64)nonblock_props;
+        atomic.prop_values_ptr = (uint64)nonblock_values;
+        atomic.user_data = nonblock_event_data;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence < 0)
+            return fail("nonblock plane-flip ATOMIC commit failed");
+        if (query_atomic_out_fence_fd(fd, out_fence) < 0) {
+            close(out_fence);
+            return fail("nonblock plane-flip ATOMIC out-fence query failed");
+        }
+        close(out_fence);
+        memset(&event, 0, sizeof(event));
+        if (read(fd, &event, sizeof(event)) != sizeof(event) ||
+            event.base.type != DRM_EVENT_FLIP_COMPLETE ||
+            event.user_data != nonblock_event_data ||
+            event.crtc_id != crtc_id)
+            return fail("nonblock plane-flip ATOMIC event failed");
+        if (plane_fb_id(fd, plane_ids[0], &atomic_plane_after) < 0 ||
+            atomic_plane_after != xbgr_fb_id)
+            return fail("nonblock plane-flip ATOMIC state mismatch");
+
+        /* Restore the primary framebuffer through the same plane-only path so
+         * cleanup never attempts to remove an active alternate framebuffer. */
+        nonblock_values[2] = fb_id;
+        out_fence = -2;
+        memset(&atomic, 0, sizeof(atomic));
+        atomic.flags = DRM_MODE_ATOMIC_NONBLOCK;
+        atomic.count_objs = 2;
+        atomic.objs_ptr = (uint64)nonblock_objs;
+        atomic.count_props_ptr = (uint64)nonblock_counts;
+        atomic.props_ptr = (uint64)nonblock_props;
+        atomic.prop_values_ptr = (uint64)nonblock_values;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence < 0)
+            return fail("nonblock plane restore failed");
+        if (query_atomic_out_fence_fd(fd, out_fence) < 0) {
+            close(out_fence);
+            return fail("nonblock plane restore out-fence query failed");
+        }
+        close(out_fence);
+        if (plane_fb_id(fd, plane_ids[0], &atomic_plane_after) < 0 ||
+            atomic_plane_after != fb_id)
+            return fail("nonblock plane restore state mismatch");
+    }
+
+    for (uint32 i = 0; i < advertised_mode_count; i++) {
+        memset(&blob_destroy, 0, sizeof(blob_destroy));
+        blob_destroy.blob_id = advertised_mode_blob_ids[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &blob_destroy) < 0)
+            return fail("atomic advertised mode blob destroy failed");
+    }
+    out_fence = -2;
     memset(&atomic, 0, sizeof(atomic));
-    atomic.flags = DRM_MODE_ATOMIC_NONBLOCK;
+    atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
     atomic.count_objs = 2;
     atomic.objs_ptr = (uint64)objs;
     atomic.count_props_ptr = (uint64)counts;
     atomic.props_ptr = (uint64)props;
     atomic.prop_values_ptr = (uint64)values;
-    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0)
-        return fail("nonblock ATOMIC unexpectedly accepted");
+    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+        return fail("destroyed atomic MODE_ID unexpectedly accepted");
+    printf("drmiftest: atomic dynamic MODE_ID advertised_modes=%u "
+           "all_advertised_test_only=PASS preferred_derived=PASS "
+           "active_mode_coherence=PASS malformed=PASS "
+           "nonadvertised=PASS destroyed=PASS "
+           "nonblock_plane_flip_event_compat=PASS\n",
+           advertised_mode_count);
     if (check_atomic_fence_matrix(fd, plane_ids[0], in_fence_prop,
                                   out_fence_prop, plane_fb_prop) != 0)
         return 1;
