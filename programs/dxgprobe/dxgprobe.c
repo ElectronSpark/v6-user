@@ -13723,7 +13723,7 @@ out:
            gpu_remaining_plan_dependency_skeleton_pass ? "PASS" : "FAIL");
     printf("gpu_remaining_holistic_skeleton_matrix "
            "skeleton_version=2 active_open_items=12 "
-           "plan_source=GPU_REMAINING_GAPS.md "
+           "plan_source=docs/active-work-plan.md "
            "ordered_chunks=display_bind,native_completion,fps,backend,webkit "
            "display_bind_source_gate=closed "
            "bind_contract_gate=failclosed "
