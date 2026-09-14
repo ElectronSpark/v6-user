@@ -1196,10 +1196,12 @@ static int check_primary(int fd)
     struct drm_mode_crtc_compat crtc;
     struct drm_mode_get_encoder_compat enc;
     struct drm_mode_get_connector_compat conn;
+    struct drm_mode_get_connector_compat conn_again;
     struct drm_mode_get_property_compat prop;
     struct drm_mode_get_blob_compat blob;
     struct drm_mode_get_plane_compat plane;
     struct drm_mode_modeinfo_compat modes[8];
+    struct drm_mode_modeinfo_compat modes_again[8];
     struct drm_mode_modeinfo_compat blob_mode;
     struct {
         struct drm_format_modifier_blob_compat header;
@@ -1281,11 +1283,29 @@ static int check_primary(int fd)
     conn.count_modes = sizeof(modes) / sizeof(modes[0]);
     conn.count_props = 4;
     if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0 ||
-        conn.count_modes != 1 || conn.connection != 1 ||
+        conn.count_modes < 1 ||
+        conn.count_modes > sizeof(modes) / sizeof(modes[0]) ||
+        conn.connection != 1 ||
         modes[0].hdisplay == 0 || modes[0].vdisplay == 0 ||
         (modes[0].type & DRM_MODE_TYPE_PREFERRED) == 0 ||
         conn.count_props < 2)
         return fail("GETCONNECTOR failed");
+    for (uint32 i = 0; i < conn.count_modes; i++) {
+        if (modes[i].hdisplay == 0 || modes[i].vdisplay == 0 ||
+            modes[i].clock == 0 ||
+            (i != 0 && (modes[i].type & DRM_MODE_TYPE_PREFERRED) != 0))
+            return fail("GETCONNECTOR invalid mode catalog");
+    }
+    memset(&conn_again, 0, sizeof(conn_again));
+    memset(modes_again, 0, sizeof(modes_again));
+    conn_again.connector_id = ids[1];
+    conn_again.modes_ptr = (uint64)modes_again;
+    conn_again.count_modes = sizeof(modes_again) / sizeof(modes_again[0]);
+    if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn_again) < 0 ||
+        conn_again.count_modes != conn.count_modes ||
+        conn_again.connection != conn.connection ||
+        memcmp(modes_again, modes, conn.count_modes * sizeof(modes[0])))
+        return fail("GETCONNECTOR mode catalog changed");
 
     for (uint32 i = 0; i < conn.count_props && i < 4; i++) {
         memset(&prop, 0, sizeof(prop));
@@ -1313,10 +1333,30 @@ static int check_primary(int fd)
     blob.length = sizeof(blob_mode);
     blob.data = (uint64)&blob_mode;
     if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0 ||
-        blob.length != sizeof(blob_mode) ||
-        blob_mode.hdisplay != modes[0].hdisplay ||
-        blob_mode.vdisplay != modes[0].vdisplay)
+        blob.length != sizeof(blob_mode))
         return fail("GETPROPBLOB failed");
+    {
+        int advertised = 0;
+
+        /* The mode blob follows the current geometry; modes[0] remains the
+         * preferred boot mode even after a resolution change. */
+        for (uint32 i = 0; i < conn.count_modes; i++) {
+            if (blob_mode.hdisplay == modes[i].hdisplay &&
+                blob_mode.vdisplay == modes[i].vdisplay &&
+                blob_mode.clock == modes[i].clock &&
+                blob_mode.htotal == modes[i].htotal &&
+                blob_mode.vtotal == modes[i].vtotal &&
+                blob_mode.flags == modes[i].flags)
+                advertised = 1;
+        }
+        if (!advertised)
+            return fail("GETPROPBLOB mode is not advertised");
+        memset(&crtc, 0, sizeof(crtc));
+        crtc.crtc_id = ids[0];
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0 ||
+            (crtc.mode_valid && memcmp(&crtc.mode, &blob_mode, sizeof(blob_mode))))
+            return fail("GETPROPBLOB current CRTC mismatch");
+    }
 
     memset(&prop, 0, sizeof(prop));
     prop.prop_id = 0xfeedface;
@@ -1454,10 +1494,10 @@ static int check_primary(int fd)
         return fail("unknown ioctl accepted");
 
     printf("drmiftest: primary ok mode=%ux%u planes=%u cursor=%s "
-           "ioctls=%lu stats=%lu\n",
+           "ioctls=%lu stats=%lu advertised_modes=%u catalog_stable=PASS\n",
            modes[0].hdisplay, modes[0].vdisplay, plane_count,
            cursor_plane_id != 0 ? "hardware" : "software",
-           client.iocs, stats.count);
+           client.iocs, stats.count, conn.count_modes);
     return 0;
 }
 
@@ -1721,7 +1761,9 @@ static int check_kms_fb(int fd)
     kms_conn.count_modes =
         sizeof(advertised_modes) / sizeof(advertised_modes[0]);
     if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &kms_conn) < 0 ||
-        kms_conn.count_modes != 1 || advertised_modes[0].hdisplay == 0 ||
+        kms_conn.count_modes < 1 ||
+        kms_conn.count_modes > sizeof(advertised_modes) / sizeof(advertised_modes[0]) ||
+        advertised_modes[0].hdisplay == 0 ||
         advertised_modes[0].vdisplay == 0)
         return fail("KMS connector mode discovery failed");
     advertised_mode_count = kms_conn.count_modes;
@@ -2319,10 +2361,9 @@ static int check_kms_fb(int fd)
     props[8] = crtc_h_prop;
     values[8] = create.height;
 
-    /* Every mode returned by GETCONNECTOR must survive the same TEST_ONLY
-     * transaction KWin uses.  The current no-resize contract advertises one
-     * preferred active mode, so this single derived blob covers the complete
-     * advertised set without relying on a driver-private blob id. */
+    /* Every advertised mode must survive KWin's TEST_ONLY transaction with
+     * a framebuffer covering that mode. These temporary buffers never become
+     * active; the rest of this test retains its small primary-plane fixture. */
     memset(&atomic, 0, sizeof(atomic));
     atomic.flags = DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET;
     atomic.count_objs = 2;
@@ -2331,12 +2372,59 @@ static int check_kms_fb(int fd)
     atomic.props_ptr = (uint64)props;
     atomic.prop_values_ptr = (uint64)values;
     for (uint32 i = 0; i < advertised_mode_count; i++) {
+        struct drm_mode_create_dumb_compat mode_create;
+        struct drm_mode_fb_cmd2_compat mode_fb;
+        struct drm_mode_destroy_dumb_compat mode_destroy;
+        struct drm_mode_crtc_compat mode_before;
+        struct drm_mode_crtc_compat mode_after;
+
+        memset(&mode_create, 0, sizeof(mode_create));
+        mode_create.width = advertised_modes[i].hdisplay;
+        mode_create.height = advertised_modes[i].vdisplay;
+        mode_create.bpp = 32;
+        if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &mode_create) < 0)
+            return fail("advertised mode CREATE_DUMB failed");
+        memset(&mode_fb, 0, sizeof(mode_fb));
+        mode_fb.width = mode_create.width;
+        mode_fb.height = mode_create.height;
+        mode_fb.pixel_format = DRM_FORMAT_XRGB8888;
+        mode_fb.handles[0] = mode_create.handle;
+        mode_fb.pitches[0] = mode_create.pitch;
+        if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &mode_fb) < 0)
+            return fail("advertised mode ADDFB2 failed");
+        memset(&mode_before, 0, sizeof(mode_before));
+        mode_before.crtc_id = crtc_id;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &mode_before) < 0)
+            return fail("advertised mode baseline GETCRTC failed");
         values[1] = advertised_mode_blob_ids[i];
+        values[4] = mode_fb.fb_id;
+        values[5] = (uint64)mode_create.width << 16;
+        values[6] = (uint64)mode_create.height << 16;
+        values[7] = mode_create.width;
+        values[8] = mode_create.height;
         out_fence = -2;
         if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
             return fail("advertised MODE_ID TEST_ONLY failed");
+        memset(&mode_after, 0, sizeof(mode_after));
+        mode_after.crtc_id = crtc_id;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &mode_after) < 0 ||
+            mode_after.fb_id != mode_before.fb_id ||
+            mode_after.mode_valid != mode_before.mode_valid ||
+            memcmp(&mode_after.mode, &mode_before.mode, sizeof(mode_after.mode)))
+            return fail("advertised MODE_ID TEST_ONLY changed CRTC");
+        if (ioctl(fd, DRM_IOCTL_MODE_RMFB, &mode_fb.fb_id) < 0)
+            return fail("advertised mode RMFB failed");
+        memset(&mode_destroy, 0, sizeof(mode_destroy));
+        mode_destroy.handle = mode_create.handle;
+        if (ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &mode_destroy) < 0)
+            return fail("advertised mode DESTROY_DUMB failed");
     }
     values[1] = atomic_mode_blob_id;
+    values[4] = fb_id;
+    values[5] = (uint64)create.width << 16;
+    values[6] = (uint64)create.height << 16;
+    values[7] = create.width;
+    values[8] = create.height;
 
     /* ACTIVE and MODE_ID describe one indivisible CRTC state.  Neither
      * half-state may pass TEST_ONLY, while a fully disabled state remains a
