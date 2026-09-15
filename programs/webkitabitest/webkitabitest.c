@@ -2874,6 +2874,269 @@ out:
         close(syncfd[1]);
 }
 
+struct chromium_audio_blocking_state {
+    uint32 sequence;
+    uint32 phase; /* 1: direct read, 2: reply, 3: complete, 4: failure */
+};
+
+static int chromium_audio_clock_ms(uint64 *value)
+{
+    struct timespec ts;
+    if (clock_gettime_raw(CLOCK_MONOTONIC, &ts) < 0)
+        return -1;
+    *value = (uint64)ts.tv_sec * 1000ULL + (uint64)ts.tv_nsec / 1000000ULL;
+    return 0;
+}
+
+static int chromium_audio_reap_bounded(int pid, int *status, int steps)
+{
+    const struct timespec pause = {0, 1000000};
+    for (int i = 0; i < steps; i++) {
+        int got = waitpid(pid, status, WNOHANG);
+#ifdef HOST_LIBC_PROGRAM
+        if (got < 0)
+            got = -errno;
+#endif
+        if (got == pid)
+            return 1;
+        if (got < 0 && got != -4) /* raw xv6 EINTR */
+            return -1;
+        nanosleep(&pause, 0);
+    }
+    return 0;
+}
+
+static int chromium_audio_read_raw(int fd, void *buf, int bytes)
+{
+    return (int)raw_syscall3(SYS_read, fd, (long)buf, bytes);
+}
+
+static int chromium_audio_blocking_child(
+    int fd, struct chromium_audio_blocking_state *shared)
+{
+    for (uint32 seq = 1; seq <= CHROMIUM_AUDIO_SYNC_CYCLES; seq++) {
+        uint32 request = 0;
+        int bytes = 0;
+
+        __atomic_store_n(&shared->sequence, seq, __ATOMIC_RELAXED);
+        __atomic_store_n(&shared->phase, 1, __ATOMIC_RELEASE);
+        /* Deliberately no poll/peek: exercise empty-to-wait enrollment. */
+        while (bytes < (int)sizeof(request)) {
+            int n = chromium_audio_read_raw(fd, (char *)&request + bytes,
+                                            (int)sizeof(request) - bytes);
+            if (n == -4)
+                continue;
+            if (n <= 0)
+                goto failed;
+            bytes += n;
+        }
+        if (request != seq)
+            goto failed;
+        __atomic_store_n(&shared->phase, 2, __ATOMIC_RELEASE);
+        bytes = 0;
+        while (bytes < (int)sizeof(request)) {
+            int n = write_raw(fd, (char *)&request + bytes,
+                              (int)sizeof(request) - bytes);
+            if (n == -4)
+                continue;
+            if (n <= 0)
+                goto failed;
+            bytes += n;
+        }
+    }
+    /* The final request precedes SHUT_WR: drain it before observing EOF. */
+    char tail;
+    int tail_ret;
+    do {
+        tail_ret = chromium_audio_read_raw(fd, &tail, 1);
+    } while (tail_ret == -4);
+    if (tail_ret != 0)
+        goto failed;
+    __atomic_store_n(&shared->phase, 3, __ATOMIC_RELEASE);
+    close(fd);
+    return 0;
+
+failed:
+    __atomic_store_n(&shared->phase, 4, __ATOMIC_RELEASE);
+    close(fd);
+    return 1;
+}
+
+static void test_chromium_audio_direct_blocking_read(void)
+{
+    const char *name = "Chromium audio direct blocking read4";
+    struct chromium_audio_blocking_state *shared = MAP_FAILED;
+    struct sigaction ignore, previous;
+    int sv[2] = {-1, -1};
+    int pid = -1, status = 0, signal_saved = 0, reaped = 0;
+    int late = 0, completed = 0, last_ret = 0, last_events = 0;
+    int queued_request = -1, queued_reply = -1, forced = 0;
+    uint32 sequence = 0, response = 0, child_sequence = 0, child_phase = 0;
+    uint64 start = 0, now = 0, longest = 0;
+    const char *error = NULL;
+
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    if (sigaction(SIGPIPE, &ignore, &previous) < 0) {
+        fail(name, "cannot save/ignore SIGPIPE");
+        return;
+    }
+    signal_saved = 1;
+    shared = mmap(0, WEBKITABI_PAGE_SIZE, PROT_READ | PROT_WRITE,
+                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shared == MAP_FAILED ||
+        socketpair_raw(SOCK_STREAM | SOCK_CLOEXEC, sv) < 0) {
+        error = "setup";
+        goto out;
+    }
+    memset(shared, 0, sizeof(*shared));
+    int flags = fcntl(sv[0], F_GETFL, 0);
+    if (flags < 0 || fcntl(sv[0], F_SETFL, flags | O_NONBLOCK) < 0 ||
+        (fcntl(sv[1], F_GETFL, 0) & O_NONBLOCK) != 0 ||
+        chromium_audio_clock_ms(&start) < 0) {
+        error = "flags/clock";
+        goto out;
+    }
+    fflush(stdout);
+    pid = fork();
+    if (pid < 0) {
+        error = "fork";
+        goto out;
+    }
+    if (pid == 0) {
+        close(sv[0]);
+        exit(chromium_audio_blocking_child(sv[1], shared));
+    }
+
+    /* Keep sv[1] only for read-only FIONREAD diagnostics on failure.  The
+     * parent never consumes requests or polls the consumer's endpoint. */
+    for (sequence = 1; sequence <= CHROMIUM_AUDIO_SYNC_CYCLES; sequence++) {
+        if ((sequence & 7) == 1) {
+            raw_syscall1(SYS_sched_yield, 0);
+        } else if ((sequence & 7) == 2) {
+            for (uint32 spin = 0; spin < (sequence & 1023); spin++)
+                asm volatile("" ::: "memory");
+        } else if ((sequence & 7) == 3) {
+            const struct timespec jitter = {0, 100000};
+            nanosleep(&jitter, 0);
+        }
+
+        uint64 requested;
+        if (chromium_audio_clock_ms(&requested) < 0 ||
+            requested - start >= 15000) {
+            error = "overall deadline/clock";
+            break;
+        }
+        int sent = 0, received = 0;
+        response = 0;
+        while (received < (int)sizeof(response)) {
+            if (chromium_audio_clock_ms(&now) < 0) {
+                error = "clock";
+                break;
+            }
+            if (now - requested >= 250 || now - start >= 15000) {
+                error = "reply deadline";
+                break;
+            }
+            struct pollfd pfd = {sv[0],
+                sent < (int)sizeof(sequence) ? POLLOUT : POLLIN, 0};
+            int remaining = 250 - (int)(now - requested);
+            int total_remaining = 15000 - (int)(now - start);
+            if (remaining > total_remaining)
+                remaining = total_remaining;
+            last_ret = poll_raw(&pfd, 1, remaining);
+            last_events = pfd.revents;
+            if (last_ret == -4)
+                continue;
+            if (last_ret <= 0 || !(pfd.revents & pfd.events)) {
+                error = "producer poll";
+                break;
+            }
+            if (sent < (int)sizeof(sequence)) {
+                last_ret = write_raw(sv[0], (char *)&sequence + sent,
+                                     (int)sizeof(sequence) - sent);
+                if (last_ret > 0) {
+                    sent += last_ret;
+                    if (sequence == CHROMIUM_AUDIO_SYNC_CYCLES &&
+                        sent == (int)sizeof(sequence) &&
+                        shutdown_raw(sv[0], SHUT_WR) < 0) {
+                        error = "final request shutdown";
+                        break;
+                    }
+                }
+            } else {
+                last_ret = chromium_audio_read_raw(
+                    sv[0], (char *)&response + received,
+                    (int)sizeof(response) - received);
+                if (last_ret > 0)
+                    received += last_ret;
+            }
+            if (last_ret <= 0 && last_ret != -EAGAIN && last_ret != -4) {
+                error = "producer I/O";
+                break;
+            }
+        }
+        if (error != NULL)
+            break;
+        if (response != sequence || chromium_audio_clock_ms(&now) < 0) {
+            error = "sequence/clock";
+            break;
+        }
+        uint64 elapsed = now - requested;
+        if (elapsed >= 250 || now - start >= 15000) {
+            error = "completed reply exceeded deadline";
+            break;
+        }
+        if (elapsed > longest)
+            longest = elapsed;
+        if (elapsed > 20)
+            late++;
+        completed++;
+    }
+
+out:
+    if (pid > 0) {
+        if (error != NULL) {
+            ioctl(sv[1], 0x541B, &queued_request); /* FIONREAD; no consumption */
+            ioctl(sv[0], 0x541B, &queued_reply);
+            child_phase = __atomic_load_n(&shared->phase, __ATOMIC_ACQUIRE);
+            child_sequence = __atomic_load_n(&shared->sequence, __ATOMIC_RELAXED);
+        }
+        /* Shutdown wakes a direct reader even when its data wake was lost. */
+        shutdown_raw(sv[0], SHUT_WR);
+        reaped = chromium_audio_reap_bounded(pid, &status, 100);
+        if (reaped != 1) {
+            forced = 1;
+            kill(pid, SIGKILL);
+            reaped = chromium_audio_reap_bounded(pid, &status, 2000);
+        }
+        if (reaped != 1)
+            error = "child reap failed";
+        else if (error == NULL &&
+                 (forced || !WIFEXITED(status) || WEXITSTATUS(status) != 0))
+            error = "child exit";
+    }
+    if (sv[0] >= 0)
+        close(sv[0]);
+    if (sv[1] >= 0)
+        close(sv[1]);
+    if (shared != MAP_FAILED)
+        munmap(shared, WEBKITABI_PAGE_SIZE);
+    if (signal_saved && sigaction(SIGPIPE, &previous, 0) < 0)
+        error = "restore SIGPIPE";
+    printf("audio-blocking: completed=%d late_over_20ms=%d max_reply_ms=%llu "
+           "seq=%u response=%u ret=%d events=0x%x request_queued=%d "
+           "reply_queued=%d child_phase=%u child_seq=%u child=%d "
+           "reaped=%d forced=%d status=0x%x\n",
+           completed, late, (unsigned long long)longest, sequence, response,
+           last_ret, last_events, queued_request, queued_reply, child_phase,
+           child_sequence, pid, reaped, forced, status);
+    if (error != NULL)
+        fail(name, error);
+    else
+        pass(name);
+}
+
 static int check_received_ipc_fd(const char *name, int fd, const char *expect)
 {
     struct stat st;
@@ -7819,6 +8082,13 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "chromium-audio-sync") == 0) {
         printf("webkitabitest: WebKit-shaped xv6 ABI checks\n");
         test_chromium_audio_sync_socket_lifetime();
+        printf("webkitabitest: %d passed, %d skipped, %d failed\n",
+               passed, skipped, failed);
+        exit(failed == 0 ? 0 : 1);
+    }
+    if (argc == 2 && strcmp(argv[1], "chromium-audio-blocking") == 0) {
+        printf("webkitabitest: Chromium direct blocking audio socket checks\n");
+        test_chromium_audio_direct_blocking_read();
         printf("webkitabitest: %d passed, %d skipped, %d failed\n",
                passed, skipped, failed);
         exit(failed == 0 ? 0 : 1);
