@@ -1658,6 +1658,46 @@ static int check_render_policy(int fd)
     return 0;
 }
 
+/* GETFB queries create handles independently of the allocation handle.
+ * Close each unique plane alias once, then verify the original still maps. */
+static int close_fb_query_handles(int fd, uint32 original,
+                                   const uint32 *handles, uint32 count)
+{
+    struct drm_mode_map_dumb_compat map;
+    struct drm_gem_close_compat close_req;
+    int failed = count == 0 || handles[0] == 0;
+
+    for (uint32 i = 0; i < count; i++) {
+        int duplicate = 0;
+
+        if (handles[i] == 0)
+            continue;
+        for (uint32 j = 0; j < i; j++) {
+            if (handles[j] == handles[i])
+                duplicate = 1;
+        }
+        if (duplicate)
+            continue;
+        if (handles[i] == original) {
+            failed = 1;
+            continue; /* Do not turn an invalid alias into original closure. */
+        }
+        memset(&map, 0, sizeof(map));
+        map.handle = handles[i];
+        if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0)
+            failed = 1;
+        memset(&close_req, 0, sizeof(close_req));
+        close_req.handle = handles[i];
+        if (ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close_req) < 0)
+            failed = 1;
+    }
+    memset(&map, 0, sizeof(map));
+    map.handle = original;
+    if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0)
+        failed = 1;
+    return failed ? -1 : 0;
+}
+
 static int check_kms_fb(int fd)
 {
     struct drm_mode_create_dumb_compat create;
@@ -1812,19 +1852,34 @@ static int check_kms_fb(int fd)
 
     memset(&fb_legacy, 0, sizeof(fb_legacy));
     fb_legacy.fb_id = fb_id;
-    if (ioctl(fd, DRM_IOCTL_MODE_GETFB, &fb_legacy) < 0 ||
-        fb_legacy.width != create.width ||
-        fb_legacy.height != create.height ||
-        fb_legacy.pitch != create.pitch ||
-        fb_legacy.handle != create.handle)
+    if (ioctl(fd, DRM_IOCTL_MODE_GETFB, &fb_legacy) < 0)
         return fail("GETFB metadata failed");
+    {
+        int metadata_ok = fb_legacy.width == create.width &&
+            fb_legacy.height == create.height &&
+            fb_legacy.pitch == create.pitch &&
+            fb_legacy.bpp == 32 && fb_legacy.depth == 24;
+        int aliases_ok = close_fb_query_handles(fd, create.handle,
+                                                  &fb_legacy.handle, 1) == 0;
+        if (!metadata_ok || !aliases_ok)
+            return fail("GETFB metadata/fresh-handle ownership failed");
+    }
     memset(&fb, 0, sizeof(fb));
     fb.fb_id = fb_id;
-    if (ioctl(fd, DRM_IOCTL_MODE_GETFB2, &fb) < 0 ||
-        fb.width != create.width || fb.height != create.height ||
-        fb.pixel_format != DRM_FORMAT_XRGB8888 ||
-        fb.handles[0] != create.handle || fb.pitches[0] != create.pitch)
+    if (ioctl(fd, DRM_IOCTL_MODE_GETFB2, &fb) < 0)
         return fail("GETFB2 metadata failed");
+    {
+        int metadata_ok = fb.width == create.width &&
+            fb.height == create.height &&
+            fb.pixel_format == DRM_FORMAT_XRGB8888 &&
+            fb.pitches[0] == create.pitch && fb.offsets[0] == 0 &&
+            fb.modifier[0] == DRM_FORMAT_MOD_LINEAR &&
+            fb.handles[1] == 0 && fb.handles[2] == 0 && fb.handles[3] == 0;
+        int aliases_ok = close_fb_query_handles(fd, create.handle,
+                                                  fb.handles, 4) == 0;
+        if (!metadata_ok || !aliases_ok)
+            return fail("GETFB2 metadata/fresh-handle ownership failed");
+    }
     memset(&fb_legacy, 0, sizeof(fb_legacy));
     fb_legacy.width = create.width;
     fb_legacy.height = create.height;
@@ -1877,13 +1932,23 @@ static int check_kms_fb(int fd)
     nvfb_id = fb.fb_id;
     memset(&fb, 0, sizeof(fb));
     fb.fb_id = nvfb_id;
-    if (ioctl(fd, DRM_IOCTL_MODE_GETFB2, &fb) < 0 ||
-        fb.pixel_format != DRM_FORMAT_NV12 ||
-        fb.handles[0] != nvcreate.handle ||
-        fb.handles[1] != nvcreate.handle ||
-        fb.pitches[1] != nvcreate.width ||
-        fb.offsets[1] != nvcreate.width * nvcreate.height)
+    if (ioctl(fd, DRM_IOCTL_MODE_GETFB2, &fb) < 0)
         return fail("NV12 GETFB2 metadata failed");
+    {
+        int metadata_ok = fb.width == nvcreate.width &&
+            fb.height == nvcreate.height && fb.pixel_format == DRM_FORMAT_NV12 &&
+            fb.handles[0] != 0 && fb.handles[0] == fb.handles[1] &&
+            fb.handles[2] == 0 && fb.handles[3] == 0 &&
+            fb.pitches[0] == nvcreate.width && fb.pitches[1] == nvcreate.width &&
+            fb.offsets[0] == 0 &&
+            fb.offsets[1] == nvcreate.width * nvcreate.height &&
+            fb.modifier[0] == DRM_FORMAT_MOD_LINEAR &&
+            fb.modifier[1] == DRM_FORMAT_MOD_LINEAR;
+        int aliases_ok = close_fb_query_handles(fd, nvcreate.handle,
+                                                  fb.handles, 4) == 0;
+        if (!metadata_ok || !aliases_ok)
+            return fail("NV12 GETFB2 metadata/fresh-handle ownership failed");
+    }
     has_cursor_plane = cursor_plane_id != 0;
     if (!has_cursor_plane) {
         memset(&cursor, 0, sizeof(cursor));
@@ -2426,28 +2491,53 @@ static int check_kms_fb(int fd)
     values[7] = create.width;
     values[8] = create.height;
 
-    /* ACTIVE and MODE_ID describe one indivisible CRTC state.  Neither
-     * half-state may pass TEST_ONLY, while a fully disabled state remains a
-     * valid transaction. */
-    values[1] = 0;
-    out_fence = -2;
-    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
-        return fail("ACTIVE=1 MODE_ID=0 unexpectedly accepted");
-    values[0] = 0;
-    values[1] = atomic_mode_blob_id;
-    values[3] = 0;
-    values[4] = 0;
-    out_fence = -2;
-    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
-        return fail("ACTIVE=0 MODE_ID!=0 unexpectedly accepted");
-    values[1] = 0;
-    out_fence = -2;
-    if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
-        return fail("coherent disabled CRTC TEST_ONLY failed");
-    values[0] = 1;
-    values[1] = atomic_mode_blob_id;
-    values[3] = crtc_id;
-    values[4] = fb_id;
+    /* An active CRTC requires a mode. An inactive CRTC may retain its mode
+     * for DPMS wake, or discard it when fully disabled. TEST_ONLY must leave
+     * the current CRTC and primary plane unchanged in either case. */
+    {
+        struct drm_mode_crtc_compat before, after;
+        uint32 plane_before, plane_after;
+        memset(&before, 0, sizeof(before));
+        before.crtc_id = crtc_id;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &before) < 0 ||
+            plane_fb_id(fd, plane_ids[0], &plane_before) < 0)
+            return fail("inactive CRTC TEST_ONLY baseline failed");
+        values[1] = 0;
+        out_fence = -2;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) >= 0 || out_fence != -2)
+            return fail("ACTIVE=1 MODE_ID=0 unexpectedly accepted");
+        values[0] = 0;
+        values[1] = atomic_mode_blob_id;
+        values[3] = 0;
+        values[4] = 0;
+        out_fence = -2;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
+            return fail("inactive retained MODE_ID TEST_ONLY failed");
+        memset(&after, 0, sizeof(after));
+        after.crtc_id = crtc_id;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &after) < 0 ||
+            plane_fb_id(fd, plane_ids[0], &plane_after) < 0 ||
+            after.fb_id != before.fb_id || after.mode_valid != before.mode_valid ||
+            memcmp(&after.mode, &before.mode, sizeof(after.mode)) ||
+            plane_after != plane_before)
+            return fail("inactive retained MODE_ID TEST_ONLY changed state");
+        values[1] = 0;
+        out_fence = -2;
+        if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) < 0 || out_fence != -1)
+            return fail("coherent disabled CRTC TEST_ONLY failed");
+        memset(&after, 0, sizeof(after));
+        after.crtc_id = crtc_id;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &after) < 0 ||
+            plane_fb_id(fd, plane_ids[0], &plane_after) < 0 ||
+            after.fb_id != before.fb_id || after.mode_valid != before.mode_valid ||
+            memcmp(&after.mode, &before.mode, sizeof(after.mode)) ||
+            plane_after != plane_before)
+            return fail("disabled CRTC TEST_ONLY changed state");
+        values[0] = 1;
+        values[1] = atomic_mode_blob_id;
+        values[3] = crtc_id;
+        values[4] = fb_id;
+    }
 
     memset(&obj_set, 0, sizeof(obj_set));
     obj_set.obj_id = crtc_id;
